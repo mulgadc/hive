@@ -168,7 +168,7 @@ echo "Re-initializing OVN"
 ./scripts/setup-ovn.sh --management $SETUP_OVN_FLAGS
 
 echo "Initializing platform"
-ADMIN_INIT_ARGS="--region $REGION --az ${REGION}a --node node1 --nodes 1"
+ADMIN_INIT_ARGS="--bind 127.0.0.1 --region $REGION --az ${REGION}a --node node1 --nodes 1"
 
 # External networking mode: set EXTERNAL_MODE=nat for NAT/DHCP mode (outbound-only),
 # or leave unset / EXTERNAL_MODE=pool for pool mode (per-VM public IPs).
