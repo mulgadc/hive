@@ -63,6 +63,11 @@ DDIL_QUARANTINED=D,F go test -tags=e2e ./tests/e2e/ddil/scenarios/...
 | `DDIL_DRY_RUN` | no | `1` skips cluster ops, runs `TestCoverageDrift` only. |
 | `DDIL_QUARANTINED` | no | Comma-separated scenario letters (A..F) to quarantine. |
 | `AWS_REGION` | yes for witness scenarios | Region used by the AWS SDK when launching witness VMs via the Spinifex AWS gateway. |
+| `DDIL_WITNESS_AMI` | no | Specific AMI ID for witness VMs. If unset, the harness picks the first `ami-ubuntu-*` image registered in the cluster. |
+| `DDIL_WITNESS_INSTANCE_TYPE` | no (default `t2.micro`) | EC2 instance type for witness VMs. |
+| `DDIL_WITNESS_KEY_NAME` | no (default `spinifex-key`) | EC2 key pair name attached to witness VMs; must match an existing registered key. |
+| `DDIL_GUEST_SSH_USER` | no (default `ubuntu`) | SSH login user inside the witness guest. |
+| `DDIL_GUEST_SSH_KEY` | no (defaults to `DDIL_SSH_KEY`) | Private key for guest SSH; override when the guest image uses a different key than the host. |
 
 ## Scenario status
 
