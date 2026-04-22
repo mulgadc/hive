@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
@@ -365,7 +367,40 @@ func launchService(cfg *Config) error {
 	// Runs after subscribing so new events are not missed during reconciliation.
 	ReconcileFromKV(ctx, nc, topo)
 
-	slog.Info("vpcd service started, waiting for VPC lifecycle events", "subscriptions", len(subs))
+	// DHCP manager: services vpc.dhcp.acquire/release requests from the
+	// daemon-side ExternalIPAM handlers, runs a renewal goroutine per lease,
+	// and persists leases in spinifex-dhcp-leases KV. Started unconditionally
+	// — pools with source="static" never issue acquire requests, so the
+	// Manager sits idle until something actually wants DHCP.
+	js, err := nc.JetStream()
+	if err != nil {
+		slog.Error("Failed to get JetStream context for DHCP manager", "err", err)
+		return err
+	}
+	dhcpManager, err := NewDHCPManager(nc, js, dhcp.NewNClient4(15*time.Second, 3))
+	if err != nil {
+		slog.Error("Failed to create DHCP manager", "err", err)
+		return err
+	}
+	defer dhcpManager.Close()
+
+	if err := dhcpManager.Bootstrap(ctx); err != nil {
+		slog.Error("DHCP manager bootstrap failed", "err", err)
+		return err
+	}
+	dhcpSubs, err := dhcpManager.Subscribe(nc)
+	if err != nil {
+		slog.Error("DHCP manager subscribe failed", "err", err)
+		return err
+	}
+	defer func() {
+		for _, s := range dhcpSubs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	slog.Info("vpcd service started, waiting for VPC lifecycle events",
+		"subscriptions", len(subs), "dhcp_subscriptions", len(dhcpSubs))
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
