@@ -9,8 +9,6 @@ import (
 
 // DescribeAccountAttributes returns static account attributes for the Spinifex platform
 func DescribeAccountAttributes(input *ec2.DescribeAccountAttributesInput) (*ec2.DescribeAccountAttributesOutput, error) {
-	slog.Debug("DescribeAccountAttributes called")
-
 	// Build set of requested attribute names for filtering
 	requestedAttrs := make(map[string]bool)
 	for _, name := range input.AttributeNames {

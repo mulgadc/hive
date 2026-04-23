@@ -9,18 +9,26 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateAttachInternetGatewayInput validates the input parameters
+func ValidateAttachInternetGatewayInput(input *ec2.AttachInternetGatewayInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	if input.VpcId == nil || *input.VpcId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // AttachInternetGateway handles the EC2 AttachInternetGateway API call
 func AttachInternetGateway(input *ec2.AttachInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.AttachInternetGatewayOutput, error) {
 	var output ec2.AttachInternetGatewayOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
-	}
-	if input.VpcId == nil || *input.VpcId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateAttachInternetGatewayInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)

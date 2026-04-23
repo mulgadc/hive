@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateCreateNetworkInterfaceInput validates the input parameters
+func ValidateCreateNetworkInterfaceInput(input *ec2.CreateNetworkInterfaceInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.SubnetId == nil || *input.SubnetId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // CreateNetworkInterface handles the EC2 CreateNetworkInterface API call
 func CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput, natsConn *nats.Conn, accountID string) (ec2.CreateNetworkInterfaceOutput, error) {
 	var output ec2.CreateNetworkInterfaceOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.SubnetId == nil || *input.SubnetId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateCreateNetworkInterfaceInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)

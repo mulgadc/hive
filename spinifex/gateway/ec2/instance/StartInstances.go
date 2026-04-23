@@ -3,11 +3,11 @@ package gateway_ec2_instance
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -17,11 +17,22 @@ type startStoppedInstanceRequest struct {
 	InstanceID string `json:"instance_id"`
 }
 
+// ValidateStartInstancesInput validates the input parameters
+func ValidateStartInstancesInput(input *ec2.StartInstancesInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if len(input.InstanceIds) == 0 {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // StartInstances sends start requests to the ec2.start queue group topic.
 // Any available daemon can pick up the request and launch the stopped instance.
 func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.StartInstancesOutput, error) {
-	if len(input.InstanceIds) == 0 {
-		return nil, fmt.Errorf("no instance IDs provided")
+	if err := ValidateStartInstancesInput(input); err != nil {
+		return nil, err
 	}
 
 	slog.Info("StartInstances: Processing request", "instance_count", len(input.InstanceIds))

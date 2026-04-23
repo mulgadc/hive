@@ -9,18 +9,26 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDetachInternetGatewayInput validates the input parameters
+func ValidateDetachInternetGatewayInput(input *ec2.DetachInternetGatewayInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	if input.VpcId == nil || *input.VpcId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DetachInternetGateway handles the EC2 DetachInternetGateway API call
 func DetachInternetGateway(input *ec2.DetachInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.DetachInternetGatewayOutput, error) {
 	var output ec2.DetachInternetGatewayOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
-	}
-	if input.VpcId == nil || *input.VpcId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDetachInternetGatewayInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)

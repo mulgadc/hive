@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeleteSubnetInput validates the input parameters
+func ValidateDeleteSubnetInput(input *ec2.DeleteSubnetInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.SubnetId == nil || *input.SubnetId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeleteSubnet handles the EC2 DeleteSubnet API call
 func DeleteSubnet(input *ec2.DeleteSubnetInput, natsConn *nats.Conn, accountID string) (ec2.DeleteSubnetOutput, error) {
 	var output ec2.DeleteSubnetOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.SubnetId == nil || *input.SubnetId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeleteSubnetInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)

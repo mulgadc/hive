@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateReleaseAddressInput validates the input parameters
+func ValidateReleaseAddressInput(input *ec2.ReleaseAddressInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.AllocationId == nil || *input.AllocationId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // ReleaseAddress handles the EC2 ReleaseAddress API call.
 func ReleaseAddress(input *ec2.ReleaseAddressInput, natsConn *nats.Conn, accountID string) (ec2.ReleaseAddressOutput, error) {
 	var output ec2.ReleaseAddressOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.AllocationId == nil || *input.AllocationId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateReleaseAddressInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_eip.NewNATSEIPService(natsConn)

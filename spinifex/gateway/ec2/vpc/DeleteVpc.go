@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeleteVpcInput validates the input parameters
+func ValidateDeleteVpcInput(input *ec2.DeleteVpcInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.VpcId == nil || *input.VpcId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeleteVpc handles the EC2 DeleteVpc API call
 func DeleteVpc(input *ec2.DeleteVpcInput, natsConn *nats.Conn, accountID string) (ec2.DeleteVpcOutput, error) {
 	var output ec2.DeleteVpcOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.VpcId == nil || *input.VpcId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeleteVpcInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)

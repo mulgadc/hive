@@ -8,16 +8,28 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateStopInstancesInput validates the input parameters
+func ValidateStopInstancesInput(input *ec2.StopInstancesInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if len(input.InstanceIds) == 0 {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // StopInstances sends stop commands to specified instances via NATS
 // Uses system_powerdown with stop_instance attribute to prevent auto-restart on daemon boot
 func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.StopInstancesOutput, error) {
-	if len(input.InstanceIds) == 0 {
-		return nil, fmt.Errorf("no instance IDs provided")
+	if err := ValidateStopInstancesInput(input); err != nil {
+		return nil, err
 	}
 
 	slog.Info("StopInstances: Processing request", "instance_count", len(input.InstanceIds))
