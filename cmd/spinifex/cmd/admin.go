@@ -1630,9 +1630,15 @@ func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) 
 		if name == localNode {
 			continue
 		}
+		// Prefer the peer's advertise IP (off-host dial target); fall back
+		// to BindIP for pre-siv-8 joiners that didn't send AdvertiseIP.
+		host := n.AdvertiseIP
+		if host == "" {
+			host = n.BindIP
+		}
 		remote = append(remote, admin.RemoteNode{
 			Name:     name,
-			Host:     n.BindIP,
+			Host:     host,
 			Region:   n.Region,
 			AZ:       n.AZ,
 			Services: n.Services,

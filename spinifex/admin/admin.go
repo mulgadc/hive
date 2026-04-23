@@ -48,6 +48,9 @@ type ConfigSettings struct {
 	Az     string
 	Port   string
 	BindIP string
+	// AdvertiseIP is the off-host dial target rendered into the local node's
+	// [nodes.X].advertise field. Empty → callers fall back to BindIP.
+	AdvertiseIP string
 
 	// Cluster settings
 	ClusterBindIP string

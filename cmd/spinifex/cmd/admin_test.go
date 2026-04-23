@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/mulgadc/spinifex/spinifex/formation"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,5 +31,22 @@ func TestPrintChecksumError(t *testing.T) {
 		assert.Contains(t, out, image.Checksum, "source URL must print for: %v", e)
 		assert.Contains(t, out, imageFile)
 		assert.Contains(t, out, "spx admin images import --name "+imageName+" --force")
+	}
+}
+
+// buildRemoteNodes must prefer AdvertiseIP (off-host dial target) and fall
+// back to BindIP when the peer pre-dates siv-8 and didn't send AdvertiseIP.
+func TestBuildRemoteNodes_AdvertiseFallback(t *testing.T) {
+	nodes := map[string]formation.NodeInfo{
+		"node1": {Name: "node1", BindIP: "10.0.0.1", AdvertiseIP: "203.0.113.1"},
+		"node2": {Name: "node2", BindIP: "10.0.0.2"}, // legacy joiner
+		"node3": {Name: "node3", BindIP: "10.0.0.3", AdvertiseIP: "203.0.113.3"},
+	}
+	got := buildRemoteNodes(nodes, "node3")
+	if assert.Len(t, got, 2) {
+		assert.Equal(t, "node1", got[0].Name)
+		assert.Equal(t, "203.0.113.1", got[0].Host, "advertise wins when set")
+		assert.Equal(t, "node2", got[1].Name)
+		assert.Equal(t, "10.0.0.2", got[1].Host, "bind fallback when advertise empty")
 	}
 }
