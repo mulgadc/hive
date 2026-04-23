@@ -18,6 +18,8 @@ type NodeStatusResponse struct {
 	TotalMemGB    float64           `json:"total_mem_gb"`
 	AllocVCPU     int               `json:"alloc_vcpu"`
 	AllocMemGB    float64           `json:"alloc_mem_gb"`
+	TotalGPUs     int               `json:"total_gpus"`
+	AllocGPUs     int               `json:"alloc_gpus"`
 	VMCount       int               `json:"vm_count"`
 	InstanceTypes []InstanceTypeCap `json:"instance_types"`
 
