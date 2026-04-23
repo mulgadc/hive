@@ -39,7 +39,7 @@ jobs:
           - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-single, extra: "tofu-examples" }
 
     runs-on: [ self-hosted, "${{ matrix.runner }}" ]
-    timeout-minutes: 60
+    timeout-minutes: 35
     env:
       TOFU_LOG: /tmp/e2e-nightly-cell-${{ matrix.cell }}-${{ github.run_id }}.log
 

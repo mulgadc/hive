@@ -18,6 +18,11 @@ SCRIPT_DIR="$(pwd)"
 export AWS_PROFILE=spinifex
 WORKBOOK_DIR="${WORKBOOK_DIR:-${SCRIPT_DIR}/workbooks}"
 OPENTOFU_VERSION="${OPENTOFU_VERSION:-1.11.5}"
+
+# awsgw and predastore are bound to the WAN IP (bootstrap-install passes --bind
+# ${PRIMARY_WAN}), not loopback. Workbooks need the WAN IP for both the tofu
+# provider endpoints and any CLI assertions that talk to S3 (:8443).
+WAN_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -66,16 +71,34 @@ wait_for_ssh() {
     return 1
 }
 
-# Wait up to 150s for a 200 response from $1.
+# Wait up to $2 seconds (default 150) for a 200 response from $1.
 wait_for_http_200() {
-    local url="$1"
-    for _ in $(seq 1 30); do
+    local url="$1" budget="${2:-150}"
+    local attempts=$((budget / 5))
+    for _ in $(seq 1 "$attempts"); do
         local status
         status=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")
         if [ "$status" = "200" ]; then
             return 0
         fi
         sleep 5
+    done
+    return 1
+}
+
+# Wait up to $2 seconds for the target group $1 to report at least one healthy target.
+wait_for_alb_healthy() {
+    local tg_arn="$1" budget="${2:-300}"
+    local attempts=$((budget / 10))
+    for _ in $(seq 1 "$attempts"); do
+        local healthy
+        healthy=$(aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
+            --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+            --output text 2>/dev/null || echo "0")
+        if [ "$healthy" -gt 0 ] 2>/dev/null; then
+            return 0
+        fi
+        sleep 10
     done
     return 1
 }
@@ -99,7 +122,7 @@ assert_bastion_private_subnet() {
 assert_nginx_alb() {
     # ALB DNS (*.elb.spinifex.local) isn't resolvable from the host — README
     # documents fetching the public IP via elbv2 describe-load-balancers.
-    local name ip
+    local name ip tg_arn
     name=$(tofu output -raw alb_name)
     ip=$(aws elbv2 describe-load-balancers --names "$name" \
         --query 'LoadBalancers[0].AvailabilityZones[].LoadBalancerAddresses[].IpAddress' \
@@ -108,7 +131,18 @@ assert_nginx_alb() {
         log "  nginx-alb: no public IP for ${name}"
         return 1
     fi
-    wait_for_http_200 "http://${ip}/"
+    log "  nginx-alb: ALB ${name} public IP ${ip}"
+
+    tg_arn=$(aws elbv2 describe-target-groups --load-balancer-arn \
+        "$(tofu output -raw alb_arn)" \
+        --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
+    if [ -n "$tg_arn" ] && ! wait_for_alb_healthy "$tg_arn" 300; then
+        log "  nginx-alb: no healthy targets after 300s"
+        aws elbv2 describe-target-health --target-group-arn "$tg_arn" || true
+        return 1
+    fi
+
+    wait_for_http_200 "http://${ip}/" 300
 }
 
 assert_nginx_webserver() {
@@ -118,11 +152,15 @@ assert_nginx_webserver() {
 }
 
 assert_s3_webapp() {
-    local bucket sentinel
+    # aws s3 goes to predastore on :8443, not the awsgw on :9999 the default
+    # profile points at — the workbook's provider sets s3 = predastore_endpoint
+    # but the CLI doesn't inherit that.
+    local bucket sentinel endpoint
     bucket=$(tofu output -raw bucket_name)
+    endpoint="https://${WAN_IP}:8443"
     sentinel="spinifex-nightly-$(date +%s).txt"
-    echo "nightly-smoke" | aws s3 cp - "s3://${bucket}/${sentinel}" >/dev/null
-    aws s3 ls "s3://${bucket}/" | grep -q "$sentinel"
+    echo "nightly-smoke" | aws s3 cp --endpoint-url "$endpoint" - "s3://${bucket}/${sentinel}" >/dev/null
+    aws s3 ls --endpoint-url "$endpoint" "s3://${bucket}/" | grep -q "$sentinel"
 }
 
 # --- Workbook driver ---
@@ -140,12 +178,7 @@ run_workbook() {
     cd "$path"
     rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
 
-    # awsgw is bound to the host's WAN IP (bootstrap-install passes --bind
-    # ${PRIMARY_WAN}), not loopback — so every workbook needs the endpoint
-    # pointed at the WAN IP. predastore is reached on the same IP for s3-webapp.
-    local wan_ip
-    wan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-    local apply_args=(-input=false -no-color "-var=spinifex_endpoint=https://${wan_ip}:9999")
+    local apply_args=(-input=false -no-color "-var=spinifex_endpoint=https://${WAN_IP}:9999")
 
     # s3-webapp has three required-no-default vars; creds come from
     # AWS_PROFILE=spinifex so the workbook's boto3 client authenticates.
@@ -154,8 +187,8 @@ run_workbook() {
         access_key=$(aws configure get aws_access_key_id --profile spinifex)
         secret_key=$(aws configure get aws_secret_access_key --profile spinifex)
         apply_args+=(
-            "-var=predastore_endpoint=https://${wan_ip}:8443"
-            "-var=predastore_host=${wan_ip}:8443"
+            "-var=predastore_endpoint=https://${WAN_IP}:8443"
+            "-var=predastore_host=${WAN_IP}:8443"
             "-var=s3_access_key=${access_key}"
             "-var=s3_secret_key=${secret_key}"
         )
