@@ -114,6 +114,13 @@ assert_bastion_private_subnet() {
         log "  bastion SSH not ready"
         return 1
     }
+    # sshd accepts before cloud-init finishes writing ~/.ssh/bastion-demo.pem.
+    # Wait up to 180s for user_data to drop the key before hopping.
+    if ! ssh "${SSH_OPTS[@]}" -i "$key" "ec2-user@${bastion}" \
+        'for _ in $(seq 1 36); do [ -s ~/.ssh/bastion-demo.pem ] && exit 0; sleep 5; done; exit 1'; then
+        log "  bastion: ~/.ssh/bastion-demo.pem never appeared (cloud-init stalled?)"
+        return 1
+    fi
     ssh "${SSH_OPTS[@]}" -i "$key" "ec2-user@${bastion}" \
         "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/bastion-demo.pem ec2-user@${private} id" \
         | grep -q '^uid='
