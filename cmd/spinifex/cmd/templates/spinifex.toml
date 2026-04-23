@@ -42,6 +42,9 @@ subnet_cidr = "{{.BootstrapSubnetCidr}}"
 [nodes.{{.Node}}]
 node = "{{.Node}}"
 host = "{{.BindIP}}"
+{{- if .AdvertiseIP}}
+advertise = "{{.AdvertiseIP}}"
+{{- end}}
 region = "{{.Region}}"
 az = "{{.Az}}"
 {{- if .Services}}

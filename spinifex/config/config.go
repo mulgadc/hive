@@ -55,12 +55,15 @@ type BootstrapConfig struct {
 // Config holds all configuration for the application
 type Config struct {
 	// Node config
-	Node     string   `json:"Node" mapstructure:"node"`
-	Host     string   `json:"Host" mapstructure:"host"` // Unique hostname or IP of this node
-	Region   string   `json:"Region" mapstructure:"region"`
-	AZ       string   `json:"AZ" mapstructure:"az"`
-	DataDir  string   `json:"DataDir" mapstructure:"data_dir"`
-	Services []string `json:"Services" mapstructure:"services"` // Which services this node runs locally
+	Node string `json:"Node" mapstructure:"node"`
+	Host string `json:"Host" mapstructure:"host"` // Unique hostname or IP of this node
+	// AdvertiseIP is the off-host dial target for this node. Empty → callers
+	// fall back to Host for backward compat with pre-siv-8 cluster configs.
+	AdvertiseIP string   `json:"AdvertiseIP" mapstructure:"advertise"`
+	Region      string   `json:"Region" mapstructure:"region"`
+	AZ          string   `json:"AZ" mapstructure:"az"`
+	DataDir     string   `json:"DataDir" mapstructure:"data_dir"`
+	Services    []string `json:"Services" mapstructure:"services"` // Which services this node runs locally
 
 	Daemon     DaemonConfig     `json:"Daemon" mapstructure:"daemon"`
 	NATS       NATSConfig       `json:"NATS" mapstructure:"nats"`

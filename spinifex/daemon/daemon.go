@@ -569,15 +569,15 @@ func (d *Daemon) Start() error {
 		if err := d.jsManager.WriteServiceManifest(
 			d.node,
 			d.config.GetServices(),
-			d.config.NATS.Host,
-			d.config.Predastore.Host,
+			admin.DialTarget(d.config.NATS.Host),
+			admin.DialTarget(d.config.Predastore.Host),
 		); err != nil {
 			slog.Warn("Failed to write service manifest", "error", err)
 		}
 	}
 
 	// Create services before loading/launching instances, since LaunchInstance depends on them
-	store := objectstore.NewS3ObjectStoreFromConfig(d.config.Predastore.Host, d.config.Predastore.Region, d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
+	store := objectstore.NewS3ObjectStoreFromConfig(admin.DialTarget(d.config.Predastore.Host), d.config.Predastore.Region, d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
@@ -844,7 +844,7 @@ func (d *Daemon) Start() error {
 // be ready immediately after daemon start (e.g. if start-dev.sh is still
 // launching services). This retries for up to 5 minutes before giving up.
 func (d *Daemon) connectNATS() error {
-	nc, err := utils.ConnectNATSWithRetry(d.config.NATS.Host, d.config.NATS.ACL.Token, d.config.NATS.CACert, d.natsRetryOpts...)
+	nc, err := utils.ConnectNATSWithRetry(admin.DialTarget(d.config.NATS.Host), d.config.NATS.ACL.Token, d.config.NATS.CACert, d.natsRetryOpts...)
 	if err != nil {
 		return err
 	}
@@ -993,7 +993,7 @@ func (d *Daemon) checkViperblockReady() bool {
 
 // checkPredastoreReady checks if predastore is reachable via TCP.
 func (d *Daemon) checkPredastoreReady() bool {
-	host := d.config.Predastore.Host
+	host := admin.DialTarget(d.config.Predastore.Host)
 	if host == "" {
 		return true // no predastore configured, skip check
 	}
@@ -2782,9 +2782,15 @@ func (d *Daemon) wireLBAgentConfig() {
 	}
 
 	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
-	// Internet-facing LB VMs reach it via VPC networking; internal LB VMs
-	// reach it via the management NIC (br-mgmt) with a host route added
-	// to their cloud-init when AWSGW binds to a specific WAN IP.
+	// Precedence:
+	//   1. AWSGW listens on a specific WAN IP + br-mgmt present → use WAN IP
+	//      and add host route via br-mgmt for internal LBs.
+	//   2. br-mgmt present + AWSGW on 0.0.0.0 → br-mgmt IP (both LB flavours
+	//      reach the daemon via mgmt).
+	//   3. This node's AdvertiseIP (single-node default install) → AdvertiseIP.
+	//   4. DevNetworking shim → 10.0.2.2.
+	//   5. AWSGW bound to specific IP (no br-mgmt, no advertise) → that IP.
+	//   6. Else: error and skip assignment — no silent empty URL.
 	var gatewayHost string
 	awsgwBindIP := ""
 	if d.config.AWSGW.Host != "" {
@@ -2793,20 +2799,23 @@ func (d *Daemon) wireLBAgentConfig() {
 		}
 	}
 
-	if d.mgmtBridgeIP != "" {
-		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback() {
-			// Multi-node: AWSGW listens on a specific WAN IP. Use that IP
-			// as the gateway URL. Internal LBs will get a host route via
-			// br-mgmt to reach it (see LaunchSystemInstance).
-			gatewayHost = awsgwBindIP
-			d.mgmtRouteVia = awsgwBindIP
-		} else {
-			// Single-node: AWSGW listens on all interfaces — br-mgmt IP works.
-			gatewayHost = d.mgmtBridgeIP
-		}
-	} else if d.config.Daemon.DevNetworking {
+	advertiseIP := d.config.AdvertiseIP
+
+	switch {
+	case d.mgmtBridgeIP != "" && awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback():
+		// Multi-node: AWSGW listens on a specific WAN IP. Use that IP as the
+		// gateway URL; internal LBs get a host route via br-mgmt.
+		gatewayHost = awsgwBindIP
+		d.mgmtRouteVia = awsgwBindIP
+	case d.mgmtBridgeIP != "":
+		// Multi-node with AWSGW on 0.0.0.0 — br-mgmt reaches all LBs.
+		gatewayHost = d.mgmtBridgeIP
+	case advertiseIP != "" && advertiseIP != "0.0.0.0":
+		// Single-node default install — off-host clients dial the advertised IP.
+		gatewayHost = advertiseIP
+	case d.config.Daemon.DevNetworking:
 		gatewayHost = "10.0.2.2"
-	} else if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+	case awsgwBindIP != "" && awsgwBindIP != "0.0.0.0":
 		gatewayHost = awsgwBindIP
 	}
 
@@ -2823,7 +2832,8 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.GatewayURL = gatewayURL
 		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
 	} else {
-		slog.Error("LB agent gateway URL not configured: no reachable host found — all CreateLoadBalancer calls will fail")
+		slog.Error("LB agent gateway URL not configured: no reachable host found — CreateLoadBalancer will fail until --advertise or br-mgmt is configured",
+			"awsgwBindIP", awsgwBindIP, "mgmtBridgeIP", d.mgmtBridgeIP, "advertiseIP", advertiseIP)
 	}
 
 	// Pass mgmt route info so lbVMUserData can add a bootcmd route for
