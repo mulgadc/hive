@@ -131,9 +131,22 @@ run_workbook() {
     cd "$path"
     rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
 
-    # Force IPv4 — Spinifex gateway listens on 127.0.0.1 only; AWS SDK
-    # resolves "localhost" to ::1 first and errors out with connection refused.
-    local apply_args=(-input=false -no-color -var=spinifex_endpoint=https://127.0.0.1:9999)
+    local apply_args=(-input=false -no-color)
+
+    # s3-webapp has three required-no-default vars. predastore_host must be
+    # reachable from inside the VPC (so VM's WAN IP, not 127.0.0.1); creds
+    # come from AWS_PROFILE=spinifex so the workbook's boto3 client authenticates.
+    if [ "$example" = "s3-webapp" ]; then
+        local wan_ip access_key secret_key
+        wan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+        access_key=$(aws configure get aws_access_key_id --profile spinifex)
+        secret_key=$(aws configure get aws_secret_access_key --profile spinifex)
+        apply_args+=(
+            "-var=predastore_host=${wan_ip}:8443"
+            "-var=s3_access_key=${access_key}"
+            "-var=s3_secret_key=${secret_key}"
+        )
+    fi
 
     if ! tofu init -input=false -no-color; then
         log "  FAIL ${example}: tofu init"

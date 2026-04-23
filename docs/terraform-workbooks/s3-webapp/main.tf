@@ -58,13 +58,13 @@ variable "region" {
 
 variable "spinifex_endpoint" {
   type        = string
-  default     = "https://localhost:9999"
+  default     = "https://127.0.0.1:9999"
   description = "Spinifex AWS gateway endpoint (EC2/IAM)"
 }
 
 variable "predastore_endpoint" {
   type        = string
-  default     = "https://localhost:8443"
+  default     = "https://127.0.0.1:8443"
   description = "Predastore S3 endpoint (for Terraform to create buckets)"
 }
 

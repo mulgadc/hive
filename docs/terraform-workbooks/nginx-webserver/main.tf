@@ -43,7 +43,7 @@ variable "region" {
 
 variable "spinifex_endpoint" {
   type        = string
-  default     = "https://localhost:9999"
+  default     = "https://127.0.0.1:9999"
   description = "Spinifex AWS gateway endpoint"
 }
 
