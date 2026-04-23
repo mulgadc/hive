@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mulgadc/predastore/ratelimit"
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/gateway"
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
@@ -102,7 +103,7 @@ func launchService(config *config.ClusterConfig) error {
 
 	// Connect to NATS for service communication. On concurrent startup the
 	// local NATS server may not be listening yet, so retry with backoff.
-	natsConn, err := utils.ConnectNATSWithRetry(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token, nodeConfig.NATS.CACert)
+	natsConn, err := utils.ConnectNATSWithRetry(admin.DialTarget(nodeConfig.NATS.Host), nodeConfig.NATS.ACL.Token, nodeConfig.NATS.CACert)
 	if err != nil {
 		return err
 	}

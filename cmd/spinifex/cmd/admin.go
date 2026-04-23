@@ -1058,7 +1058,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP)
+	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP, advertiseIP)
 
 	// Print success message
 	fmt.Println("\n🎉 Spinifex initialization complete!")
@@ -1262,7 +1262,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
-	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP)
+	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP, advertiseIP)
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
 	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
@@ -1278,9 +1278,14 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	fmt.Println("\n🎉 Cluster formation complete!")
 	fmt.Printf("   Cluster: %s (%d nodes)\n", clusterName, expectedNodes)
 	fmt.Printf("   Region: %s\n", region)
+	fmt.Printf("   Bind: %s  Advertise: %s  Loopback: 127.0.0.1\n", bindIP, advertiseIP)
 	fmt.Println("   Nodes:")
 	for name, n := range allNodes {
-		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
+		adv := n.AdvertiseIP
+		if adv == "" {
+			adv = n.BindIP
+		}
+		fmt.Printf("     - %s (bind=%s advertise=%s)\n", name, n.BindIP, adv)
 	}
 	fmt.Println("\n📋 Next steps:")
 	fmt.Println("   1. Start services on ALL nodes:")
@@ -1651,14 +1656,19 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	finalizeNodeSetup(dataDir, caCertPath, creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, bindIP)
+	finalizeNodeSetup(dataDir, caCertPath, creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, bindIP, advertiseIP)
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Node successfully joined cluster!")
 	fmt.Printf("   Cluster: %s (%d nodes)\n", creds.ClusterName, len(statusResp.Nodes))
+	fmt.Printf("   Bind: %s  Advertise: %s  Loopback: 127.0.0.1\n", bindIP, advertiseIP)
 	fmt.Println("   Nodes:")
 	for name, n := range statusResp.Nodes {
-		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
+		adv := n.AdvertiseIP
+		if adv == "" {
+			adv = n.BindIP
+		}
+		fmt.Printf("     - %s (bind=%s advertise=%s)\n", name, n.BindIP, adv)
 	}
 }
 
@@ -1954,10 +1964,12 @@ func generateAndWriteConfigs(dirs configDirs, spinifexTomlPath string, settings 
 }
 
 // finalizeNodeSetup configures AWS credentials, creates service directories,
-// and sets ownership when running as root.
-func finalizeNodeSetup(dataDir, certPath, adminAccessKey, adminSecretKey, region, bindIP string) {
+// and sets ownership when running as root. advertiseIP is the off-host dial
+// target for this node; it is threaded through SetupAWSCredentials's wanIP
+// param for a future --operator-endpoint flag (see SetupAWSCredentials doc).
+func finalizeNodeSetup(dataDir, certPath, adminAccessKey, adminSecretKey, region, bindIP, advertiseIP string) {
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(adminAccessKey, adminSecretKey, region, certPath, bindIP); err != nil {
+	if err := admin.SetupAWSCredentials(adminAccessKey, adminSecretKey, region, certPath, bindIP, advertiseIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")

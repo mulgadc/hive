@@ -786,9 +786,14 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 }
 
 // SetupAWSCredentials updates ~/.aws/credentials and ~/.aws/config.
-// bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", defaults to "localhost".
+// bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", the
+// operator's local ~/.aws/config endpoint_url falls back to "localhost" (this
+// runs on the same box as the gateway). wanIP is reserved for a future
+// --operator-endpoint flag that will let remote operators point their CLI at
+// the host's WAN IP; today it is accepted but unused.
 // When running under sudo, writes to SUDO_USER's home instead of root's.
-func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) error {
+func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP, wanIP string) error {
+	_ = wanIP
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
