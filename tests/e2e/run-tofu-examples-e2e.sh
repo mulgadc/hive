@@ -133,10 +133,14 @@ assert_nginx_alb() {
     fi
     log "  nginx-alb: ALB ${name} public IP ${ip}"
 
-    tg_arn=$(aws elbv2 describe-target-groups --load-balancer-arn \
-        "$(tofu output -raw alb_arn)" \
-        --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
-    if [ -n "$tg_arn" ] && ! wait_for_alb_healthy "$tg_arn" 300; then
+    tg_arn=$(aws elbv2 describe-target-groups --names nginx-alb-tg \
+        --query 'TargetGroups[0].TargetGroupArn' --output text 2>&1)
+    log "  nginx-alb: target group ARN: ${tg_arn}"
+    if [ -z "$tg_arn" ] || [[ "$tg_arn" == *Error* ]] || [[ "$tg_arn" == None ]]; then
+        log "  nginx-alb: could not resolve target group ARN, aborting"
+        return 1
+    fi
+    if ! wait_for_alb_healthy "$tg_arn" 300; then
         log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
         log "  --- target health ---"
         aws elbv2 describe-target-health --target-group-arn "$tg_arn" || true
