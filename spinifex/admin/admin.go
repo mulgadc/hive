@@ -517,24 +517,6 @@ func GenerateCACert(caCertPath, caKeyPath string) error {
 	return nil
 }
 
-// DiscoverPrimaryIP returns the host's default-route source IPv4, determined
-// via a UDP-dial probe against TEST-NET-1 (RFC 5737). No packet is sent — the
-// kernel picks the outbound interface for the given destination and we read
-// its source address back off the socket. Returns "" when no usable default
-// route exists or the resolved source is a loopback.
-func DiscoverPrimaryIP() string {
-	conn, err := net.Dial("udp4", "192.0.2.1:9")
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	addr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || addr.IP == nil || addr.IP.IsLoopback() {
-		return ""
-	}
-	return addr.IP.String()
-}
-
 // DiscoverLocalIPs enumerates all non-loopback network interface addresses on
 // this machine and returns them as strings. Link-local addresses are excluded.
 func DiscoverLocalIPs() []string {

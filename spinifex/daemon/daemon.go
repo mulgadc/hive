@@ -2806,10 +2806,7 @@ func (d *Daemon) wireLBAgentConfig() {
 		}
 	} else if d.config.Daemon.DevNetworking {
 		gatewayHost = "10.0.2.2"
-	} else if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback() {
-		// Without a mgmt bridge, we can only use the AWSGW bind IP if it's
-		// reachable from VMs. A loopback (127.x) is the VM's own loopback,
-		// not the host's — guard against silent mis-injection.
+	} else if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
 		gatewayHost = awsgwBindIP
 	}
 

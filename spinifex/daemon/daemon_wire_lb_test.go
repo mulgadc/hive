@@ -111,24 +111,6 @@ func TestWireLBAgentConfig_GatewayURL_AWSGWBindOnly(t *testing.T) {
 	d.wireLBAgentConfig()
 
 	assert.Empty(t, d.mgmtRouteVia)
-	assert.Equal(t, "https://192.168.1.10:8443", d.elbv2Service.GatewayURL)
-}
-
-func TestWireLBAgentConfig_GatewayURL_LoopbackBindNoMgmtBridge(t *testing.T) {
-	// Production single-node without br-mgmt (mulga-siv-6 regression guard):
-	// operator explicitly passed --bind 127.0.0.1 and the host has no mgmt
-	// bridge. The fallback must NOT write 127.0.0.1 into LB VM cloud-init —
-	// the VM's loopback is its own, not the host's. GatewayURL stays empty
-	// and the daemon logs an error (handled downstream).
-	cfg := &config.Config{
-		AWSGW: config.AWSGWConfig{Host: "127.0.0.1:9999"},
-	}
-	d := newWireLBTestDaemon(t, cfg)
-
-	d.wireLBAgentConfig()
-
-	assert.Empty(t, d.mgmtRouteVia)
-	assert.Empty(t, d.elbv2Service.GatewayURL, "must not inject loopback as GatewayURL")
 }
 
 func TestWireLBAgentConfig_GatewayURL_NoHost(t *testing.T) {

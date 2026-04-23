@@ -239,7 +239,7 @@ func init() {
 	adminInitCmd.Flags().Int("nodes", 3, "Number of nodes to expect for cluster")
 	adminInitCmd.Flags().String("host", "", "Leader node to join (if not specified, tries multicast discovery)")
 	adminInitCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
-	adminInitCmd.Flags().String("bind", "", "IP address to bind services to (default: auto-detect primary non-loopback IPv4; e.g., 10.11.12.1 for multi-node)")
+	adminInitCmd.Flags().String("bind", "127.0.0.1", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
@@ -607,15 +607,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	nodes, _ := cmd.Flags().GetInt("nodes")
 	port, _ := cmd.Flags().GetInt("port")
 	bindIP, _ := cmd.Flags().GetString("bind")
-	if bindIP == "" {
-		bindIP = admin.DiscoverPrimaryIP()
-		if bindIP == "" {
-			fmt.Fprintf(os.Stderr, "❌ Error: could not auto-detect primary IP. Pass --bind explicitly.\n")
-			fmt.Fprintf(os.Stderr, "   Detected local IPs: %v\n", admin.DiscoverLocalIPs())
-			os.Exit(1)
-		}
-		fmt.Printf("Auto-detected --bind=%s (pass --bind to override)\n", bindIP)
-	}
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
 	var clusterRoutes []string

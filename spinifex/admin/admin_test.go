@@ -443,21 +443,6 @@ func TestDiscoverLocalIPs(t *testing.T) {
 	}
 }
 
-func TestDiscoverPrimaryIP(t *testing.T) {
-	t.Parallel()
-	ip := DiscoverPrimaryIP()
-	if ip == "" {
-		t.Skip("no default-route interface available in this environment")
-	}
-	parsed := net.ParseIP(ip)
-	require.NotNil(t, parsed, "returned IP should be parseable: %s", ip)
-	assert.False(t, parsed.IsLoopback(), "should not return loopback: %s", ip)
-	assert.False(t, parsed.IsUnspecified(), "should not return 0.0.0.0: %s", ip)
-
-	locals := DiscoverLocalIPs()
-	assert.Contains(t, locals, ip, "primary IP should appear in local interface list")
-}
-
 func TestDiscoverHostname(t *testing.T) {
 	t.Parallel()
 	hostname := DiscoverHostname()
