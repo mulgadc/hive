@@ -137,8 +137,26 @@ assert_nginx_alb() {
         "$(tofu output -raw alb_arn)" \
         --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
     if [ -n "$tg_arn" ] && ! wait_for_alb_healthy "$tg_arn" 300; then
-        log "  nginx-alb: no healthy targets after 300s"
+        log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
+        log "  --- target health ---"
         aws elbv2 describe-target-health --target-group-arn "$tg_arn" || true
+        log "  --- elbv2 system instances ---"
+        aws ec2 describe-instances \
+            --filters 'Name=tag:spinifex:managed-by,Values=elbv2' \
+            --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress]' \
+            --output table || true
+        log "  --- registered target instances ---"
+        aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
+            --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
+        while read -r tgt_id; do
+            [ -z "$tgt_id" ] && continue
+            aws ec2 describe-instances --instance-ids "$tgt_id" \
+                --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress]' \
+                --output table || true
+        done
+        log "  --- daemon: gateway URL + lb-agent traffic ---"
+        sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+            grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed' | tail -80 || true
         return 1
     fi
 
