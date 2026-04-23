@@ -51,12 +51,17 @@ func ObtainDHCPLease(bridge, clientID string) (string, error) {
 	//   --noconfigure   = don't add IP to interface (OVN handles traffic)
 	//   -1              = exit after obtaining a lease (don't daemonize)
 	//   -4              = IPv4 only
-	//   -I clientID     = unique client identifier per ENI
+	//	 -T				 = TEST MODE
+	//   -I clientID     = unique client identifier per ENI (Required to generate different IP from the DHCP server)
 	//   -t 15           = 15 second timeout
 	cmd := exec.Command("sudo", dhcpcdBin,
 		"--noconfigure",
 		"-1",
 		"-4",
+
+		// Previous bug, if dhcpcd already running (e.g dhcp mode set on an interface, will send cmd to daemon, not STDOUT)
+		"-T",
+
 		"-I", clientID,
 		"-t", "15",
 		bridge,

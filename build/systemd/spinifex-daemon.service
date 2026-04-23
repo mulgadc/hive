@@ -34,13 +34,14 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 ProtectClock=yes
-ProtectKernelTunables=yes
+# Required for dhcpcd (issue dhcpcd[867]: br-wan: if_init: Read-only file system)
+ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectProc=invisible
 SystemCallArchitectures=native
-MemoryDenyWriteExecute=yes
+MemoryDenyWriteExecute=no
 # AF_PACKET is required by dhcpcd (raw L2 BOOTP before the iface has an IP).
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
 ProtectHostname=yes
