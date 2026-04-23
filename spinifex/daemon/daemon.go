@@ -32,6 +32,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/gpu"
 	handlers_ec2_account "github.com/mulgadc/spinifex/spinifex/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eigw"
 	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
@@ -87,6 +88,7 @@ type ResourceManager struct {
 	allocatedVCPU int
 	allocatedMem  float64
 	instanceTypes map[string]*ec2.InstanceTypeInfo
+	gpuManager    *gpu.Manager // nil if GPU passthrough is disabled or no GPUs present
 
 	// Dynamic instance-type subscription management
 	subsMu       sync.Mutex
@@ -158,6 +160,10 @@ type Daemon struct {
 	// management NIC. Set when AWSGW binds to a specific IP (multi-node).
 	mgmtRouteVia string
 
+	// gpuManager handles VFIO bind/unbind lifecycle for GPU passthrough.
+	// Nil when GPUPassthrough is disabled in config or no recognised GPUs are found.
+	gpuManager *gpu.Manager
+
 	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase)
 	// or during SIGTERM-based shutdown. When true, the daemon rejects new work,
 	// crash handlers bail out, and setupShutdown skips redundant VM stops.
@@ -216,7 +222,9 @@ func getSystemMemory() (float64, error) {
 // NewResourceManager creates a new resource manager with system capabilities.
 // Returns an error if system memory cannot be detected, since an incorrect
 // default would either under-provision (large servers) or over-commit (small devices).
-func NewResourceManager() (*ResourceManager, error) {
+// gpuModels is the list of recognised GPU models present on the host; pass nil if
+// GPU passthrough is disabled or no GPUs were found.
+func NewResourceManager(gpuModels []instancetypes.GPUModel, gpuMgr *gpu.Manager) (*ResourceManager, error) {
 	// Get system CPU cores
 	numCPU := runtime.NumCPU()
 
@@ -232,8 +240,9 @@ func NewResourceManager() (*ResourceManager, error) {
 		arch = "arm64"
 	}
 
-	// Detect CPU generation and generate matching instance types
-	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch, nil)
+	// Detect CPU generation and generate matching instance types (including GPU
+	// families when gpuModels is non-nil).
+	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch, gpuModels)
 
 	slog.Info("System resources detected",
 		"vCPUs", numCPU, "memGB", totalMemGB,
@@ -243,6 +252,7 @@ func NewResourceManager() (*ResourceManager, error) {
 		availableVCPU: numCPU,
 		availableMem:  totalMemGB,
 		instanceTypes: instanceTypes,
+		gpuManager:    gpuMgr,
 	}, nil
 }
 
@@ -298,11 +308,17 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 			continue
 		}
 
+		requiresGPU := instancetypes.IsGPUType(it)
+		availGPU := 0
+		if rm.gpuManager != nil && requiresGPU {
+			availGPU = rm.gpuManager.Available()
+		}
 		count := canAllocateCount(
 			rm.availableVCPU, rm.allocatedVCPU,
 			rm.availableMem, rm.allocatedMem,
 			vCPUs, memMiB,
 			1<<30, // effectively unlimited — let resources be the constraint
+			availGPU, requiresGPU,
 		)
 
 		if showCapacity {
@@ -356,14 +372,35 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// If WalDir is not set, use BaseDir
-	config := cfg.Nodes[cfg.Node]
+	nodeCfg := cfg.Nodes[cfg.Node]
 	if cfg.Nodes[cfg.Node].WalDir == "" {
-		config.WalDir = config.BaseDir
-
-		cfg.Nodes[cfg.Node] = config
+		nodeCfg.WalDir = nodeCfg.BaseDir
+		cfg.Nodes[cfg.Node] = nodeCfg
 	}
 
-	rm, err := NewResourceManager()
+	// Discover GPU hardware when passthrough is enabled.
+	var gpuModels []instancetypes.GPUModel
+	var gpuMgr *gpu.Manager
+	if nodeCfg.Daemon.GPUPassthrough {
+		devices, discoverErr := gpu.Discover()
+		if discoverErr != nil {
+			slog.Warn("GPU discovery failed, GPU passthrough disabled", "err", discoverErr)
+		} else {
+			for _, dev := range devices {
+				if m := instancetypes.GPUModelForVendorDevice(dev.VendorID, dev.DeviceID); m != nil {
+					gpuModels = append(gpuModels, *m)
+				}
+			}
+			if len(devices) > 0 {
+				gpuMgr = gpu.NewManager(devices)
+				slog.Info("GPU passthrough enabled", "gpus", len(devices), "knownModels", len(gpuModels))
+			} else {
+				slog.Warn("GPU passthrough enabled in config but no GPUs discovered")
+			}
+		}
+	}
+
+	rm, err := NewResourceManager(gpuModels, gpuMgr)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("initialize resource manager: %w", err)
@@ -372,8 +409,9 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 	return &Daemon{
 		node:              cfg.Node,
 		clusterConfig:     cfg,
-		config:            &config,
+		config:            &nodeCfg,
 		resourceMgr:       rm,
+		gpuManager:        gpuMgr,
 		ctx:               ctx,
 		cancel:            cancel,
 		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
@@ -1154,6 +1192,12 @@ func (d *Daemon) restoreInstances() {
 				_ = utils.RemovePidFile(instance.ID)
 			} else {
 				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
+				// Re-register the GPU in the pool so it isn't double-claimed.
+				if d.gpuManager != nil && instance.GPUPCIAddress != "" {
+					if reclaimErr := d.gpuManager.ReclaimByAddress(instance.GPUPCIAddress, instance.ID); reclaimErr != nil {
+						slog.Warn("Failed to re-claim GPU on restart", "gpu", instance.GPUPCIAddress, "instanceId", instance.ID, "err", reclaimErr)
+					}
+				}
 				if err := d.reconnectInstance(instance); err != nil {
 					slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
 				}
@@ -1687,6 +1731,16 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 			}
 
+			// Unbind GPU from vfio-pci and rebind to its original host driver.
+			if d.gpuManager != nil && instance.GPUPCIAddress != "" {
+				if err := d.gpuManager.Release(instance.ID); err != nil {
+					slog.Error("Failed to release GPU on stop, device may need manual rebind",
+						"gpu", instance.GPUPCIAddress, "instanceId", instance.ID, "err", err)
+				} else {
+					slog.Info("GPU released", "gpu", instance.GPUPCIAddress, "instanceId", instance.ID)
+				}
+			}
+
 			// Release public IP before deleting ENI
 			if deleteVolume && instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
 				// Publish vpc.delete-nat to remove dnat_and_snat rule
@@ -1927,6 +1981,16 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	if err != nil {
 		slog.Error("Failed to mount volumes", "err", err)
 		return err
+	}
+
+	// Claim GPU for GPU instance types — binds the full IOMMU group to vfio-pci.
+	if d.gpuManager != nil && instancetypes.IsGPUType(d.resourceMgr.instanceTypes[instance.InstanceType]) {
+		gpuDevice, gpuErr := d.gpuManager.Claim(instance.ID)
+		if gpuErr != nil {
+			return fmt.Errorf("claim GPU for instance %s: %w", instance.ID, gpuErr)
+		}
+		instance.GPUPCIAddress = gpuDevice.PCIAddress
+		slog.Info("GPU claimed for instance", "instanceId", instance.ID, "gpu", gpuDevice.PCIAddress)
 	}
 
 	// Step 6: Launch the instance via QEMU/KVM
@@ -2280,6 +2344,14 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
 		Value: "virtio-rng-pci",
 	})
+
+	// Inject GPU passthrough device when a GPU has been claimed for this instance.
+	if instance.GPUPCIAddress != "" {
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("vfio-pci,host=%s,id=gpu0,x-vga=on", instance.GPUPCIAddress),
+		})
+		slog.Info("GPU passthrough device configured", "pci", instance.GPUPCIAddress, "instanceId", instance.ID)
+	}
 
 	// QMP socket
 	qmpSocket, err := utils.GenerateSocketFile(fmt.Sprintf("qmp-%s", instance.ID))
@@ -2647,12 +2719,19 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
+	requiresGPU := instancetypes.IsGPUType(instanceType)
+	availGPU := 0
+	if rm.gpuManager != nil && requiresGPU {
+		availGPU = rm.gpuManager.Available()
+	}
+
 	return canAllocateCount(
 		rm.availableVCPU, rm.allocatedVCPU,
 		rm.availableMem, rm.allocatedMem,
 		instanceTypeVCPUs(instanceType),
 		instanceTypeMemoryMiB(instanceType),
 		count,
+		availGPU, requiresGPU,
 	)
 }
 

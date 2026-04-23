@@ -12,7 +12,7 @@ import (
 
 // TestBuildHeartbeat verifies that buildHeartbeat populates the struct from daemon state.
 func TestBuildHeartbeat(t *testing.T) {
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{
@@ -41,7 +41,7 @@ func TestBuildHeartbeat(t *testing.T) {
 
 // TestHeartbeatReflectsAllocation verifies that allocating resources changes the heartbeat values.
 func TestHeartbeatReflectsAllocation(t *testing.T) {
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{

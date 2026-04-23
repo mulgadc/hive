@@ -51,7 +51,7 @@ func TestHandleInstanceCrash_SkipsNonRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{
@@ -76,7 +76,7 @@ func TestHandleInstanceCrash_SkipsShuttingDown(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{
@@ -103,7 +103,7 @@ func TestMaybeRestart_ExceedsMaxInWindow(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{
@@ -148,7 +148,7 @@ func TestMaybeRestart_ResetsAfterWindow(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{
@@ -218,7 +218,7 @@ func newTestDaemon(t *testing.T) (*Daemon, func()) {
 	nc, err := nats.Connect(sharedNATSURL)
 	require.NoError(t, err)
 
-	rm, err := NewResourceManager()
+	rm, err := NewResourceManager(nil, nil)
 	require.NoError(t, err)
 
 	d := &Daemon{

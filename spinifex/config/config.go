@@ -108,11 +108,12 @@ type PredastoreConfig struct {
 
 // DaemonConfig holds the daemon configuration
 type DaemonConfig struct {
-	Host          string `json:"Host" mapstructure:"host"`
-	TLSKey        string `json:"TLSKey" mapstructure:"tlskey"`
-	TLSCert       string `json:"TLSCert" mapstructure:"tlscert"`
-	DevNetworking bool   `json:"DevNetworking" mapstructure:"dev_networking"` // VPC instances get both TAP + hostfwd for SSH dev access
-	MgmtBridge    string `json:"MgmtBridge" mapstructure:"mgmt_bridge"`       // Linux bridge for system instance control plane (default "br-mgmt")
+	Host           string `json:"Host" mapstructure:"host"`
+	TLSKey         string `json:"TLSKey" mapstructure:"tlskey"`
+	TLSCert        string `json:"TLSCert" mapstructure:"tlscert"`
+	DevNetworking  bool   `json:"DevNetworking" mapstructure:"dev_networking"`   // VPC instances get both TAP + hostfwd for SSH dev access
+	MgmtBridge     string `json:"MgmtBridge" mapstructure:"mgmt_bridge"`         // Linux bridge for system instance control plane (default "br-mgmt")
+	GPUPassthrough bool   `json:"GPUPassthrough" mapstructure:"gpu_passthrough"` // Enable VFIO GPU passthrough for g5.* instance types
 }
 
 // NATSConfig holds the NATS configuration

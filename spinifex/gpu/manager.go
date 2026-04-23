@@ -74,6 +74,16 @@ func (m *Manager) Claim(instanceID string) (*GPUDevice, error) {
 			}
 			return nil, fmt.Errorf("bind IOMMU group member %s: %w", member.PCIAddress, err)
 		}
+		// bindVFIO returns "vfio-pci" when the device was already bound (idempotent
+		// path — e.g. after a daemon restart with a live GPU instance). Use the
+		// pre-passthrough driver stored at discovery time so Release can rebind correctly.
+		if orig == "vfio-pci" {
+			if member.PCIAddress == entry.Device.PCIAddress {
+				orig = entry.Device.OriginalDriver
+			} else {
+				orig = "" // companion: original driver unknown; leave unbound on release
+			}
+		}
 		drivers[member.PCIAddress] = orig
 		bound = append(bound, member.PCIAddress)
 	}
@@ -166,4 +176,46 @@ func (m *Manager) TotalCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.pool)
+}
+
+// ReclaimByAddress marks the GPU at addr as claimed by instanceID without
+// performing sysfs writes. Used on daemon restart to re-register GPUs that
+// are still bound to vfio-pci from a previous run.
+func (m *Manager) ReclaimByAddress(addr, instanceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.pool {
+		if m.pool[i].Device.PCIAddress != addr {
+			continue
+		}
+		entry := &m.pool[i]
+		if entry.InstanceID != "" {
+			return fmt.Errorf("GPU %s already claimed by %s", addr, entry.InstanceID)
+		}
+
+		members, err := groupMembers(m.sysfsRoot, entry.Device.IOMMUGroup)
+		if err != nil {
+			slog.Warn("Failed to re-discover IOMMU group on restart, teardown may be incomplete",
+				"gpu", addr, "group", entry.Device.IOMMUGroup, "err", err)
+			members = []IOMMUGroupMember{{PCIAddress: addr}}
+		}
+
+		// Use the stored pre-passthrough driver for the primary GPU so Release
+		// can rebind correctly. Companion devices are left unbound on release
+		// (original drivers not persisted across restarts).
+		drivers := make(map[string]string, len(members))
+		for _, member := range members {
+			if member.PCIAddress == addr {
+				drivers[member.PCIAddress] = entry.Device.OriginalDriver
+			}
+		}
+
+		entry.InstanceID = instanceID
+		entry.groupMembers = members
+		entry.memberDrivers = drivers
+		slog.Info("GPU re-claimed after daemon restart", "gpu", addr, "instance", instanceID)
+		return nil
+	}
+	return fmt.Errorf("GPU %s not found in pool", addr)
 }

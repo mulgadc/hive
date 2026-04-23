@@ -14,8 +14,17 @@ var errInsufficientCapacity = errors.New("insufficient capacity to satisfy MinCo
 // canAllocateCount returns how many instances of the given type can fit
 // in the remaining capacity, capped at maxCount. Pure function — no locks
 // or side effects.
+//
+// availGPU is the number of free GPUs in the pool; requiresGPU indicates
+// that this instance type needs one. When requiresGPU is true and availGPU
+// is zero, the result is always 0.
 func canAllocateCount(availVCPU, allocVCPU int, availMem, allocMem float64,
-	vCPUs int64, memMiB int64, maxCount int) int {
+	vCPUs int64, memMiB int64, maxCount int,
+	availGPU int, requiresGPU bool) int {
+	if requiresGPU && availGPU == 0 {
+		return 0
+	}
+
 	remainingVCPU := availVCPU - allocVCPU
 	remainingMem := availMem - allocMem
 	memoryGB := float64(memMiB) / 1024.0
@@ -31,6 +40,9 @@ func canAllocateCount(availVCPU, allocVCPU int, availMem, allocMem float64,
 	}
 
 	result := min(countByMem, countByCPU)
+	if requiresGPU {
+		result = min(result, availGPU)
+	}
 	result = min(result, maxCount)
 	return max(result, 0)
 }
