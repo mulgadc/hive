@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDescribeLoadBalancerAttributesInput validates the input parameters
+func ValidateDescribeLoadBalancerAttributesInput(input *elbv2.DescribeLoadBalancerAttributesInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.LoadBalancerArn == nil || *input.LoadBalancerArn == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DescribeLoadBalancerAttributes handles the ELBv2 DescribeLoadBalancerAttributes API call.
 func DescribeLoadBalancerAttributes(input *elbv2.DescribeLoadBalancerAttributesInput, natsConn *nats.Conn, accountID string) (elbv2.DescribeLoadBalancerAttributesOutput, error) {
 	var output elbv2.DescribeLoadBalancerAttributesOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.LoadBalancerArn == nil || *input.LoadBalancerArn == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDescribeLoadBalancerAttributesInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

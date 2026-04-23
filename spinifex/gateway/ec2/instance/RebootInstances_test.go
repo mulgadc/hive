@@ -70,7 +70,7 @@ func TestRebootInstances_EmptyInstanceIds(t *testing.T) {
 
 	_, err := RebootInstances(input, nc, "123456789012")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no instance IDs provided")
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
 }
 
 func TestRebootInstances_NATSRequestFails(t *testing.T) {

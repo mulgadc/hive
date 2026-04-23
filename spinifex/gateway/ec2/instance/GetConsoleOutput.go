@@ -8,15 +8,27 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateGetConsoleOutputInput validates the input parameters
+func ValidateGetConsoleOutputInput(input *ec2.GetConsoleOutputInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.InstanceId == nil || *input.InstanceId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // GetConsoleOutput retrieves console output for a specific instance via NATS.
 // Routes directly to the node running the instance via ec2.{instanceID}.GetConsoleOutput.
 func GetConsoleOutput(input *ec2.GetConsoleOutputInput, natsConn *nats.Conn, accountID string) (*ec2.GetConsoleOutputOutput, error) {
-	if input.InstanceId == nil || *input.InstanceId == "" {
-		return nil, fmt.Errorf("InstanceId is required")
+	if err := ValidateGetConsoleOutputInput(input); err != nil {
+		return nil, err
 	}
 
 	jsonData, err := json.Marshal(input)

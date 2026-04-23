@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeleteNetworkInterfaceInput validates the input parameters
+func ValidateDeleteNetworkInterfaceInput(input *ec2.DeleteNetworkInterfaceInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.NetworkInterfaceId == nil || *input.NetworkInterfaceId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeleteNetworkInterface handles the EC2 DeleteNetworkInterface API call
 func DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput, natsConn *nats.Conn, accountID string) (ec2.DeleteNetworkInterfaceOutput, error) {
 	var output ec2.DeleteNetworkInterfaceOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.NetworkInterfaceId == nil || *input.NetworkInterfaceId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeleteNetworkInterfaceInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)

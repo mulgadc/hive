@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeleteInternetGatewayInput validates the input parameters
+func ValidateDeleteInternetGatewayInput(input *ec2.DeleteInternetGatewayInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeleteInternetGateway handles the EC2 DeleteInternetGateway API call
 func DeleteInternetGateway(input *ec2.DeleteInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.DeleteInternetGatewayOutput, error) {
 	var output ec2.DeleteInternetGatewayOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeleteInternetGatewayInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)

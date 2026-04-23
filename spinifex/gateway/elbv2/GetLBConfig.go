@@ -8,15 +8,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateGetLBConfigInput validates the input parameters
+func ValidateGetLBConfigInput(input *handlers_elbv2.GetLBConfigInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.LBID == nil || *input.LBID == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // GetLBConfig handles the ELBv2 GetLBConfig API call.
 func GetLBConfig(input *handlers_elbv2.GetLBConfigInput, natsConn *nats.Conn, accountID string) (handlers_elbv2.GetLBConfigOutput, error) {
 	var output handlers_elbv2.GetLBConfigOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.LBID == nil || *input.LBID == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateGetLBConfigInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

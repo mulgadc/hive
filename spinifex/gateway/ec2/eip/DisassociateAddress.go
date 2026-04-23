@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDisassociateAddressInput validates the input parameters
+func ValidateDisassociateAddressInput(input *ec2.DisassociateAddressInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.AssociationId == nil || *input.AssociationId == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DisassociateAddress handles the EC2 DisassociateAddress API call.
 func DisassociateAddress(input *ec2.DisassociateAddressInput, natsConn *nats.Conn, accountID string) (ec2.DisassociateAddressOutput, error) {
 	var output ec2.DisassociateAddressOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.AssociationId == nil || *input.AssociationId == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDisassociateAddressInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_eip.NewNATSEIPService(natsConn)

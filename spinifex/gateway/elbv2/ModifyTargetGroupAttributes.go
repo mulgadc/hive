@@ -9,18 +9,26 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateModifyTargetGroupAttributesInput validates the input parameters
+func ValidateModifyTargetGroupAttributesInput(input *elbv2.ModifyTargetGroupAttributesInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	if len(input.Attributes) == 0 {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // ModifyTargetGroupAttributes handles the ELBv2 ModifyTargetGroupAttributes API call.
 func ModifyTargetGroupAttributes(input *elbv2.ModifyTargetGroupAttributesInput, natsConn *nats.Conn, accountID string) (elbv2.ModifyTargetGroupAttributesOutput, error) {
 	var output elbv2.ModifyTargetGroupAttributesOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
-	}
-	if len(input.Attributes) == 0 {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateModifyTargetGroupAttributesInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)
