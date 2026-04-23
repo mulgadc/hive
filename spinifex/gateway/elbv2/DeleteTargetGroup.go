@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeleteTargetGroupInput validates the input parameters
+func ValidateDeleteTargetGroupInput(input *elbv2.DeleteTargetGroupInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeleteTargetGroup handles the ELBv2 DeleteTargetGroup API call.
 func DeleteTargetGroup(input *elbv2.DeleteTargetGroupInput, natsConn *nats.Conn, accountID string) (elbv2.DeleteTargetGroupOutput, error) {
 	var output elbv2.DeleteTargetGroupOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeleteTargetGroupInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

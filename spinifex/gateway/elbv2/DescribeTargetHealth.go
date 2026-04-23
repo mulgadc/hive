@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDescribeTargetHealthInput validates the input parameters
+func ValidateDescribeTargetHealthInput(input *elbv2.DescribeTargetHealthInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DescribeTargetHealth handles the ELBv2 DescribeTargetHealth API call.
 func DescribeTargetHealth(input *elbv2.DescribeTargetHealthInput, natsConn *nats.Conn, accountID string) (elbv2.DescribeTargetHealthOutput, error) {
 	var output elbv2.DescribeTargetHealthOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDescribeTargetHealthInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

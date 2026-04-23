@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateCreateVpcInput validates the input parameters
+func ValidateCreateVpcInput(input *ec2.CreateVpcInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.CidrBlock == nil || *input.CidrBlock == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // CreateVpc handles the EC2 CreateVpc API call
 func CreateVpc(input *ec2.CreateVpcInput, natsConn *nats.Conn, accountID string) (ec2.CreateVpcOutput, error) {
 	var output ec2.CreateVpcOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.CidrBlock == nil || *input.CidrBlock == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateCreateVpcInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)

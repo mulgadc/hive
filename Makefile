@@ -34,6 +34,9 @@ else
 endif
 
 # Quiet-mode filters (active when QUIET=1, set by preflight via recursive make)
+# Note: grep pipelines use PIPESTATUS[0] so the exit status of `go test`
+# propagates through the filter — otherwise a test failure is swallowed by
+# grep's own (success) exit code and preflight prints "passed" on red.
 ifdef QUIET
   _Q     = @
   _COVQ  = 2>&1 | { grep -Ev '^\s*(ok|PASS|\?|=== RUN|--- PASS:)\s' | grep -v 'coverage: 0\.0%' || true; }; exit $${PIPESTATUS[0]}

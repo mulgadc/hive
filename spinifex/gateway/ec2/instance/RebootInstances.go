@@ -14,12 +14,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateRebootInstancesInput validates the input parameters
+func ValidateRebootInstancesInput(input *ec2.RebootInstancesInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if len(input.InstanceIds) == 0 {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // RebootInstances sends reboot commands to specified instances via NATS.
 // Unlike stop+start, reboot keeps the instance running and sends a QMP system_reset.
 // Returns an empty response on success (AWS returns no state-change data).
 func RebootInstances(input *ec2.RebootInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.RebootInstancesOutput, error) {
-	if len(input.InstanceIds) == 0 {
-		return nil, fmt.Errorf("no instance IDs provided")
+	if err := ValidateRebootInstancesInput(input); err != nil {
+		return nil, err
 	}
 
 	slog.Info("RebootInstances: Processing request", "instance_count", len(input.InstanceIds))

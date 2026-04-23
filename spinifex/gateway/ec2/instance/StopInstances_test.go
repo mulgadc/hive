@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -83,7 +84,7 @@ func TestStopInstances_EmptyInstanceIds(t *testing.T) {
 
 	_, err := StopInstances(input, nc, "123456789012")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no instance IDs provided")
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
 }
 
 func TestStopInstances_NilInstanceIdSkipped(t *testing.T) {

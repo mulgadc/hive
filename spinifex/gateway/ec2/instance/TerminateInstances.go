@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -18,11 +19,22 @@ type terminateStoppedInstanceRequest struct {
 	InstanceID string `json:"instance_id"`
 }
 
+// ValidateTerminateInstancesInput validates the input parameters
+func ValidateTerminateInstancesInput(input *ec2.TerminateInstancesInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if len(input.InstanceIds) == 0 {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // TerminateInstances sends terminate commands to specified instances via NATS
 // Uses system_powerdown with stop_instance attribute to prevent restart
 func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.TerminateInstancesOutput, error) {
-	if len(input.InstanceIds) == 0 {
-		return nil, fmt.Errorf("no instance IDs provided")
+	if err := ValidateTerminateInstancesInput(input); err != nil {
+		return nil, err
 	}
 
 	slog.Info("TerminateInstances: Processing request", "instance_count", len(input.InstanceIds))

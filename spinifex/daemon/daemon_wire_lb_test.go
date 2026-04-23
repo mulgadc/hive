@@ -172,3 +172,33 @@ func TestWireLBAgentConfig_NoMgmtRoute(t *testing.T) {
 
 	assert.Empty(t, d.mgmtRouteVia)
 }
+
+// AdvertiseIP covers the single-node default install (no br-mgmt, AWSGW on
+// wildcard): the gateway URL falls back to the node's advertised off-host IP.
+// Replaces the siv-6 "empty gateway URL" silent failure.
+func TestWireLBAgentConfig_GatewayURL_AdvertiseFallback(t *testing.T) {
+	cfg := &config.Config{
+		AdvertiseIP: "192.168.1.21",
+		AWSGW:       config.AWSGWConfig{Host: "0.0.0.0:9999"},
+	}
+	d := newWireLBTestDaemon(t, cfg)
+
+	d.wireLBAgentConfig()
+
+	assert.Equal(t, "https://192.168.1.21:9999", d.elbv2Service.GatewayURL)
+	assert.Empty(t, d.mgmtRouteVia)
+}
+
+// When there's no br-mgmt, no AdvertiseIP, no DevNetworking, and AWSGW is on
+// the wildcard, the gateway URL must stay empty and the daemon must log an
+// error (rather than silently assigning a broken URL like pre-siv-8).
+func TestWireLBAgentConfig_GatewayURL_NoAdvertiseNoBridge(t *testing.T) {
+	cfg := &config.Config{
+		AWSGW: config.AWSGWConfig{Host: "0.0.0.0:9999"},
+	}
+	d := newWireLBTestDaemon(t, cfg)
+
+	d.wireLBAgentConfig()
+
+	assert.Empty(t, d.elbv2Service.GatewayURL)
+}

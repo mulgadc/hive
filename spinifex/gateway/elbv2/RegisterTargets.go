@@ -9,18 +9,26 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateRegisterTargetsInput validates the input parameters
+func ValidateRegisterTargetsInput(input *elbv2.RegisterTargetsInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	if len(input.Targets) == 0 {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // RegisterTargets handles the ELBv2 RegisterTargets API call.
 func RegisterTargets(input *elbv2.RegisterTargetsInput, natsConn *nats.Conn, accountID string) (elbv2.RegisterTargetsOutput, error) {
 	var output elbv2.RegisterTargetsOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
-	}
-	if len(input.Targets) == 0 {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateRegisterTargetsInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

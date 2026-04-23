@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateCreateTargetGroupInput validates the input parameters
+func ValidateCreateTargetGroupInput(input *elbv2.CreateTargetGroupInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.Name == nil || *input.Name == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // CreateTargetGroup handles the ELBv2 CreateTargetGroup API call.
 func CreateTargetGroup(input *elbv2.CreateTargetGroupInput, natsConn *nats.Conn, accountID string) (elbv2.CreateTargetGroupOutput, error) {
 	var output elbv2.CreateTargetGroupOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.Name == nil || *input.Name == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateCreateTargetGroupInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

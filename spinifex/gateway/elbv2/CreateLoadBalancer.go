@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateCreateLoadBalancerInput validates the input parameters
+func ValidateCreateLoadBalancerInput(input *elbv2.CreateLoadBalancerInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.Name == nil || *input.Name == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // CreateLoadBalancer handles the ELBv2 CreateLoadBalancer API call.
 func CreateLoadBalancer(input *elbv2.CreateLoadBalancerInput, natsConn *nats.Conn, accountID string) (elbv2.CreateLoadBalancerOutput, error) {
 	var output elbv2.CreateLoadBalancerOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.Name == nil || *input.Name == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateCreateLoadBalancerInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)

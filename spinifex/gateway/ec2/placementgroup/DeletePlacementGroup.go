@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeletePlacementGroupInput validates the input parameters
+func ValidateDeletePlacementGroupInput(input *ec2.DeletePlacementGroupInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.GroupName == nil || *input.GroupName == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeletePlacementGroup handles the EC2 DeletePlacementGroup API call.
 func DeletePlacementGroup(input *ec2.DeletePlacementGroupInput, natsConn *nats.Conn, accountID string) (ec2.DeletePlacementGroupOutput, error) {
 	var output ec2.DeletePlacementGroupOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.GroupName == nil || *input.GroupName == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeletePlacementGroupInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_ec2_placementgroup.NewNATSPlacementGroupService(natsConn)

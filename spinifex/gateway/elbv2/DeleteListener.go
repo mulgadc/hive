@@ -9,15 +9,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ValidateDeleteListenerInput validates the input parameters
+func ValidateDeleteListenerInput(input *elbv2.DeleteListenerInput) error {
+	if input == nil {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.ListenerArn == nil || *input.ListenerArn == "" {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+	return nil
+}
+
 // DeleteListener handles the ELBv2 DeleteListener API call.
 func DeleteListener(input *elbv2.DeleteListenerInput, natsConn *nats.Conn, accountID string) (elbv2.DeleteListenerOutput, error) {
 	var output elbv2.DeleteListenerOutput
 
-	if input == nil {
-		return output, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.ListenerArn == nil || *input.ListenerArn == "" {
-		return output, errors.New(awserrors.ErrorMissingParameter)
+	if err := ValidateDeleteListenerInput(input); err != nil {
+		return output, err
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)
