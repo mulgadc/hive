@@ -239,7 +239,8 @@ func init() {
 	adminInitCmd.Flags().Int("nodes", 3, "Number of nodes to expect for cluster")
 	adminInitCmd.Flags().String("host", "", "Leader node to join (if not specified, tries multicast discovery)")
 	adminInitCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
-	adminInitCmd.Flags().String("bind", "127.0.0.1", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
+	adminInitCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.1 for multi-node). Default 0.0.0.0 listens on all interfaces.")
+	adminInitCmd.Flags().String("advertise", "", "External IP that off-host clients (ALB VMs, remote operators) should dial. Auto-detected from default route when empty.")
 	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
@@ -267,6 +268,7 @@ func init() {
 	adminJoinCmd.Flags().String("data-dir", "", "Data directory for this node (default: ~/spinifex)")
 	adminJoinCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
 	adminJoinCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.2 for multi-node on single host)")
+	adminJoinCmd.Flags().String("advertise", "", "External IP this node advertises to other cluster members. Defaults to --bind, or auto-detected WAN IP when --bind is 0.0.0.0.")
 	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminJoinCmd.Flags().String("token", "", "Join token from the init node (required)")
@@ -607,6 +609,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	nodes, _ := cmd.Flags().GetInt("nodes")
 	port, _ := cmd.Flags().GetInt("port")
 	bindIP, _ := cmd.Flags().GetString("bind")
+	advertiseFlag, _ := cmd.Flags().GetString("advertise")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
 	var clusterRoutes []string
@@ -776,6 +779,19 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Resolve the off-host advertise IP. DetectNetwork may have been skipped
+	// when --no-external is set; detect lazily if we need the WAN IP.
+	if advertiseFlag == "" && (bindIP == "0.0.0.0" || bindIP == "127.0.0.1") && detectedNet == nil {
+		if d, derr := admin.DetectNetwork(); derr == nil {
+			detectedNet = d
+		}
+	}
+	advertiseIP, err := resolveAdvertiseIP(bindIP, advertiseFlag, detectedNet)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Validate port range
 	if port < 1 || port > 65535 {
 		fmt.Fprintf(os.Stderr, "❌ Error: Port must be between 1 and 65535, got: %d\n", port)
@@ -787,7 +803,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		clusterBind = bindIP
 	}
 
-	fmt.Printf("Initializing Spinifex with bind IP: %s, port: %d\n", bindIP, port)
+	fmt.Printf("Initializing Spinifex with bind IP: %s, advertise IP: %s, port: %d\n", bindIP, advertiseIP, port)
 
 	// Default config directory
 	if configDir == "" {
@@ -873,8 +889,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 	spxRoot = filepath.Clean(spxRoot)
 
-	// Determine if this is a multi-node formation
-	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0" && bindIP != "127.0.0.1"
+	// Determine if this is a multi-node formation. Operator intent comes from
+	// --nodes, not from whether --bind was left at the 0.0.0.0 default.
+	isMultiNode := nodes >= 2
 
 	if isMultiNode {
 		// Build cluster-wide network config for propagation to joining nodes
@@ -904,7 +921,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
-			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind,
+			configDir, spxRoot, certPath, region, az, node, bindIP, advertiseIP, clusterBind,
 			port, nodes, formationTimeoutStr, tokenTTLStr, services, networkConfig)
 		return
 	}
@@ -987,6 +1004,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		Az:            az,
 		Port:          portStr,
 		BindIP:        bindIP,
+		AdvertiseIP:   advertiseIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
 		ClusterName:   clusterName,
@@ -1048,6 +1066,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Println("🔗 Configuration:")
 	fmt.Printf("   Config file: %s\n", spinifexTomlPath)
 	fmt.Printf("   Data directory: %s\n", spxRoot)
+	fmt.Printf("   Bind IP: %s (listen)\n", bindIP)
+	fmt.Printf("   Advertise IP: %s (off-host dial target)\n", advertiseIP)
+	fmt.Printf("   Loopback: 127.0.0.1 (in-process dial target)\n")
 	fmt.Println()
 }
 
@@ -1055,7 +1076,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // It starts a formation server, registers this node, waits for all nodes to join,
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
-	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
+	configDir, spxRoot, certPath, region, az, node, bindIP, advertiseIP, clusterBind string,
 	port, expectedNodes int, formationTimeoutStr, tokenTTLStr string, services []string, networkConfig *formation.NetworkConfig) {
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
@@ -1124,12 +1145,13 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	// Register self (init node) as the first node
 	selfNode := formation.NodeInfo{
-		Name:      node,
-		BindIP:    bindIP,
-		ClusterIP: clusterBind,
-		Region:    region,
-		AZ:        az,
-		Port:      port,
+		Name:        node,
+		BindIP:      bindIP,
+		AdvertiseIP: advertiseIP,
+		ClusterIP:   clusterBind,
+		Region:      region,
+		AZ:          az,
+		Port:        port,
 	}
 	if err := fs.RegisterNode(selfNode); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error registering self: %v\n", err)
@@ -1217,6 +1239,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		Az:            az,
 		Port:          portStr,
 		BindIP:        bindIP,
+		AdvertiseIP:   advertiseIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
 		ClusterName:   clusterName,
@@ -1280,6 +1303,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	dataDir, _ := cmd.Flags().GetString("data-dir")
 	port, _ := cmd.Flags().GetInt("port")
 	bindIP, _ := cmd.Flags().GetString("bind")
+	advertiseFlag, _ := cmd.Flags().GetString("advertise")
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	services, _ := cmd.Flags().GetStringSlice("services")
@@ -1307,6 +1331,20 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Resolve the off-host advertise IP before the JoinRequest is built so
+	// peers record a reachable dial target instead of 0.0.0.0.
+	var detectedNet *admin.DetectedNetwork
+	if advertiseFlag == "" && (bindIP == "0.0.0.0" || bindIP == "127.0.0.1") {
+		if d, derr := admin.DetectNetwork(); derr == nil {
+			detectedNet = d
+		}
+	}
+	advertiseIP, err := resolveAdvertiseIP(bindIP, advertiseFlag, detectedNet)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Validate port range
 	if port < 1 || port > 65535 {
 		fmt.Fprintf(os.Stderr, "❌ Error: Port must be between 1 and 65535, got: %d\n", port)
@@ -1329,17 +1367,19 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Printf("Region: %s\n", region)
 	fmt.Printf("AZ: %s\n", az)
 	fmt.Printf("Bind IP: %s\n", bindIP)
+	fmt.Printf("Advertise IP: %s\n", advertiseIP)
 	fmt.Printf("Port: %d\n\n", port)
 
 	// POST join request to formation server
 	joinReq := formation.JoinRequest{
 		NodeInfo: formation.NodeInfo{
-			Name:      node,
-			BindIP:    bindIP,
-			ClusterIP: clusterBind,
-			Region:    region,
-			AZ:        az,
-			Port:      port,
+			Name:        node,
+			BindIP:      bindIP,
+			AdvertiseIP: advertiseIP,
+			ClusterIP:   clusterBind,
+			Region:      region,
+			AZ:          az,
+			Port:        port,
 		},
 	}
 
@@ -1588,6 +1628,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		Az:            az,
 		Port:          portStr,
 		BindIP:        bindIP,
+		AdvertiseIP:   advertiseIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
 		ClusterName:   creds.ClusterName,
@@ -1619,6 +1660,28 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	for name, n := range statusResp.Nodes {
 		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
 	}
+}
+
+// resolveAdvertiseIP picks the off-host dial target for this node.
+// Precedence: explicit --advertise flag > specific --bind IP > auto-detected
+// WAN IP > loopback (with warning that off-host clients cannot reach this node).
+func resolveAdvertiseIP(bindIP, advertiseFlag string, detected *admin.DetectedNetwork) (string, error) {
+	if advertiseFlag != "" {
+		if net.ParseIP(advertiseFlag) == nil {
+			return "", fmt.Errorf("--advertise: invalid IP %q", advertiseFlag)
+		}
+		return advertiseFlag, nil
+	}
+	if bindIP != "" && bindIP != "0.0.0.0" && bindIP != "127.0.0.1" {
+		return bindIP, nil
+	}
+	if detected != nil && detected.WAN != nil && detected.WAN.IP != "" {
+		return detected.WAN.IP, nil
+	}
+	fmt.Fprintln(os.Stderr,
+		"⚠️  Could not auto-detect a WAN IP. Off-host clients (ALB VMs, remote operators) "+
+			"will not be able to reach this node. Re-run with --advertise <IP> to fix.")
+	return "127.0.0.1", nil
 }
 
 // buildRemoteNodes converts formation NodeInfo into RemoteNode entries,
