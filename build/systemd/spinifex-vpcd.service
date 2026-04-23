@@ -37,7 +37,15 @@ ProtectControlGroups=yes
 ProtectProc=invisible
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# AF_PACKET: required by the in-process DHCP client (github.com/insomniacslk/dhcp
+# / nclient4) for raw L2 BOOTP on br-wan before an IP is configured on the
+# interface. See docs/development/bugs/dhcp-allocate-error.md.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
+# CAP_NET_RAW: open AF_PACKET sockets.
+# CAP_NET_BIND_SERVICE: covers unicast RENEW to UDP :68.
+# CAP_NET_ADMIN: already used for ovs-vsctl / ip link wiring on the bridge.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 ProtectHostname=yes
 KeyringMode=private
 RemoveIPC=yes

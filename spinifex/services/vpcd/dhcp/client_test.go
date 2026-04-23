@@ -111,3 +111,64 @@ func TestFakeRenewHookSurfacesError(t *testing.T) {
 		t.Fatal("expected hook error")
 	}
 }
+
+func TestFakeReleaseHookSurfacesError(t *testing.T) {
+	f := dhcp.NewFake()
+	f.ReleaseHook = func(*dhcp.Lease) error { return errors.New("server unreachable") }
+	lease, _ := f.Acquire(context.Background(), dhcp.AcquireRequest{Bridge: "br-wan", ClientID: "eni-rel"})
+	if err := f.Release(context.Background(), lease); err == nil {
+		t.Fatal("expected hook error")
+	}
+}
+
+func TestFakeRenewNilLease(t *testing.T) {
+	f := dhcp.NewFake()
+	if _, err := f.Renew(context.Background(), nil); err == nil {
+		t.Fatal("expected error for nil lease")
+	}
+}
+
+func TestFakeReleaseNilIsNoop(t *testing.T) {
+	f := dhcp.NewFake()
+	if err := f.Release(context.Background(), nil); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestNClient4ValidatesInputs(t *testing.T) {
+	c := dhcp.NewNClient4(0, 0) // defaults applied
+	if _, err := c.Acquire(context.Background(), dhcp.AcquireRequest{}); err == nil {
+		t.Fatal("expected bridge-required error")
+	}
+	mac, _ := net.ParseMAC("02:00:00:aa:bb:cc")
+	if _, err := c.Acquire(context.Background(), dhcp.AcquireRequest{Bridge: "br-wan"}); err == nil {
+		t.Fatal("expected hw_addr-required error")
+	}
+	_ = mac
+}
+
+func TestNClient4RenewRejectsNilAndMissingRaw(t *testing.T) {
+	c := dhcp.NewNClient4(0, 0)
+	if _, err := c.Renew(context.Background(), nil); err == nil {
+		t.Fatal("expected nil-lease error")
+	}
+	lease := &dhcp.Lease{Bridge: "br-wan", ClientID: "x"} // no Raw bytes
+	if _, err := c.Renew(context.Background(), lease); err == nil {
+		t.Fatal("expected missing-raw-bytes error")
+	}
+}
+
+func TestNClient4ReleaseNilIsNoop(t *testing.T) {
+	c := dhcp.NewNClient4(0, 0)
+	if err := c.Release(context.Background(), nil); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestNClient4ReleaseRejectsMissingRaw(t *testing.T) {
+	c := dhcp.NewNClient4(0, 0)
+	lease := &dhcp.Lease{Bridge: "br-wan", ClientID: "x"}
+	if err := c.Release(context.Background(), lease); err == nil {
+		t.Fatal("expected missing-raw-bytes error")
+	}
+}
