@@ -24,7 +24,13 @@ export default defineConfig({
     "@tanstack/router/create-route-property-order": "error",
     "@tanstack/router/route-param-names": "error",
     "eslint/complexity": "off",
-    "eslint/func-style": "off",
+    "eslint/func-style": [
+      "error",
+      "declaration",
+      {
+        allowArrowFunctions: true,
+      },
+    ],
     "eslint/no-plusplus": ["error", { allowForLoopAfterthoughts: true }],
     "eslint/no-use-before-define": "off",
     "eslint/prefer-destructuring": "off",
@@ -33,8 +39,6 @@ export default defineConfig({
     "eslint/sort-vars": "off",
     "import/consistent-type-specifier-style": "off",
     "promise/prefer-await-to-callbacks": "off",
-    "react/jsx-handler-names": "off",
-    "react-perf/jsx-no-new-function-as-prop": "off",
     "typescript/no-confusing-void-expression": "off",
     "typescript/no-floating-promises": "off",
     "typescript/no-misused-promises": "off",
