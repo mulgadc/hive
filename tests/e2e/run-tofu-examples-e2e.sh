@@ -131,14 +131,18 @@ run_workbook() {
     cd "$path"
     rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
 
+    # Force IPv4 — Spinifex gateway listens on 127.0.0.1 only; AWS SDK
+    # resolves "localhost" to ::1 first and errors out with connection refused.
+    local apply_args=(-input=false -no-color -var=spinifex_endpoint=https://127.0.0.1:9999)
+
     if ! tofu init -input=false -no-color; then
         log "  FAIL ${example}: tofu init"
         return 1
     fi
 
-    if ! tofu apply -auto-approve -input=false -no-color; then
+    if ! tofu apply -auto-approve "${apply_args[@]}"; then
         log "  FAIL ${example}: tofu apply"
-        tofu destroy -auto-approve -input=false -no-color >/dev/null 2>&1 || true
+        tofu destroy -auto-approve "${apply_args[@]}" >/dev/null 2>&1 || true
         return 1
     fi
 
@@ -150,7 +154,7 @@ run_workbook() {
         rc=1
     fi
 
-    tofu destroy -auto-approve -input=false -no-color >/dev/null 2>&1 || \
+    tofu destroy -auto-approve "${apply_args[@]}" >/dev/null 2>&1 || \
         log "  WARN ${example}: tofu destroy failed"
 
     cd "$SCRIPT_DIR"
