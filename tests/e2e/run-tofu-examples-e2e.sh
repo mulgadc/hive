@@ -17,9 +17,27 @@ SCRIPT_DIR="$(pwd)"
 
 export AWS_PROFILE=spinifex
 WORKBOOK_DIR="${WORKBOOK_DIR:-${SCRIPT_DIR}/workbooks}"
+OPENTOFU_VERSION="${OPENTOFU_VERSION:-1.11.5}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+install_tofu() {
+    command -v tofu >/dev/null 2>&1 && return 0
+    local arch
+    case "$(uname -m)" in
+        x86_64)  arch=amd64 ;;
+        aarch64) arch=arm64 ;;
+        *) log "unsupported arch: $(uname -m)"; return 1 ;;
+    esac
+    local url="https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_${arch}.tar.gz"
+    log "Installing OpenTofu ${OPENTOFU_VERSION} (${arch})"
+    local tmp
+    tmp=$(mktemp -d)
+    curl -fsSL "$url" | tar -xz -C "$tmp" tofu
+    sudo install -m 0755 "$tmp/tofu" /usr/local/bin/tofu
+    rm -rf "$tmp"
+}
 
 cleanup() {
     EXIT_CODE=$?
@@ -140,6 +158,8 @@ run_workbook() {
 }
 
 # --- Main ---
+
+install_tofu || { log "tofu install failed"; exit 1; }
 
 FAILED=()
 for workbook in bastion-private-subnet nginx-alb nginx-webserver s3-webapp; do
