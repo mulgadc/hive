@@ -41,6 +41,11 @@ variable "region" {
   default = "ap-southeast-2"
 }
 
+variable "instance_type" {
+  type    = string
+  default = "t3.small"
+}
+
 variable "spinifex_endpoint" {
   type        = string
   default     = "https://127.0.0.1:9999"
@@ -220,7 +225,7 @@ resource "aws_security_group" "web" {
 
 resource "aws_instance" "nginx" {
   ami           = data.aws_ami.ubuntu.id
-  instance_type = "t3.small"
+  instance_type = var.instance_type
 
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.web.id]

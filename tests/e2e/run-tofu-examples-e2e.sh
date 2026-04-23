@@ -185,6 +185,25 @@ assert_s3_webapp() {
     aws s3 ls --endpoint-url "$endpoint" "s3://${bucket}/" | grep -q "$sentinel"
 }
 
+# Pick an instance type available on this cluster. Workbooks default to
+# t3.small (Intel); on AMD-only hosts t3 isn't registered, so we query and
+# fall back to the smallest type with ≥2 vCPU / ≥1 GiB RAM (matches the
+# nginx-alb README's documented approach).
+detect_instance_type() {
+    local endpoint="https://${WAN_IP}:9999"
+    local picked
+    picked=$(aws --endpoint-url "$endpoint" ec2 describe-instance-types \
+        --query "sort_by(InstanceTypes[?VCpuInfo.DefaultVCpus==\`2\` && MemoryInfo.SizeInMiB>=\`1024\`], &MemoryInfo.SizeInMiB)[0].InstanceType" \
+        --output text 2>/dev/null || true)
+    if [ -z "$picked" ] || [ "$picked" = "None" ]; then
+        picked=$(aws --endpoint-url "$endpoint" ec2 describe-instance-types \
+            --query 'InstanceTypes[0].InstanceType' --output text 2>/dev/null || true)
+    fi
+    echo "$picked"
+}
+
+INSTANCE_TYPE=""
+
 # --- Workbook driver ---
 
 run_workbook() {
@@ -200,7 +219,11 @@ run_workbook() {
     cd "$path"
     rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
 
-    local apply_args=(-input=false -no-color "-var=spinifex_endpoint=https://${WAN_IP}:9999")
+    local apply_args=(
+        -input=false -no-color
+        "-var=spinifex_endpoint=https://${WAN_IP}:9999"
+        "-var=instance_type=${INSTANCE_TYPE}"
+    )
 
     # s3-webapp has three required-no-default vars; creds come from
     # AWS_PROFILE=spinifex so the workbook's boto3 client authenticates.
@@ -245,6 +268,13 @@ run_workbook() {
 # --- Main ---
 
 install_tofu || { log "tofu install failed"; exit 1; }
+
+INSTANCE_TYPE=$(detect_instance_type)
+if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" = "None" ]; then
+    log "no instance type available from describe-instance-types"
+    exit 1
+fi
+log "Using instance_type=${INSTANCE_TYPE}"
 
 FAILED=()
 for workbook in bastion-private-subnet nginx-alb nginx-webserver s3-webapp; do
