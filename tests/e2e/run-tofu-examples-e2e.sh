@@ -131,14 +131,17 @@ run_workbook() {
     cd "$path"
     rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
 
-    local apply_args=(-input=false -no-color)
+    # awsgw is bound to the host's WAN IP (bootstrap-install passes --bind
+    # ${PRIMARY_WAN}), not loopback — so every workbook needs the endpoint
+    # pointed at the WAN IP. predastore is reached on the same IP for s3-webapp.
+    local wan_ip
+    wan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+    local apply_args=(-input=false -no-color "-var=spinifex_endpoint=https://${wan_ip}:9999")
 
-    # s3-webapp has three required-no-default vars. predastore_host must be
-    # reachable from inside the VPC (so VM's WAN IP, not 127.0.0.1); creds
-    # come from AWS_PROFILE=spinifex so the workbook's boto3 client authenticates.
+    # s3-webapp has three required-no-default vars; creds come from
+    # AWS_PROFILE=spinifex so the workbook's boto3 client authenticates.
     if [ "$example" = "s3-webapp" ]; then
-        local wan_ip access_key secret_key
-        wan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+        local access_key secret_key
         access_key=$(aws configure get aws_access_key_id --profile spinifex)
         secret_key=$(aws configure get aws_secret_access_key --profile spinifex)
         apply_args+=(
