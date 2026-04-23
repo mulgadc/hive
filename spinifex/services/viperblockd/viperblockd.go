@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/nbd"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -170,7 +171,7 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(cfg *Config) (err error) {
 	// Connect to NATS
-	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken, cfg.NatsCACert)
+	nc, err := utils.ConnectNATS(admin.DialTarget(cfg.NatsHost), cfg.NatsToken, cfg.NatsCACert)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err
@@ -404,7 +405,7 @@ func launchService(cfg *Config) (err error) {
 			Region:     cfg.Region,
 			AccessKey:  cfg.AccessKey,
 			SecretKey:  cfg.SecretKey,
-			Host:       cfg.S3Host,
+			Host:       admin.DialTarget(cfg.S3Host),
 		}
 
 		// TODO: Improve based on system availability. Default 128MB cache
@@ -530,7 +531,7 @@ func launchService(cfg *Config) (err error) {
 			PidFile:    nbdPidFile,
 			PluginPath: cfg.PluginPath,
 			BaseDir:    cfg.BaseDir,
-			Host:       cfg.S3Host,
+			Host:       admin.DialTarget(cfg.S3Host),
 			Verbose:    false,
 			Size:       utils.SafeUint64ToInt64(vb.GetVolumeSize()),
 			Volume:     ebsRequest.Name,

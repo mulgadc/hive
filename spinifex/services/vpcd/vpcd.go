@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
@@ -276,7 +277,7 @@ func launchService(cfg *Config) error {
 	slog.Info("OVN preflight passed (br-int exists, ovn-controller running)")
 
 	// Connect to NATS
-	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken, cfg.NatsCACert)
+	nc, err := utils.ConnectNATS(admin.DialTarget(cfg.NatsHost), cfg.NatsToken, cfg.NatsCACert)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err
