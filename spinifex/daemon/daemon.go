@@ -233,7 +233,7 @@ func NewResourceManager() (*ResourceManager, error) {
 	}
 
 	// Detect CPU generation and generate matching instance types
-	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch)
+	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch, nil)
 
 	slog.Info("System resources detected",
 		"vCPUs", numCPU, "memGB", totalMemGB,

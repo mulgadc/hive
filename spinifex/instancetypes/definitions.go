@@ -2,6 +2,39 @@ package instancetypes
 
 import "slices"
 
+// GPUModel describes a GPU device model that maps to a specific GPU instance family.
+type GPUModel struct {
+	VendorID     string // PCI vendor ID, lowercase hex, e.g. "10de"
+	DeviceID     string // PCI device ID, lowercase hex, e.g. "2236"
+	Family       string // instance family prefix, e.g. "g5"
+	Manufacturer string // e.g. "NVIDIA"
+	Name         string // e.g. "A10G"
+	MemoryMiB    int64
+}
+
+// NVIDIAa10g is the NVIDIA A10G GPU (24 GiB) used in G5 instances.
+var NVIDIAa10g = GPUModel{
+	VendorID:     "10de",
+	DeviceID:     "2236",
+	Family:       "g5",
+	Manufacturer: "NVIDIA",
+	Name:         "A10G",
+	MemoryMiB:    24576,
+}
+
+var knownGPUModels = []GPUModel{NVIDIAa10g}
+
+// GPUModelForVendorDevice returns the GPUModel for a PCI vendor/device ID pair,
+// or nil if the device is not a recognized GPU model.
+func GPUModelForVendorDevice(vendorID, deviceID string) *GPUModel {
+	for i := range knownGPUModels {
+		if knownGPUModels[i].VendorID == vendorID && knownGPUModels[i].DeviceID == deviceID {
+			return &knownGPUModels[i]
+		}
+	}
+	return nil
+}
+
 // cpuGeneration represents a specific CPU microarchitecture generation
 // and the AWS instance families it maps to.
 type cpuGeneration struct {
@@ -101,6 +134,15 @@ var memorySizes = []instanceSize{
 // memorySizesSmall is memorySizes without 12xlarge and 24xlarge (older/ARM families).
 var memorySizesSmall = slices.Clone(memorySizes[:6])
 
+// g5Sizes are the single-GPU G5 instance sizes (1x NVIDIA A10G each).
+var g5Sizes = []instanceSize{
+	{"xlarge", 4, 16},
+	{"2xlarge", 8, 32},
+	{"4xlarge", 16, 64},
+	{"8xlarge", 32, 128},
+	{"16xlarge", 64, 256},
+}
+
 // systemSizes defines internal-only instance types for system VMs (LB, NAT GW, etc.).
 // These are registered in the type map for allocation but excluded from DescribeInstanceTypes.
 var systemSizes = []instanceSize{
@@ -163,6 +205,9 @@ var instanceFamilyDefs = []instanceFamilyDef{
 
 	// System (internal-only, not exposed via DescribeInstanceTypes)
 	{name: "sys", sizes: systemSizes, currentGen: true},
+
+	// GPU Accelerated — not emitted by generateForGeneration; used by generateGPUTypes.
+	{name: "g5", sizes: g5Sizes, currentGen: true},
 
 	// Memory Optimized (1:8 vCPU:memory)
 	{name: "r4", sizes: memorySizesSmall, currentGen: false},
