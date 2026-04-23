@@ -151,23 +151,45 @@ assert_nginx_alb() {
         log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
         log "  --- target health ---"
         aws elbv2 describe-target-health --target-group-arn "$tg_arn" || true
-        log "  --- elbv2 system instances ---"
+        log "  --- elbv2 system instances (spinifex:managed-by=elbv2) ---"
         aws ec2 describe-instances \
             --filters 'Name=tag:spinifex:managed-by,Values=elbv2' \
-            --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress]' \
+            --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress,StateReason.Message]' \
             --output table || true
-        log "  --- registered target instances ---"
+        log "  --- registered target instances (full state) ---"
         aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
             --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
         while read -r tgt_id; do
             [ -z "$tgt_id" ] && continue
             aws ec2 describe-instances --instance-ids "$tgt_id" \
-                --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress]' \
+                --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Code,StateReason.Message,PrivateIpAddress,PublicIpAddress]' \
                 --output table || true
         done
-        log "  --- daemon: gateway URL + lb-agent traffic ---"
+        log "  --- daemon: lb-agent-specific lines ---"
         sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
             grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed' | tail -80 || true
+        log "  --- daemon: errors/panics/fatal since workbook started ---"
+        sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+            grep -iE 'panic|fatal|ERROR|level=error' | tail -80 || true
+        log "  --- daemon: restarts in last 15 min ---"
+        sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+            grep -iE 'Started |Stopping|Stopped|Main PID|killed' | tail -40 || true
+        log "  --- cloud-init status on reachable targets ---"
+        aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
+            --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
+        while read -r tgt_id; do
+            [ -z "$tgt_id" ] && continue
+            local pub
+            pub=$(aws ec2 describe-instances --instance-ids "$tgt_id" \
+                --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || true)
+            [ -z "$pub" ] || [ "$pub" = "None" ] && continue
+            echo "  target ${tgt_id} @ ${pub}:"
+            local key="$(pwd)/nginx-alb-demo.pem"
+            [ -f "$key" ] && chmod 600 "$key"
+            ssh "${SSH_OPTS[@]}" -i "$key" "ec2-user@${pub}" \
+                'cloud-init status 2>/dev/null; systemctl is-active nginx 2>/dev/null; ss -tlnp 2>/dev/null | grep :80 || true' \
+                2>&1 | sed 's/^/    /' || true
+        done
         return 1
     fi
 
@@ -283,16 +305,11 @@ if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" = "None" ]; then
 fi
 log "Using instance_type=${INSTANCE_TYPE}"
 
-FAILED=()
 for workbook in bastion-private-subnet nginx-alb nginx-webserver s3-webapp; do
     if ! run_workbook "$workbook"; then
-        FAILED+=("$workbook")
+        log "FAIL ${workbook} — aborting remaining workbooks"
+        exit 1
     fi
 done
-
-if [ "${#FAILED[@]}" -ne 0 ]; then
-    log "Failed workbooks: ${FAILED[*]}"
-    exit 1
-fi
 
 log "All workbooks passed"
