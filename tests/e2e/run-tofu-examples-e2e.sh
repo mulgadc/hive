@@ -97,9 +97,18 @@ assert_bastion_private_subnet() {
 }
 
 assert_nginx_alb() {
-    local dns
-    dns=$(tofu output -raw alb_dns_name)
-    wait_for_http_200 "http://${dns}/"
+    # ALB DNS (*.elb.spinifex.local) isn't resolvable from the host — README
+    # documents fetching the public IP via elbv2 describe-load-balancers.
+    local name ip
+    name=$(tofu output -raw alb_name)
+    ip=$(aws elbv2 describe-load-balancers --names "$name" \
+        --query 'LoadBalancers[0].AvailabilityZones[].LoadBalancerAddresses[].IpAddress' \
+        --output text | awk '{print $1}')
+    if [ -z "$ip" ]; then
+        log "  nginx-alb: no public IP for ${name}"
+        return 1
+    fi
+    wait_for_http_200 "http://${ip}/"
 }
 
 assert_nginx_webserver() {
@@ -145,6 +154,7 @@ run_workbook() {
         access_key=$(aws configure get aws_access_key_id --profile spinifex)
         secret_key=$(aws configure get aws_secret_access_key --profile spinifex)
         apply_args+=(
+            "-var=predastore_endpoint=https://${wan_ip}:8443"
             "-var=predastore_host=${wan_ip}:8443"
             "-var=s3_access_key=${access_key}"
             "-var=s3_secret_key=${secret_key}"
