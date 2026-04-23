@@ -56,7 +56,7 @@ Deploy a VPC with public and private subnets where the private subnet has no int
 **Prerequisites:**
 
 - Spinifex installed and running (see [Installing Spinifex](/docs/install))
-- A Debian 12 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
+- An Ubuntu 24.04 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
 
 ## Instructions
@@ -147,7 +147,7 @@ The private route table should have no `0.0.0.0/0` route. Also verify the privat
 
 ### AMI Not Found
 
-Ensure you have imported a Debian 12 image:
+Ensure you have imported an Ubuntu 24.04 image:
 
 ```bash
 aws ec2 describe-images --owners 000000000000 --profile spinifex

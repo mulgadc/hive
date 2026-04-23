@@ -85,13 +85,13 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_ami" "debian12" {
+data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["000000000000"]
 
   filter {
     name   = "name"
-    values = ["*debian-12*"]
+    values = ["*ubuntu-24.04*"]
   }
 
   filter {
@@ -275,7 +275,7 @@ resource "aws_security_group" "private" {
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "bastion" {
-  ami           = data.aws_ami.debian12.id
+  ami           = data.aws_ami.ubuntu.id
   instance_type = "t3.small"
 
   subnet_id              = aws_subnet.public.id
@@ -307,7 +307,7 @@ resource "aws_instance" "bastion" {
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "private" {
-  ami           = data.aws_ami.debian12.id
+  ami           = data.aws_ami.ubuntu.id
   instance_type = "t3.small"
 
   subnet_id              = aws_subnet.private.id

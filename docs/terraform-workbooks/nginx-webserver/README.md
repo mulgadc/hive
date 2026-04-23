@@ -43,7 +43,7 @@ Deploy a complete Nginx web server on Spinifex using Terraform/OpenTofu. This wo
 **Prerequisites:**
 
 - Spinifex installed and running (see [Installing Spinifex](/docs/install))
-- A Debian 12 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
+- An Ubuntu 24.04 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
 
 ## Instructions
@@ -94,7 +94,7 @@ tofu destroy
 
 ### AMI Not Found
 
-Ensure you have imported a Debian 12 image. Check available AMIs:
+Ensure you have imported an Ubuntu 24.04 image. Check available AMIs:
 
 ```bash
 aws ec2 describe-images --owners 000000000000 --profile spinifex

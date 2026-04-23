@@ -96,13 +96,13 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_ami" "debian12" {
+data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["000000000000"] # Spinifex system images
 
   filter {
     name   = "name"
-    values = ["*debian-12*"]
+    values = ["*ubuntu-24.04*"]
   }
 }
 
@@ -247,7 +247,7 @@ resource "aws_security_group" "web" {
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "nginx_1" {
-  ami           = data.aws_ami.debian12.id
+  ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
 
   subnet_id              = aws_subnet.public_a.id
@@ -287,7 +287,7 @@ resource "aws_instance" "nginx_1" {
 }
 
 resource "aws_instance" "nginx_2" {
-  ami           = data.aws_ami.debian12.id
+  ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
 
   subnet_id              = aws_subnet.public_b.id
