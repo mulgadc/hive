@@ -123,6 +123,43 @@ assert_nginx_alb() {
     wait_for_http_200 "http://${ip}/" 300
 }
 
+dump_workbook_diagnostics() {
+    local example="$1"
+    log "  --- diagnostics (${example}) ---"
+
+    log "  Instance states:"
+    aws ec2 describe-instances \
+        --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Message]' \
+        --output text 2>/dev/null | sed 's/^/    /' || echo "    (describe-instances failed)"
+
+    if [ "$example" = "nginx-alb" ]; then
+        log "  Load balancer state:"
+        aws elbv2 describe-load-balancers \
+            --query 'LoadBalancers[].[LoadBalancerName,State.Code,State.Reason]' \
+            --output text 2>/dev/null | sed 's/^/    /' || echo "    (describe-load-balancers failed)"
+
+        local tg_arn
+        tg_arn=$(aws elbv2 describe-target-groups --names nginx-alb-tg \
+            --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
+        if [ -n "$tg_arn" ] && [ "$tg_arn" != "None" ]; then
+            log "  Target health:"
+            aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
+                --output json 2>/dev/null | sed 's/^/    /' || echo "    (describe-target-health failed)"
+        fi
+    fi
+
+    log "  Recent viperblock/nbdkit/lb-agent lines (last 15 min):"
+    sudo journalctl --no-pager --since "15 min ago" 2>/dev/null \
+        | grep -iE 'nbdkit|viperblock|lb-agent|Could not write zero' \
+        | tail -50 | sed 's/^/    /' || echo "    (no matching lines)"
+
+    log "  Spinifex daemon log tail:"
+    sudo journalctl -u spinifex-daemon --no-pager -n 80 2>/dev/null \
+        | sed 's/^/    /' || echo "    (daemon log not available)"
+
+    log "  --- end diagnostics ---"
+}
+
 assert_s3_webapp() {
     # aws s3 goes to predastore on :8443, not awsgw on :9999 — the workbook's
     # provider sets s3 = predastore_endpoint but the CLI doesn't inherit that.
@@ -191,6 +228,7 @@ run_workbook() {
 
     if ! tofu apply -auto-approve "${apply_args[@]}"; then
         log "  FAIL ${example}: tofu apply"
+        dump_workbook_diagnostics "$example"
         tofu destroy -auto-approve "${apply_args[@]}" >/dev/null 2>&1 || true
         return 1
     fi
@@ -200,6 +238,7 @@ run_workbook() {
         log "  PASS ${example}"
     else
         log "  FAIL ${example}: assertion"
+        dump_workbook_diagnostics "$example"
         rc=1
     fi
 
@@ -219,7 +258,7 @@ if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" = "None" ]; then
 fi
 log "Using instance_type=${INSTANCE_TYPE}"
 
-for workbook in bastion-private-subnet nginx-webserver nginx-alb s3-webapp; do
+for workbook in nginx-alb bastion-private-subnet nginx-webserver s3-webapp; do
     if ! run_workbook "$workbook"; then
         log "FAIL ${workbook} — aborting remaining workbooks"
         exit 1
