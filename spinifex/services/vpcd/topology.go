@@ -145,6 +145,44 @@ func (h *TopologyHandler) useCentralizedNAT() bool {
 	return h.bridgeMode != BridgeModeDirect
 }
 
+// ensureLocalnetOptions aligns options:nat-addresses on an existing localnet
+// port with the current bridge mode. CreateLogicalSwitchPort only seeds the
+// options at first creation; if vpcd came up in the wrong mode once (e.g.
+// because setup-ovn.sh had not recreated the veth yet — pre-Fix 1), the
+// localnet port carries stale options forever. This read-before-write is a
+// no-op when already correct, so it is safe to call on every reconcile.
+//
+// Centralized mode (veth/macvlan): options:nat-addresses=router must be set.
+// Distributed mode (direct): options:nat-addresses must be absent.
+func (h *TopologyHandler) ensureLocalnetOptions(ctx context.Context, extPortName string) error {
+	lsp, err := h.ovn.GetLogicalSwitchPort(ctx, extPortName)
+	if err != nil {
+		return fmt.Errorf("get localnet port %s: %w", extPortName, err)
+	}
+	want := h.useCentralizedNAT()
+	current, hasNat := lsp.Options["nat-addresses"]
+	if want && hasNat && current == "router" {
+		return nil
+	}
+	if !want && !hasNat {
+		return nil
+	}
+	if lsp.Options == nil {
+		lsp.Options = map[string]string{}
+	}
+	if want {
+		lsp.Options["nat-addresses"] = "router"
+	} else {
+		delete(lsp.Options, "nat-addresses")
+	}
+	slog.Info("vpcd: retrofitting localnet options",
+		"port", extPortName, "bridge_mode", h.bridgeMode, "nat-addresses", lsp.Options["nat-addresses"])
+	if err := h.ovn.UpdateLogicalSwitchPort(ctx, lsp); err != nil {
+		return fmt.Errorf("update localnet port %s options: %w", extPortName, err)
+	}
+	return nil
+}
+
 // dnsServer returns the DNS server string for OVN DHCP options.
 // Uses dns_servers from the external pool config (auto-detected by admin init).
 // Falls back to 8.8.8.8 and 1.1.1.1 if none configured.
@@ -1144,6 +1182,12 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
 		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
 		return fmt.Errorf("create localnet port %s: %w", extPortName, err)
+	}
+	// Retrofit options on pre-existing ports whose mode no longer matches
+	// (create above is a no-op when the port exists — seeds options only
+	// on first creation; see ensureLocalnetOptions).
+	if err := h.ensureLocalnetOptions(ctx, extPortName); err != nil {
+		return fmt.Errorf("retrofit localnet options %s: %w", extPortName, err)
 	}
 
 	// 3. Create gateway router port
