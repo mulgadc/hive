@@ -183,10 +183,22 @@ var checkOVNController = func() error {
 
 // localSystemID returns the OVS external-ids:system-id, which is the chassis
 // name that the local ovn-controller registers in the Southbound DB.
+//
+// Uses Output() (stdout only) for the same reason as portToBr: vpcd.service's
+// AmbientCapabilities trips sudo's PAM into emitting audit warnings on stderr,
+// which CombinedOutput would merge into stdout and poison the system-id.
+// A corrupted localID causes discoverChassis to skip the live chassis as
+// "stale", leaving gateway_chassis pointing at a fallback name that no real
+// chassis owns → cr-gw* chassisredirect ports stay unbound → no proxy-ARP
+// for EIPs.
 var localSystemID = func() (string, error) {
-	out, err := sudoCommand("ovs-vsctl", "get", "open_vswitch", ".", "external-ids:system-id").CombinedOutput()
+	out, err := sudoCommand("ovs-vsctl", "get", "open_vswitch", ".", "external-ids:system-id").Output()
 	if err != nil {
-		return "", fmt.Errorf("ovs-vsctl get system-id: %s: %w", strings.TrimSpace(string(out)), err)
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("ovs-vsctl get system-id: %s: %w", stderr, err)
 	}
 	// ovs-vsctl wraps the value in quotes
 	return strings.Trim(strings.TrimSpace(string(out)), "\""), nil
@@ -211,9 +223,15 @@ var discoverChassis = func(sbAddr string) ([]string, error) {
 	// OVN 25.03+ removed the "list-chassis" convenience command.
 	// Use "--columns=name,hostname list Chassis" which works on all versions.
 	args = append(args, "--bare", "--columns=name,hostname", "list", "Chassis")
-	out, err := sudoCommand("ovn-sbctl", args...).CombinedOutput()
+	// Output() not CombinedOutput(): sudo PAM audit noise on stderr would
+	// otherwise be parsed as chassis name/hostname pairs.
+	out, err := sudoCommand("ovn-sbctl", args...).Output()
 	if err != nil {
-		return nil, fmt.Errorf("ovn-sbctl list Chassis: %s: %w", strings.TrimSpace(string(out)), err)
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("ovn-sbctl list Chassis: %s: %w", stderr, err)
 	}
 
 	return parseChassisList(string(out), localID, localHostname), nil
