@@ -943,37 +943,43 @@ func SetGPUPassthrough(tomlPath, node string, enabled bool) error {
 		value = "true"
 	}
 
-	sectionPat := `\[nodes\.` + regexp.QuoteMeta(node) + `\.daemon\]`
+	sectionHeader := "[nodes." + node + ".daemon]"
+
+	sectionStart := strings.Index(text, sectionHeader)
+	if sectionStart < 0 {
+		// No daemon section — append one.
+		text = strings.TrimRight(text, "\n") +
+			"\n\n[nodes." + node + ".daemon]\ngpu_passthrough = " + value + "\n"
+		return os.WriteFile(tomlPath, []byte(text), 0600)
+	}
+
+	// Extract body of just this section (stops at the next section header).
+	bodyStart := sectionStart + len(sectionHeader)
+	rest := text[bodyStart:]
+	nextSection := strings.Index(rest, "\n[")
+	var body, suffix string
+	if nextSection < 0 {
+		body = rest
+	} else {
+		body = rest[:nextSection]
+		suffix = rest[nextSection:]
+	}
 
 	// Already correct — no-op.
-	alreadyOK := regexp.MustCompile(
-		sectionPat + `(?:(?!\[)[\s\S])*?gpu_passthrough\s*=\s*` + value,
-	)
-	if alreadyOK.MatchString(text) {
+	if regexp.MustCompile(`gpu_passthrough\s*=\s*` + value).MatchString(body) {
 		return nil
 	}
 
-	// Setting exists with the wrong value — flip it.
-	flipRe := regexp.MustCompile(`(gpu_passthrough\s*=\s*)(?:true|false)`)
-	if flipRe.MatchString(text) {
-		replaced := false
-		text = flipRe.ReplaceAllStringFunc(text, func(m string) string {
-			if replaced {
-				return m
-			}
-			replaced = true
-			return "gpu_passthrough = " + value
-		})
-	} else if regexp.MustCompile(sectionPat).MatchString(text) {
-		// [nodes.N.daemon] section exists, key absent — add after header.
-		text = regexp.MustCompile(sectionPat).ReplaceAllString(
-			text, "$0\ngpu_passthrough = "+value,
-		)
+	// Key exists with wrong value — flip within this section only.
+	flipRe := regexp.MustCompile(`gpu_passthrough\s*=\s*(?:true|false)`)
+	var newBody string
+	if flipRe.MatchString(body) {
+		newBody = flipRe.ReplaceAllString(body, "gpu_passthrough = "+value)
 	} else {
-		// No daemon section at all — append one.
-		text = strings.TrimRight(text, "\n") +
-			"\n\n[nodes." + node + ".daemon]\ngpu_passthrough = " + value + "\n"
+		// Key absent — insert right after section header.
+		newBody = "\ngpu_passthrough = " + value + body
 	}
 
+	text = text[:bodyStart] + newBody + suffix
 	return os.WriteFile(tomlPath, []byte(text), 0600)
 }
