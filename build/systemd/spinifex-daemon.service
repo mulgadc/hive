@@ -18,11 +18,15 @@ Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/spinifex/
 Environment=SPINIFEX_WAL_DIR=/var/lib/spinifex/spinifex/
 
 # Filesystem access — NoNewPrivileges omitted (daemon uses sudo for ip, ovs-vsctl, dhcpcd)
+# CAP_SYS_ADMIN is required for GPU passthrough: sysfs driver bind/unbind
+# (/sys/bus/pci/drivers/vfio-pci/unbind) is gated on this capability by the kernel.
+AmbientCapabilities=CAP_SYS_ADMIN
 ProtectSystem=full
 PrivateDevices=no
 DevicePolicy=closed
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
+DeviceAllow=char-vfio rw
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/server.pem /etc/spinifex/server.key /etc/spinifex/ca.pem
 ReadWritePaths=/var/lib/spinifex/spinifex /var/log/spinifex /run/spinifex /run/spinifex/nbd
 
