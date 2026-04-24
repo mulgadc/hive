@@ -1,0 +1,44 @@
+#cloud-config
+# DDIL witness VM payload. Runs a monotonic counter-to-file loop so the
+# harness can prove a workload kept making progress across a fault injection.
+# See docs/development/improvements/ddil-e2e-test-harness.md §1 (witness helpers).
+
+write_files:
+  - path: /usr/local/bin/witness-counter.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/sh
+      # Resume from the last recorded value if the service restarts so the
+      # counter stays monotonic across daemon/VM restarts — AssertProgressed
+      # relies on the count never going backwards.
+      i=0
+      if [ -r /var/lib/counter ]; then
+        existing=$(cat /var/lib/counter 2>/dev/null || echo 0)
+        case "$existing" in
+          ''|*[!0-9]*) i=0 ;;
+          *) i=$existing ;;
+        esac
+      fi
+      while :; do
+        echo "$i" > /var/lib/counter
+        i=$((i + 1))
+        sleep 1
+      done
+  - path: /etc/systemd/system/witness-counter.service
+    content: |
+      [Unit]
+      Description=DDIL witness counter
+      After=network.target
+      [Service]
+      Type=simple
+      ExecStartPre=/bin/sh -c 'mkdir -p /var/lib && touch /var/lib/counter'
+      ExecStart=/usr/local/bin/witness-counter.sh
+      Restart=always
+      RestartSec=1
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, witness-counter.service]
