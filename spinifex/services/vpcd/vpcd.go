@@ -465,10 +465,19 @@ func detectBridgeMode(externalIface string) string {
 
 // portToBr returns the OVS bridge that owns `port`. Returns "" when the port
 // is not in OVSDB. Used by the post-detect sanity checks.
+//
+// Uses Output() (stdout only) because vpcd.service runs with AmbientCapabilities
+// set, which causes sudo's PAM to emit "sudo: unable to send audit message"
+// warnings on stderr. CombinedOutput would merge those into stdout and poison
+// the bridge-name compare.
 var portToBr = func(port string) (string, error) {
-	out, err := sudoCommand("ovs-vsctl", "port-to-br", port).CombinedOutput()
+	out, err := sudoCommand("ovs-vsctl", "port-to-br", port).Output()
 	if err != nil {
-		return "", fmt.Errorf("ovs-vsctl port-to-br %s: %s: %w", port, strings.TrimSpace(string(out)), err)
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("ovs-vsctl port-to-br %s: %s: %w", port, stderr, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
