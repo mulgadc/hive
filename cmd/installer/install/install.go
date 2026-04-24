@@ -466,12 +466,16 @@ func installBootloader(disk string) error {
 	copyGrubFont(mountRoot)
 
 	// Kernel cmdline and basic defaults only — graphics/serial handled by 05_spinifex below.
+	// Confirm requirement
+	// console=ttyS0,115200n8
+
 	grubDefault := `GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Spinifex
 GRUB_CMDLINE_LINUX_DEFAULT=""
-GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8 systemd.show_status=1"
+GRUB_CMDLINE_LINUX="console=tty0 systemd.show_status=1"
 `
+
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
 		return fmt.Errorf("write /etc/default/grub: %w", err)
 	}
@@ -494,14 +498,14 @@ if serial --unit=0 --speed=115200 --timeout=1; then
   terminal_input  --append serial
   terminal_output --append serial
 fi
+
+# --- Branding ---
 insmod png
-if background_image /boot/grub/splash.png; then
-  set color_normal=white/black
-  set color_highlight=black/white
-fi
+set theme=/boot/grub/theme.txt
+export theme
 `
-	if err := os.WriteFile(filepath.Join(mountRoot, "etc/grub.d/05_spinifex"), []byte(grubTheme), 0o755); err != nil {
-		return fmt.Errorf("write /etc/grub.d/05_spinifex: %w", err)
+	if err := os.WriteFile(filepath.Join(mountRoot, "etc/grub.d/06_spinifex"), []byte(grubTheme), 0o755); err != nil {
+		return fmt.Errorf("write /etc/grub.d/06_spinifex: %w", err)
 	}
 
 	if err := bindChrootMounts(); err != nil {
