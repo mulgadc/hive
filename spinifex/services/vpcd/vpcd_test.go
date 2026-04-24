@@ -324,6 +324,37 @@ func TestVerifyBridgeMode_EmptyModeRejected(t *testing.T) {
 	}
 }
 
+func TestVerifyBridgeMode_DirectMissingExternalIface(t *testing.T) {
+	err := verifyBridgeMode(BridgeModeDirect, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), "external_interface") {
+		t.Fatalf("expected external_interface error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_DirectMissingBindBridge(t *testing.T) {
+	err := verifyBridgeMode(BridgeModeDirect, "enp0s3", "")
+	if err == nil || !strings.Contains(err.Error(), "dhcp_bind_bridge") {
+		t.Fatalf("expected dhcp_bind_bridge error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethMissingBindBridge(t *testing.T) {
+	err := verifyBridgeMode(BridgeModeVeth, "", "")
+	if err == nil || !strings.Contains(err.Error(), "dhcp_bind_bridge") {
+		t.Fatalf("expected dhcp_bind_bridge error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethLinuxBrMissing(t *testing.T) {
+	stubBridgeProbes(t,
+		map[string]string{"veth-wan-ovs": OvnExternalBridge},
+		nil)
+	err := verifyBridgeMode(BridgeModeVeth, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), "veth-wan-br") {
+		t.Fatalf("expected veth-wan-br error, got: %v", err)
+	}
+}
+
 // detectBridgeMode — mulga-998.b Fix 2.
 
 func stubDetectProbes(t *testing.T, macvlans []string, links []string) {
