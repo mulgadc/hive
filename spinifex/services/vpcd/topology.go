@@ -151,13 +151,15 @@ func (h *TopologyHandler) useCentralizedNAT() bool {
 	return h.bridgeMode != BridgeModeDirect
 }
 
-// ensureLocalnetOptions aligns options:nat-addresses on an existing localnet
-// port with the current bridge mode. CreateLogicalSwitchPort only seeds the
-// options at first creation; if vpcd came up in the wrong mode once (e.g.
-// because setup-ovn.sh had not recreated the veth yet — pre-Fix 1), the
-// localnet port carries stale options forever. This read-before-write is a
-// no-op when already correct, so it is safe to call on every reconcile.
+// ensureLocalnetOptions aligns options on an existing localnet port with the
+// current bridge mode. CreateLogicalSwitchPort only seeds options at first
+// creation; once created, stale options persist forever (e.g. vpcd came up in
+// the wrong mode once — pre-Fix 1 — or an operator cleared options manually).
+// This read-before-write is a no-op when already correct, so it is safe to
+// call on every reconcile.
 //
+// network_name=external is required regardless of bridge mode — it binds the
+// port to the ovn-bridge-mappings entry for the external OVS bridge.
 // Centralized mode (veth/macvlan): options:nat-addresses=router must be set.
 // Distributed mode (direct): options:nat-addresses must be absent.
 func (h *TopologyHandler) ensureLocalnetOptions(ctx context.Context, extPortName string) error {
@@ -165,28 +167,59 @@ func (h *TopologyHandler) ensureLocalnetOptions(ctx context.Context, extPortName
 	if err != nil {
 		return fmt.Errorf("get localnet port %s: %w", extPortName, err)
 	}
-	want := h.useCentralizedNAT()
-	current, hasNat := lsp.Options["nat-addresses"]
-	if want && hasNat && current == "router" {
-		return nil
-	}
-	if !want && !hasNat {
+	wantNat := h.useCentralizedNAT()
+	currentNat, hasNat := lsp.Options["nat-addresses"]
+	currentNetName, hasNetName := lsp.Options["network_name"]
+	natOK := (wantNat && hasNat && currentNat == "router") || (!wantNat && !hasNat)
+	netNameOK := hasNetName && currentNetName == "external"
+	if natOK && netNameOK {
 		return nil
 	}
 	if lsp.Options == nil {
 		lsp.Options = map[string]string{}
 	}
-	if want {
+	lsp.Options["network_name"] = "external"
+	if wantNat {
 		lsp.Options["nat-addresses"] = "router"
 	} else {
 		delete(lsp.Options, "nat-addresses")
 	}
 	slog.Info("vpcd: retrofitting localnet options",
-		"port", extPortName, "bridge_mode", h.bridgeMode, "nat-addresses", lsp.Options["nat-addresses"])
+		"port", extPortName, "bridge_mode", h.bridgeMode,
+		"nat-addresses", lsp.Options["nat-addresses"],
+		"network_name", lsp.Options["network_name"])
 	if err := h.ovn.UpdateLogicalSwitchPort(ctx, lsp); err != nil {
 		return fmt.Errorf("update localnet port %s options: %w", extPortName, err)
 	}
 	return nil
+}
+
+// RetrofitAllExternalLocalnetOptions walks every OVN logical switch tagged
+// spinifex:role=external and calls ensureLocalnetOptions on its localnet
+// port. OVN is the source of truth — NATS KV records for IGWs may be absent
+// or stale (external switch was created via a live event whose KV record
+// later expired, or an operator cleared options manually). Walking OVN
+// directly catches all of these on every vpcd startup. Idempotent.
+func (h *TopologyHandler) RetrofitAllExternalLocalnetOptions(ctx context.Context) {
+	switches, err := h.ovn.ListLogicalSwitches(ctx)
+	if err != nil {
+		slog.Warn("vpcd: retrofit skipped — list logical switches failed", "err", err)
+		return
+	}
+	for i := range switches {
+		ls := &switches[i]
+		if ls.ExternalIDs["spinifex:role"] != "external" {
+			continue
+		}
+		vpcID := ls.ExternalIDs["spinifex:vpc_id"]
+		if vpcID == "" {
+			continue
+		}
+		extPortName := "ext-port-" + vpcID
+		if err := h.ensureLocalnetOptions(ctx, extPortName); err != nil {
+			slog.Error("vpcd: retrofit localnet options failed", "port", extPortName, "err", err)
+		}
+	}
 }
 
 // dnsServer returns the DNS server string for OVN DHCP options.

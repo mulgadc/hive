@@ -358,6 +358,11 @@ func launchService(cfg *Config) error {
 	// Runs after subscribing so new events are not missed during reconciliation.
 	ReconcileFromKV(ctx, nc, topo)
 
+	// Pass 3: Retrofit localnet options on every external switch. Walks OVN
+	// directly so stale/missing KV records can't hide a stale nat-addresses
+	// or cleared network_name. Idempotent; silent when all correct.
+	topo.RetrofitAllExternalLocalnetOptions(ctx)
+
 	slog.Info("vpcd service started, waiting for VPC lifecycle events", "subscriptions", len(subs))
 
 	// Wait for shutdown signal
