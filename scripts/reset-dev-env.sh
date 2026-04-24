@@ -110,10 +110,12 @@ fi
 # Remove veth persistence units (Fix 1, mulga-998.b). Without this, systemd-networkd
 # recreates the veth on next reboot even after a full dev reset.
 if [ -e /etc/systemd/network/15-spinifex-veth-wan.netdev ] || \
-   [ -e /etc/systemd/network/15-spinifex-veth-wan.network ]; then
+   [ -e /etc/systemd/network/15-spinifex-veth-wan.network ] || \
+   [ -e /etc/systemd/network/16-spinifex-veth-wan-ovs.network ]; then
     echo "  Deleting veth persistence units"
     sudo rm -f /etc/systemd/network/15-spinifex-veth-wan.netdev \
-               /etc/systemd/network/15-spinifex-veth-wan.network
+               /etc/systemd/network/15-spinifex-veth-wan.network \
+               /etc/systemd/network/16-spinifex-veth-wan-ovs.network
     sudo networkctl reload 2>/dev/null || true
 fi
 

@@ -312,7 +312,8 @@ if [ -n "$WAN_BRIDGE" ]; then
     # bridge plumbing (Fix 1, mulga-998.b, per D17).
     if [ "$WAN_BRIDGE_MODE" != "veth" ]; then
         sudo rm -f /etc/systemd/network/15-spinifex-veth-wan.netdev \
-                   /etc/systemd/network/15-spinifex-veth-wan.network
+                   /etc/systemd/network/15-spinifex-veth-wan.network \
+                   /etc/systemd/network/16-spinifex-veth-wan-ovs.network
         sudo networkctl reload 2>/dev/null || true
         sudo ovs-vsctl --if-exists del-port "$WAN_BRIDGE" veth-wan-ovs
         sudo ip link del veth-wan-br 2>/dev/null || true
@@ -377,6 +378,7 @@ if [ -n "$WAN_BRIDGE" ]; then
             # silently falls back to direct mode (Fix 1, mulga-998.b).
             VETH_NETDEV="/etc/systemd/network/15-spinifex-veth-wan.netdev"
             VETH_NETWORK="/etc/systemd/network/15-spinifex-veth-wan.network"
+            VETH_OVS_NETWORK="/etc/systemd/network/16-spinifex-veth-wan-ovs.network"
             sudo tee "$VETH_NETDEV" >/dev/null <<NETDEV
 [NetDev]
 Name=veth-wan-br
@@ -393,8 +395,23 @@ Name=veth-wan-br
 Bridge=$LINUX_BRIDGE
 ConfigureWithoutCarrier=yes
 NETWORK
+            # Second unit admin-ups the OVS end of the pair. OVS owns the port
+            # (enslaved via ovs-vsctl add-port above) but does not flip admin
+            # state on external ports — that's networkd's job. Without this,
+            # veth-wan-ovs stays DOWN after reboot, peer goes LOWERLAYERDOWN,
+            # br-wan loses carrier (Fix 1 follow-up, mulga-998.b).
+            sudo tee "$VETH_OVS_NETWORK" >/dev/null <<NETWORK
+[Match]
+Name=veth-wan-ovs
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+ConfigureWithoutCarrier=yes
+NETWORK
             sudo networkctl reload 2>/dev/null || true
-            echo "  wrote $VETH_NETDEV + $VETH_NETWORK (veth persists on reboot)"
+            echo "  wrote $VETH_NETDEV + $VETH_NETWORK + $VETH_OVS_NETWORK (veth persists on reboot)"
             ;;
 
         direct)
