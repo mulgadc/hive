@@ -1,4 +1,4 @@
-name: Spinifex E2E Tests
+name: E2E
 
 on:
   push:
