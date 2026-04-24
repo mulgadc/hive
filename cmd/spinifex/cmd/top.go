@@ -97,8 +97,10 @@ func runTopNodes(cmd *cobra.Command, args []string) {
 	for _, name := range nodeNames {
 		if resp, ok := respondedNodes[name]; ok {
 			gpuCol := "-"
-			if resp.TotalGPUs > 0 {
+			if resp.GPUPassthrough {
 				gpuCol = fmt.Sprintf("%d/%d", resp.AllocGPUs, resp.TotalGPUs)
+			} else if resp.GPUCapable {
+				gpuCol = fmt.Sprintf("0/%d*", len(resp.GPUModels))
 			}
 			nodeTable = append(nodeTable, []string{
 				resp.Node,

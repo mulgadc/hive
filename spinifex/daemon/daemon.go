@@ -160,6 +160,10 @@ type Daemon struct {
 	// management NIC. Set when AWSGW binds to a specific IP (multi-node).
 	mgmtRouteVia string
 
+	// gpuProbe holds the result of the always-on startup GPU hardware probe.
+	// Populated regardless of whether gpu_passthrough is enabled in config.
+	gpuProbe gpuProbeResult
+
 	// gpuManager handles VFIO bind/unbind lifecycle for GPU passthrough.
 	// Nil when GPUPassthrough is disabled in config or no recognised GPUs are found.
 	gpuManager *gpu.Manager
@@ -378,24 +382,27 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 		cfg.Nodes[cfg.Node] = nodeCfg
 	}
 
-	// Discover GPU hardware when passthrough is enabled.
+	// Phase 1: always probe GPU hardware (no side effects, no config required).
+	gpuProbe := probeGPU()
+
+	// Phase 2: activate GPU passthrough only when the operator has opted in.
 	var gpuModels []instancetypes.GPUModel
 	var gpuMgr *gpu.Manager
 	if nodeCfg.Daemon.GPUPassthrough {
-		devices, discoverErr := gpu.Discover()
-		if discoverErr != nil {
-			slog.Warn("GPU discovery failed, GPU passthrough disabled", "err", discoverErr)
+		if !gpuProbe.Capable {
+			slog.Warn("GPU passthrough enabled in config but prerequisites not met",
+				"iommu", gpuProbe.IOMMUActive, "vfio", gpuProbe.VFIOPresent,
+				"gpus", len(gpuProbe.Devices))
 		} else {
-			for _, dev := range devices {
+			for _, dev := range gpuProbe.Devices {
 				gpuModels = append(gpuModels, resolveGPUModel(dev, nodeCfg.Daemon.GPUModelOverrides))
 			}
-			if len(devices) > 0 {
-				gpuMgr = gpu.NewManager(devices)
-				slog.Info("GPU passthrough enabled", "gpus", len(devices), "knownModels", len(gpuModels))
-			} else {
-				slog.Warn("GPU passthrough enabled in config but no GPUs discovered")
-			}
+			gpuMgr = gpu.NewManager(gpuProbe.Devices)
+			slog.Info("GPU passthrough enabled", "gpus", len(gpuProbe.Devices), "knownModels", len(gpuModels))
 		}
+	} else if gpuProbe.Capable {
+		slog.Info("GPU hardware detected, passthrough not enabled",
+			"gpus", len(gpuProbe.Devices), "hint", "run 'spx admin gpu enable' to activate")
 	}
 
 	rm, err := NewResourceManager(gpuModels, gpuMgr)
@@ -409,6 +416,7 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 		clusterConfig:     cfg,
 		config:            &nodeCfg,
 		resourceMgr:       rm,
+		gpuProbe:          gpuProbe,
 		gpuManager:        gpuMgr,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -2958,4 +2966,36 @@ func gpuVendorDisplayName(v gpu.Vendor) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// gpuProbeResult holds the outcome of the always-on startup hardware probe.
+// Populated before any config-gated activation logic runs.
+type gpuProbeResult struct {
+	Capable     bool // true when Devices, IOMMUActive, and VFIOPresent are all satisfied
+	IOMMUActive bool
+	VFIOPresent bool
+	Devices     []gpu.GPUDevice
+}
+
+// probeGPU discovers GPU hardware and checks passthrough prerequisites.
+// It is read-only and has no side effects.
+func probeGPU() gpuProbeResult {
+	var r gpuProbeResult
+
+	devices, err := gpu.Discover()
+	if err != nil {
+		slog.Debug("GPU probe: discover failed", "err", err)
+	}
+	r.Devices = devices
+
+	// IOMMU is active when the kernel has populated iommu_groups in sysfs.
+	groups, err := os.ReadDir("/sys/kernel/iommu_groups")
+	r.IOMMUActive = err == nil && len(groups) > 0
+
+	// vfio_pci module is present when its sysfs module directory exists.
+	_, err = os.Stat("/sys/module/vfio_pci")
+	r.VFIOPresent = err == nil
+
+	r.Capable = len(r.Devices) > 0 && r.IOMMUActive && r.VFIOPresent
+	return r
 }
