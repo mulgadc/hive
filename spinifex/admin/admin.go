@@ -96,6 +96,10 @@ type ConfigSettings struct {
 	BootstrapIgwId      string
 	BootstrapCidr       string
 	BootstrapSubnetCidr string
+
+	// GPUPassthrough enables VFIO GPU passthrough in the daemon config.
+	// Sets gpu_passthrough = true under [nodes.<node>.daemon].
+	GPUPassthrough bool
 }
 
 // PredastoreNodeConfig describes a single Predastore node for multi-node config generation.

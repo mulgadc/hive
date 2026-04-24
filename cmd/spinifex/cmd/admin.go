@@ -273,6 +273,7 @@ func init() {
 	adminInitCmd.Flags().String("gateway-ip", "", "OVN gateway router's external IP for SNAT (default: pool range_start for pool mode, required for nat mode without DHCP)")
 	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length (auto-detected)")
 	adminInitCmd.Flags().Bool("no-external", false, "Disable external networking (overlay-only, no internet for VMs)")
+	adminInitCmd.Flags().Bool("gpu-passthrough", false, "Enable VFIO GPU passthrough (sets gpu_passthrough = true in daemon config)")
 
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
@@ -657,6 +658,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
 	gatewayIP, _ := cmd.Flags().GetString("gateway-ip")
 	noExternal, _ := cmd.Flags().GetBool("no-external")
+	gpuPassthrough, _ := cmd.Flags().GetBool("gpu-passthrough")
 
 	// Fire telemetry in background (completes during init work, waited at end)
 	noTelemetry, _ := cmd.Flags().GetBool("no-telemetry")
@@ -1054,6 +1056,8 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		BootstrapIgwId:      bootstrapIgwId,
 		BootstrapCidr:       handlers_ec2_vpc.DefaultVPCCidr,
 		BootstrapSubnetCidr: handlers_ec2_vpc.DefaultSubnetCidr,
+
+		GPUPassthrough: gpuPassthrough,
 	}
 
 	// Print external networking summary

@@ -470,7 +470,7 @@ func installBootloader(disk string) error {
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Spinifex
 GRUB_CMDLINE_LINUX_DEFAULT=""
-GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8 systemd.show_status=1"
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8 systemd.show_status=1 intel_iommu=on iommu=pt"
 `
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
 		return fmt.Errorf("write /etc/default/grub: %w", err)
@@ -564,11 +564,12 @@ func (c *Config) toFirstbootConfig() firstboot.Config {
 		encapIP = c.LANAddress
 	}
 	return firstboot.Config{
-		Hostname:    c.Hostname,
-		EncapIP:     encapIP,
-		ClusterRole: c.ClusterRole,
-		JoinAddr:    c.JoinAddr,
-		Email:       c.Email,
+		Hostname:       c.Hostname,
+		EncapIP:        encapIP,
+		ClusterRole:    c.ClusterRole,
+		JoinAddr:       c.JoinAddr,
+		Email:          c.Email,
+		GPUPassthrough: c.GPUPassthrough,
 	}
 }
 

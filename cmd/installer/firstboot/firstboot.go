@@ -43,6 +43,9 @@ type Config struct {
 	// the headless path. Passed to `spx admin init --email=<value>` when set;
 	// omitted entirely when empty.
 	Email string
+	// GPUPassthrough enables VFIO GPU passthrough by passing --gpu-passthrough
+	// to `spx admin init`, which writes gpu_passthrough = true in the daemon config.
+	GPUPassthrough bool
 }
 
 // Write drops the firstboot script and systemd unit into root, which should be
@@ -209,11 +212,15 @@ func buildClusterCmd(cfg Config) string {
 		// validator already rejects whitespace and @-chains.
 		emailFlag = " --email=" + shellEscapeSingle(cfg.Email)
 	}
+	gpuFlag := ""
+	if cfg.GPUPassthrough {
+		gpuFlag = " --gpu-passthrough"
+	}
 	switch cfg.ClusterRole {
 	case "join":
 		return fmt.Sprintf("spx admin join --node %s --host %s%s", cfg.Hostname, cfg.JoinAddr, emailFlag)
 	default:
-		return fmt.Sprintf("spx admin init --node %s --nodes 1%s", cfg.Hostname, emailFlag)
+		return fmt.Sprintf("spx admin init --node %s --nodes 1%s%s", cfg.Hostname, emailFlag, gpuFlag)
 	}
 }
 

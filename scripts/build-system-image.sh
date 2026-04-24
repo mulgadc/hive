@@ -252,6 +252,10 @@ if [[ "$DISTRO" == "ubuntu" ]]; then
         sleep 1
     done
     echo "Resizing partition..."
+    # After qemu-img resize the GPT backup header sits at the old end of disk.
+    # Move it to the new end before parted tries to resize, otherwise parted
+    # refuses with "Unable to satisfy all constraints on the partition."
+    sudo sgdisk --move-second-header "${NBD_DEV}" 2>/dev/null || true
     sudo parted --script "${NBD_DEV}" resizepart 1 100%
 fi
 
@@ -275,7 +279,10 @@ fi
 echo "Mounting root filesystem..."
 sudo mount "${ROOT_PART}" "$MOUNT_DIR"
 
-# Set up resolv.conf for DNS inside chroot
+# Set up resolv.conf for DNS inside chroot.
+# Ubuntu cloud images symlink /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf
+# which doesn't exist yet. Remove the symlink and write a real file.
+sudo rm -f "${MOUNT_DIR}/etc/resolv.conf"
 sudo cp /etc/resolv.conf "${MOUNT_DIR}/etc/resolv.conf"
 
 # Ubuntu chroot requires /proc /sys /dev bind mounts for systemd and DKMS
@@ -378,8 +385,9 @@ rm -rf /var/lib/apt/lists/* /tmp/*
 '
 fi
 
-# Restore original resolv.conf (cloud-init will set it on boot)
+# Restore the systemd-resolved symlink (Ubuntu default); cloud-init sets DNS on boot.
 sudo rm -f "${MOUNT_DIR}/etc/resolv.conf"
+sudo ln -sf /run/systemd/resolve/stub-resolv.conf "${MOUNT_DIR}/etc/resolv.conf"
 
 echo "Unmounting..."
 if [[ "$DISTRO" == "ubuntu" ]]; then

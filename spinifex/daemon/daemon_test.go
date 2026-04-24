@@ -26,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/gpu"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
 	"github.com/mulgadc/spinifex/spinifex/instancetypes"
@@ -4123,4 +4124,59 @@ func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
 	require.NoError(t, pem.Encode(keyBuf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 
 	return certBuf.Bytes(), keyBuf.Bytes()
+}
+
+func TestResolveGPUModel_ProductionModel(t *testing.T) {
+	dev := gpu.GPUDevice{VendorID: "10de", DeviceID: "2236", Vendor: gpu.VendorNVIDIA}
+	m := resolveGPUModel(dev, nil)
+	assert.Equal(t, "g5", m.Family)
+	assert.Equal(t, "A10G", m.Name)
+}
+
+func TestResolveGPUModel_ConsumerGPUDefaultsToG5(t *testing.T) {
+	// Unknown PCI ID auto-maps to g5 using discovered specs — no config needed.
+	dev := gpu.GPUDevice{
+		VendorID:  "10de",
+		DeviceID:  "2487",
+		Vendor:    gpu.VendorNVIDIA,
+		Model:     "NVIDIA GeForce RTX 3060",
+		MemoryMiB: 12288,
+	}
+	m := resolveGPUModel(dev, nil)
+	assert.Equal(t, "g5", m.Family)
+	assert.Equal(t, "NVIDIA GeForce RTX 3060", m.Name)
+	assert.Equal(t, int64(12288), m.MemoryMiB)
+	assert.Equal(t, "NVIDIA", m.Manufacturer)
+}
+
+func TestResolveGPUModel_ConsumerGPUFallbackName(t *testing.T) {
+	// No Model field: name falls back to "GPU <vendor>:<device>".
+	dev := gpu.GPUDevice{VendorID: "dead", DeviceID: "beef", Vendor: gpu.VendorUnknown}
+	m := resolveGPUModel(dev, nil)
+	assert.Equal(t, "g5", m.Family)
+	assert.Equal(t, "GPU dead:beef", m.Name)
+	assert.Equal(t, "Unknown", m.Manufacturer)
+}
+
+func TestResolveGPUModel_OverrideShadowsProduction(t *testing.T) {
+	// An override for a known production PCI ID shadows the built-in entry.
+	overrides := []config.GPUModelOverride{
+		{VendorID: "10de", DeviceID: "2236", Family: "g6", Manufacturer: "NVIDIA", Name: "Custom", MemoryMiB: 999},
+	}
+	dev := gpu.GPUDevice{VendorID: "10de", DeviceID: "2236", Vendor: gpu.VendorNVIDIA}
+	m := resolveGPUModel(dev, overrides)
+	assert.Equal(t, "g6", m.Family)
+	assert.Equal(t, "Custom", m.Name)
+}
+
+func TestResolveGPUModel_OverrideCustomisesConsumerGPU(t *testing.T) {
+	// Override can pin specific name/memory for a consumer GPU that would
+	// otherwise be auto-mapped with nvidia-smi-discovered or zero values.
+	overrides := []config.GPUModelOverride{
+		{VendorID: "10de", DeviceID: "2487", Family: "g5", Manufacturer: "NVIDIA", Name: "RTX 3060", MemoryMiB: 12288},
+	}
+	dev := gpu.GPUDevice{VendorID: "10de", DeviceID: "2487", Vendor: gpu.VendorNVIDIA}
+	m := resolveGPUModel(dev, overrides)
+	assert.Equal(t, "RTX 3060", m.Name)
+	assert.Equal(t, int64(12288), m.MemoryMiB)
 }
