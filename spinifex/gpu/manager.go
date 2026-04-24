@@ -75,14 +75,15 @@ func (m *Manager) Claim(instanceID string) (*GPUDevice, error) {
 			return nil, fmt.Errorf("bind IOMMU group member %s: %w", member.PCIAddress, err)
 		}
 		// bindVFIO returns "vfio-pci" when the device was already bound (idempotent
-		// path — e.g. after a daemon restart with a live GPU instance). Use the
-		// pre-passthrough driver stored at discovery time so Release can rebind correctly.
+		// path — e.g. pre-bound by spx-test-gpu, or after a daemon restart with a
+		// live GPU instance). Preserve "vfio-pci" as the recorded original so
+		// Release knows to skip the unbind/rebind cycle for these devices.
 		if orig == "vfio-pci" {
 			if member.PCIAddress == entry.Device.PCIAddress {
 				orig = entry.Device.OriginalDriver
-			} else {
-				orig = "" // companion: original driver unknown; leave unbound on release
 			}
+			// else: companion was already vfio-pci bound; keep orig="vfio-pci"
+			// so Release leaves it bound rather than unbinding without a rebind target.
 		}
 		drivers[member.PCIAddress] = orig
 		bound = append(bound, member.PCIAddress)
@@ -97,10 +98,12 @@ func (m *Manager) Claim(instanceID string) (*GPUDevice, error) {
 	return &entry.Device, nil
 }
 
-// Release unbinds the GPU held by instanceID from vfio-pci and rebinds it to
-// its original driver. If rebind fails the entry is marked unavailable and an
-// error is returned; the GPU will not be offered to new instances until the
-// operator resolves the hardware state (typically a node reboot).
+// Release returns the GPU held by instanceID to the available pool.
+// For devices that were already bound to vfio-pci before the daemon started
+// (e.g. by spx-test-gpu), the device is left vfio-pci bound — QEMU has
+// already released the group fd on exit, so the next Claim works immediately.
+// For devices that were bound by Claim itself, Release unbinds vfio-pci and
+// rebinds to the original driver; if that fails the entry is marked unavailable.
 func (m *Manager) Release(instanceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -121,6 +124,14 @@ func (m *Manager) Release(instanceID string) error {
 
 	for _, member := range entry.groupMembers {
 		orig := entry.memberDrivers[member.PCIAddress]
+		if orig == "vfio-pci" {
+			// GPU was already bound to vfio-pci before this instance (e.g. by
+			// spx-test-gpu at node setup). QEMU released the group fd on exit;
+			// the device stays vfio-pci bound and is immediately available for
+			// the next claim. Skipping unbind avoids a needless round-trip and
+			// eliminates a brief window where the device is unbound.
+			continue
+		}
 		if err := unbindVFIO(m.sysfsRoot, member.PCIAddress, orig); err != nil {
 			slog.Error("GPU release failed for IOMMU group member",
 				"instance", instanceID, "pci", member.PCIAddress, "err", err)

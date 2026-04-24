@@ -184,6 +184,49 @@ func TestManagerClaim_RollbackOnPartialFailure(t *testing.T) {
 	}
 }
 
+// TestManagerRelease_PreBound verifies that when a GPU was already bound to
+// vfio-pci before the daemon started (OriginalDriver == "vfio-pci"), Release
+// skips the sysfs unbind/rebind and just returns the device to the pool.
+// This is the normal path for nodes set up with spx-test-gpu.
+func TestManagerRelease_PreBound(t *testing.T) {
+	root := t.TempDir()
+
+	// GPU already bound to vfio-pci (simulating spx-test-gpu setup).
+	buildSysfsDevice(t, root, "0000:03:00.0", "0x030200", "0x10de", "0x2487", "vfio-pci", 14)
+	buildSysfsDevice(t, root, "0000:03:00.1", "0x040300", "0x10de", "0x228b", "vfio-pci", 14)
+	makeSysfsDriverDir(t, root, "vfio-pci")
+
+	gpu := GPUDevice{
+		PCIAddress:     "0000:03:00.0",
+		Vendor:         VendorNVIDIA,
+		VendorID:       "10de",
+		DeviceID:       "2487",
+		IOMMUGroup:     14,
+		OriginalDriver: "vfio-pci",
+	}
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	if _, err := m.Claim("i-001"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	// Make vfio-pci driver dir read-only to prove Release doesn't write to it.
+	vfioDir := filepath.Join(root, "bus/pci/drivers/vfio-pci")
+	must(t, os.Chmod(vfioDir, 0o555))
+	t.Cleanup(func() { os.Chmod(vfioDir, 0o755) })
+
+	if err := m.Release("i-001"); err != nil {
+		t.Fatalf("Release on pre-bound GPU should not write sysfs, got err: %v", err)
+	}
+
+	if m.Available() != 1 {
+		t.Errorf("want Available=1 after release, got %d", m.Available())
+	}
+	if m.AllocatedCount() != 0 {
+		t.Errorf("want AllocatedCount=0 after release, got %d", m.AllocatedCount())
+	}
+}
+
 func TestManagerCounts_MultiGPU(t *testing.T) {
 	root := t.TempDir()
 

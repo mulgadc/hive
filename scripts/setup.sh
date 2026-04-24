@@ -15,7 +15,7 @@
 #   VERBOSE                    Set to 1 to echo "[setup] <stage>" before each top-level step.
 #   SETUP_STAGES               Comma-separated subset of stages to run:
 #                                deps, aws, users, sudoers, files, directories,
-#                                env, systemd, logrotate, fixown, migrations
+#                                env, systemd, logrotate, udev, fixown, migrations
 #                              Unset = run every stage appropriate for the current mode.
 
 set -e
@@ -600,6 +600,24 @@ install_logrotate() {
     info "Logrotate config installed"
 }
 
+# --- Install udev rules ---
+install_udev() {
+    stage "installing udev rules"
+    if [ ! -d "$EXTRACT_DIR/udev" ]; then
+        return
+    fi
+    $SUDO install -d /etc/udev/rules.d
+    for rule in "$EXTRACT_DIR"/udev/*; do
+        $SUDO install -m 0644 "$rule" "/etc/udev/rules.d/$(basename "$rule")"
+        info "  /etc/udev/rules.d/$(basename "$rule")"
+    done
+    if [ "${ISO_BUILD:-0}" != "1" ]; then
+        $SUDO udevadm control --reload-rules
+        $SUDO udevadm trigger --subsystem-match=vfio 2>/dev/null || true
+    fi
+    info "udev rules installed"
+}
+
 # --- Upgrade handling ---
 handle_upgrade() {
     if $SUDO systemctl is-active --quiet spinifex.target 2>/dev/null; then
@@ -680,10 +698,11 @@ main() {
         handle_upgrade
     fi
 
-    # Stages that need EXTRACT_DIR: files, directories, systemd, logrotate.
+    # Stages that need EXTRACT_DIR: files, directories, systemd, logrotate, udev.
     # Only download/extract when at least one such stage is enabled.
     if stage_enabled files || stage_enabled directories \
-        || stage_enabled systemd || stage_enabled logrotate; then
+        || stage_enabled systemd || stage_enabled logrotate \
+        || stage_enabled udev; then
         download_spinifex
     fi
 
@@ -697,6 +716,7 @@ main() {
     stage_enabled fixown     && fix_file_ownership
     stage_enabled systemd    && install_systemd
     stage_enabled logrotate  && install_logrotate
+    stage_enabled udev       && install_udev
 
     # Migrations are only safe on a live system (need a running NATS and a
     # persisted config file). Skip under ISO_BUILD and under any explicit
