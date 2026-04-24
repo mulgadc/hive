@@ -119,6 +119,33 @@ func TestUnbindVFIO_WithOriginalDriver(t *testing.T) {
 	}
 }
 
+func TestBindVFIO_VfioBindFails(t *testing.T) {
+	root := t.TempDir()
+	buildSysfsDevice(t, root, "0000:03:00.0", "0x030200", "0x10de", "0x2236", "nvidia", 7)
+	// nvidia dir is created by buildSysfsDevice; deliberately omit vfio-pci dir so bind fails.
+
+	_, err := bindVFIO(root, "0000:03:00.0")
+	if err == nil {
+		t.Error("want error when vfio-pci bind directory is missing, got nil")
+	}
+}
+
+func TestUnbindVFIO_ClearDriverOverrideFails(t *testing.T) {
+	root := t.TempDir()
+	buildSysfsDevice(t, root, "0000:03:00.0", "0x030200", "0x10de", "0x2236", "vfio-pci", 7)
+	makeSysfsDriverDir(t, root, "vfio-pci")
+	makeSysfsDriverDir(t, root, "nvidia")
+
+	// Pre-create driver_override as read-only so the clear write fails.
+	devPath := filepath.Join(root, "bus/pci/devices/0000:03:00.0")
+	must(t, os.WriteFile(filepath.Join(devPath, "driver_override"), []byte("vfio-pci"), 0o444))
+
+	err := unbindVFIO(root, "0000:03:00.0", "nvidia")
+	if err == nil {
+		t.Error("want error when driver_override clear fails, got nil")
+	}
+}
+
 func TestUnbindVFIO_NoOriginalDriver(t *testing.T) {
 	root := t.TempDir()
 	buildSysfsDevice(t, root, "0000:03:00.0", "0x030200", "0x10de", "0x2236", "vfio-pci", 7)

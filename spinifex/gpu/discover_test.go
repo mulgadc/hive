@@ -187,6 +187,28 @@ func TestDiscover_MultipleDevices(t *testing.T) {
 	}
 }
 
+func TestDiscover_ReadDirError(t *testing.T) {
+	// Pass a sysfsRoot with no bus/pci/devices directory.
+	_, err := discover(t.TempDir())
+	if err == nil {
+		t.Error("want error when devices directory is missing, got nil")
+	}
+}
+
+func TestDiscover_SkipsIntelGPU(t *testing.T) {
+	root := t.TempDir()
+	// Intel iGPU (vendor 0x8086) must be skipped even though it is a display class.
+	buildSysfsDevice(t, root, "0000:00:02.0", "0x030000", "0x8086", "0x46a8", "i915", 1)
+
+	gpus, err := discover(root)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(gpus) != 0 {
+		t.Errorf("want Intel GPU skipped, got %d GPUs", len(gpus))
+	}
+}
+
 func TestIsDisplayClass(t *testing.T) {
 	cases := []struct {
 		class string

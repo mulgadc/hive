@@ -28,6 +28,7 @@ DevicePolicy=closed
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
 DeviceAllow=char-vfio rw
+DeviceAllow=/dev/vfio/vfio rw
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/server.pem /etc/spinifex/server.key /etc/spinifex/ca.pem
 ReadWritePaths=/var/lib/spinifex/spinifex /var/log/spinifex /run/spinifex /run/spinifex/nbd
 
@@ -55,6 +56,9 @@ RemoveIPC=yes
 LimitCORE=0
 LimitNOFILE=65536
 LimitNPROC=4096
+# VFIO GPU passthrough requires locking all guest RAM into physical memory.
+# Without this, QEMU fails with RLIMIT_MEMLOCK exceeded when pinning guest pages.
+LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=spinifex.target

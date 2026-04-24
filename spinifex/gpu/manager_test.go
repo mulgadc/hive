@@ -184,6 +184,18 @@ func TestManagerClaim_RollbackOnPartialFailure(t *testing.T) {
 	}
 }
 
+func TestManagerClaim_GroupMembersError(t *testing.T) {
+	root := t.TempDir()
+	// IOMMU group 99 has no devices directory — groupMembers will fail.
+	gpu := GPUDevice{PCIAddress: "0000:03:00.0", IOMMUGroup: 99, OriginalDriver: "nvidia"}
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	_, err := m.Claim("i-001")
+	if err == nil {
+		t.Error("want error when IOMMU group directory is missing, got nil")
+	}
+}
+
 // TestManagerRelease_PreBound verifies that when a GPU was already bound to
 // vfio-pci before the daemon started (OriginalDriver == "vfio-pci"), Release
 // skips the sysfs unbind/rebind and just returns the device to the pool.
@@ -268,5 +280,67 @@ func TestManagerCounts_MultiGPU(t *testing.T) {
 	if m.Available() != 1 || m.AllocatedCount() != 1 {
 		t.Errorf("after release: Available=%d AllocatedCount=%d, want 1/1",
 			m.Available(), m.AllocatedCount())
+	}
+}
+
+func TestManagerReclaim_Success(t *testing.T) {
+	root, gpu := buildManagerSysfs(t)
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	if err := m.ReclaimByAddress(gpu.PCIAddress, "i-001"); err != nil {
+		t.Fatalf("ReclaimByAddress: %v", err)
+	}
+	if m.AllocatedCount() != 1 {
+		t.Errorf("want AllocatedCount=1 after reclaim, got %d", m.AllocatedCount())
+	}
+	if m.Available() != 0 {
+		t.Errorf("want Available=0 after reclaim, got %d", m.Available())
+	}
+}
+
+func TestManagerReclaim_AlreadyClaimed(t *testing.T) {
+	root, gpu := buildManagerSysfs(t)
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	if _, err := m.Claim("i-001"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	err := m.ReclaimByAddress(gpu.PCIAddress, "i-002")
+	if err == nil {
+		t.Error("want error when GPU already claimed, got nil")
+	}
+}
+
+func TestManagerReclaim_NotFound(t *testing.T) {
+	root, gpu := buildManagerSysfs(t)
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	err := m.ReclaimByAddress("0000:ff:00.0", "i-001")
+	if err == nil {
+		t.Error("want error for unknown PCI address, got nil")
+	}
+}
+
+func TestManagerReclaim_GroupMembersError(t *testing.T) {
+	root := t.TempDir()
+	// GPU with IOMMU group 99 but no group directory — groupMembers falls back to single member.
+	buildSysfsDevice(t, root, "0000:03:00.0", "0x030200", "0x10de", "0x2236", "vfio-pci", -1)
+	gpu := GPUDevice{
+		PCIAddress:     "0000:03:00.0",
+		Vendor:         VendorNVIDIA,
+		VendorID:       "10de",
+		DeviceID:       "2236",
+		IOMMUGroup:     99,
+		OriginalDriver: "nvidia",
+	}
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	// Must succeed even though IOMMU group can't be read (fallback to single member).
+	if err := m.ReclaimByAddress(gpu.PCIAddress, "i-001"); err != nil {
+		t.Fatalf("ReclaimByAddress with missing IOMMU group: %v", err)
+	}
+	if m.AllocatedCount() != 1 {
+		t.Errorf("want AllocatedCount=1, got %d", m.AllocatedCount())
 	}
 }
