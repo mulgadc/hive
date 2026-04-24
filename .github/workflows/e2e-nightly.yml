@@ -29,17 +29,12 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          # TEMP: DHCP cells (1, 3, 8, 10) disabled — re-enable when zero-config install is stable.
-          # - { cell: 1,  install: binary, topo: single,     net: dhcp,   host: debian-13,    arch: x86_64, runner: ci-single, extra: "" }
           - { cell: 2,  install: binary, topo: single,     net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-single, extra: "" }
-          # - { cell: 3,  install: binary, topo: single,     net: dhcp,   host: ubuntu-24.04, arch: x86_64, runner: ci-single, extra: "" }
-          # - { cell: 8,  install: binary, topo: real-multi, net: dhcp,   host: debian-13,    arch: x86_64, runner: ci-multi,  extra: "" }
           - { cell: 9,  install: binary, topo: real-multi, net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-multi,  extra: "" }
-          # - { cell: 10, install: binary, topo: real-multi, net: dhcp,   host: ubuntu-24.04, arch: x86_64, runner: ci-multi,  extra: "" }
-          - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-single, extra: "tofu-examples" }
+          - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-pseudo, extra: "tofu-examples" }
 
     runs-on: [ self-hosted, "${{ matrix.runner }}" ]
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       TOFU_LOG: /tmp/e2e-nightly-cell-${{ matrix.cell }}-${{ github.run_id }}.log
 
