@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -877,6 +878,7 @@ func (d *Daemon) Start() error {
 	d.ready.Store(true)
 	slog.Info("Daemon fully initialized", "node", d.node, "startupTime", time.Since(d.startTime).Round(time.Second))
 
+	d.setupReload()
 	d.setupShutdown()
 	d.awaitShutdown()
 
@@ -1834,10 +1836,86 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	return nil
 }
 
+// setupReload registers a SIGHUP handler that reloads GPU config without restarting.
+func (d *Daemon) setupReload() {
+	d.shutdownWg.Go(func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGHUP)
+		defer signal.Stop(sigChan)
+		for {
+			select {
+			case <-d.ctx.Done():
+				return
+			case <-sigChan:
+				slog.Info("SIGHUP received — reloading GPU config")
+				d.reloadConfig()
+			}
+		}
+	})
+}
+
+// reloadConfig re-reads spinifex.toml and applies any GPU passthrough changes.
+func (d *Daemon) reloadConfig() {
+	if d.configPath == "" {
+		slog.Warn("SIGHUP: no config path set, cannot reload")
+		return
+	}
+	newCfg, err := config.LoadConfig(d.configPath)
+	if err != nil {
+		slog.Error("SIGHUP: config reload failed", "err", err)
+		return
+	}
+	newNodeCfg := newCfg.Nodes[d.node]
+	d.applyGPUConfig(newNodeCfg.Daemon.GPUPassthrough)
+}
+
+// applyGPUConfig activates or deactivates GPU passthrough at runtime.
+// Transition false→true: re-probes hardware, initialises gpuManager, adds g5 types.
+// Transition true→false: refused when GPU instances are running; otherwise tears down.
+func (d *Daemon) applyGPUConfig(enabled bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	wasEnabled := d.gpuManager != nil
+	if enabled == wasEnabled {
+		slog.Debug("GPU passthrough state unchanged on reload", "passthrough", enabled)
+		return
+	}
+
+	if enabled {
+		probe := probeGPU()
+		d.gpuProbe = probe
+		if !probe.Capable {
+			slog.Warn("GPU passthrough enable failed: prerequisites not met",
+				"iommu", probe.IOMMUActive, "vfio", probe.VFIOPresent, "gpus", len(probe.Devices))
+			return
+		}
+		var models []instancetypes.GPUModel
+		for _, dev := range probe.Devices {
+			models = append(models, resolveGPUModel(dev, d.config.Daemon.GPUModelOverrides))
+		}
+		mgr := gpu.NewManager(probe.Devices)
+		d.gpuManager = mgr
+		d.resourceMgr.reloadGPUTypes(models, mgr)
+		slog.Info("GPU passthrough enabled via config reload", "gpus", len(probe.Devices))
+		return
+	}
+
+	// true → false: refuse if instances are running
+	if d.gpuManager.AllocatedCount() > 0 {
+		slog.Warn("GPU passthrough disable refused: GPU instances are running",
+			"allocated", d.gpuManager.AllocatedCount())
+		return
+	}
+	d.gpuManager = nil
+	d.resourceMgr.reloadGPUTypes(nil, nil)
+	slog.Info("GPU passthrough disabled via config reload")
+}
+
 func (d *Daemon) setupShutdown() {
 	d.shutdownWg.Go(func() {
 		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 		<-sigChan
 		slog.Info("Received shutdown signal, cleaning up...")
@@ -2776,6 +2854,30 @@ func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 
 // initSubscriptions sets up dynamic per-instance-type NATS subscriptions.
 // Called once during daemon startup after NATS is connected.
+// reloadGPUTypes replaces GPU instance types in-place and updates NATS subscriptions.
+// Called on SIGHUP when gpu_passthrough is toggled. Mutates the existing map so that
+// all holders of the map reference (e.g. instanceService) see the updated types.
+func (rm *ResourceManager) reloadGPUTypes(models []instancetypes.GPUModel, mgr *gpu.Manager) {
+	arch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		arch = "arm64"
+	}
+
+	rm.mu.Lock()
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsGPUType(it) {
+			delete(rm.instanceTypes, name)
+		}
+	}
+	if len(models) > 0 {
+		maps.Copy(rm.instanceTypes, instancetypes.GenerateGPUTypes(models, arch))
+	}
+	rm.gpuManager = mgr
+	rm.mu.Unlock()
+
+	rm.updateInstanceSubscriptions()
+}
+
 func (rm *ResourceManager) initSubscriptions(nc *nats.Conn, handler nats.MsgHandler, nodeID string) {
 	rm.natsConn = nc
 	rm.handler = handler

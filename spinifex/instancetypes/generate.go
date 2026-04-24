@@ -98,6 +98,12 @@ func generateSystemTypes(arch string) map[string]*ec2.InstanceTypeInfo {
 // generateGPUTypes generates instance types for the discovered GPU models.
 // For each unique GPU family, it emits all sizes for that family with GpuInfo populated.
 // Duplicates (multiple GPUs of the same model) produce only one set of types.
+// GenerateGPUTypes returns InstanceTypeInfo entries for each GPU model with GpuInfo populated.
+// It is exported for use by the daemon's hot-reload path.
+func GenerateGPUTypes(models []GPUModel, arch string) map[string]*ec2.InstanceTypeInfo {
+	return generateGPUTypes(models, arch)
+}
+
 func generateGPUTypes(models []GPUModel, arch string) map[string]*ec2.InstanceTypeInfo {
 	types := make(map[string]*ec2.InstanceTypeInfo)
 	seen := make(map[string]bool)
