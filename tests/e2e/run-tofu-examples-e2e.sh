@@ -25,6 +25,8 @@ OPENTOFU_VERSION="${OPENTOFU_VERSION:-1.11.5}"
 WAN_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
 
+CURRENT_WORKBOOK=""
+
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 install_tofu() {
@@ -47,6 +49,21 @@ install_tofu() {
 cleanup() {
     EXIT_CODE=$?
     if [ "$EXIT_CODE" -ne 0 ]; then
+        log "=== FAIL (workbook=${CURRENT_WORKBOOK:-<none>}) — dumping diagnostics ==="
+        log "--- spx get vms ---"
+        sudo -u spinifex-daemon spx get vms 2>&1 | head -80 || \
+            spx get vms 2>&1 | head -80 || true
+        log "--- aws ec2 describe-instances ---"
+        aws ec2 describe-instances \
+            --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Message,PrivateIpAddress,PublicIpAddress,Tags[?Key==`Name`].Value|[0]]' \
+            --output table 2>&1 | head -60 || true
+        log "--- spinifex service errors (last 15 min) ---"
+        for svc in spinifex-daemon spinifex-awsgw spinifex-vpcd spinifex-viperblock spinifex-predastore; do
+            sudo journalctl -u "$svc" --since '15 min ago' --no-pager 2>/dev/null | \
+                grep -iE 'panic|fatal|level=error|ERROR' | tail -30 | \
+                sed "s|^|    [${svc}] |" || true
+        done
+        log "--- service journals (last 200 lines each) ---"
         for svc in spinifex-nats spinifex-predastore spinifex-viperblock \
                    spinifex-daemon spinifex-awsgw spinifex-vpcd; do
             echo "=== ${svc} ==="
@@ -126,88 +143,6 @@ assert_bastion_private_subnet() {
         | grep -q '^uid='
 }
 
-dump_nginx_alb_diagnostics() {
-    local tg_arn="${1:-}"
-    local alb_ip="${2:-}"
-
-    if [ -n "$alb_ip" ]; then
-        log "  --- curl -v http://${alb_ip}/ (final attempt) ---"
-        curl -vk --max-time 10 "http://${alb_ip}/" 2>&1 | head -100 || true
-        log "  --- TCP probes to ALB IP (is the VM even reachable?) ---"
-        for port in 22 80 443 8080; do
-            if timeout 3 bash -c "</dev/tcp/${alb_ip}/${port}" 2>/dev/null; then
-                log "    ${alb_ip}:${port} open"
-            else
-                log "    ${alb_ip}:${port} closed/filtered"
-            fi
-        done
-        log "  --- ping ${alb_ip} (3 packets) ---"
-        ping -c 3 -W 2 "$alb_ip" 2>&1 | tail -10 || true
-    fi
-
-    log "  --- spx get vms (all VMs, including system) ---"
-    sudo -u spinifex-daemon spx get vms 2>&1 | head -50 || \
-        spx get vms 2>&1 | head -50 || \
-        log "    spx get vms unavailable"
-
-    log "  --- elbv2 system instances (spinifex:managed-by=elbv2) ---"
-    aws ec2 describe-instances \
-        --filters 'Name=tag:spinifex:managed-by,Values=elbv2' \
-        --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress,StateReason.Message]' \
-        --output table || true
-    log "  --- all running instances ---"
-    aws ec2 describe-instances \
-        --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Message,PrivateIpAddress,PublicIpAddress,Tags[?Key==`Name`].Value|[0]]' \
-        --output table || true
-    if [ -n "$tg_arn" ]; then
-        log "  --- target health ---"
-        aws elbv2 describe-target-health --target-group-arn "$tg_arn" || true
-        log "  --- registered target instances (full state) ---"
-        aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
-            --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
-        while read -r tgt_id; do
-            [ -z "$tgt_id" ] && continue
-            aws ec2 describe-instances --instance-ids "$tgt_id" \
-                --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Code,StateReason.Message,PrivateIpAddress,PublicIpAddress]' \
-                --output table || true
-        done
-        log "  --- curl each backend public IP directly (isolates lb-agent vs backend) ---"
-        aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
-            --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
-        while read -r tgt_id; do
-            [ -z "$tgt_id" ] && continue
-            local pub
-            pub=$(aws ec2 describe-instances --instance-ids "$tgt_id" \
-                --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null)
-            if [ -n "$pub" ] && [ "$pub" != "None" ]; then
-                local code
-                code=$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "http://${pub}/" 2>&1 || echo "curl-failed")
-                log "    backend ${tgt_id} @ ${pub}: HTTP ${code}"
-            else
-                log "    backend ${tgt_id}: no public IP"
-            fi
-        done
-    fi
-    log "  --- daemon: lb-agent / elbv2 lines ---"
-    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed|failed launch|elbv2|ELBv2|GetLBConfig|CreateListener|RegisterTargets|CreateLoadBalancer|LaunchSystemInstance|system instance|dnat_and_snat|floating.?ip' | tail -120 || true
-    log "  --- daemon: NATS subject activity (last 15 min) ---"
-    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'subject=|topic=|nats.*elbv2|nats.*ec2\.' | tail -40 || true
-    log "  --- daemon: errors/panics/fatal since workbook started ---"
-    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'panic|fatal|ERROR|level=error' | tail -80 || true
-    log "  --- daemon: restarts in last 15 min ---"
-    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'Started |Stopping|Stopped|Main PID|killed' | tail -40 || true
-    log "  --- viperblock: AccessDenied / nbdkit / zero-data errors ---"
-    sudo journalctl -u spinifex-viperblock --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'AccessDenied|signature does not match|nbdkit|Broken pipe|NBDKit exited|zero data' | tail -60 || true
-    log "  --- awsgw: errors ---"
-    sudo journalctl -u spinifex-awsgw --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'level=error|InternalError|status":5' | tail -40 || true
-}
-
 assert_nginx_alb() {
     # ALB DNS (*.elb.spinifex.local) isn't resolvable from the host — README
     # documents fetching the public IP via elbv2 describe-load-balancers.
@@ -229,30 +164,26 @@ assert_nginx_alb() {
     done
     if [ -z "$ip" ] || [ "$ip" = "None" ]; then
         log "  nginx-alb: no public IP for ${name} after retries"
-        dump_nginx_alb_diagnostics ""
         return 1
     fi
     log "  nginx-alb: ALB ${name} public IP ${ip}"
 
     tg_arn=$(aws elbv2 describe-target-groups --names nginx-alb-tg \
-        --query 'TargetGroups[0].TargetGroupArn' --output text 2>&1)
-    log "  nginx-alb: target group ARN: ${tg_arn}"
-    if [ -z "$tg_arn" ] || [[ "$tg_arn" == *Error* ]] || [[ "$tg_arn" == None ]]; then
-        log "  nginx-alb: could not resolve target group ARN, aborting"
-        dump_nginx_alb_diagnostics ""
-        return 1
-    fi
-    if ! wait_for_alb_healthy "$tg_arn" 300; then
-        log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
-        dump_nginx_alb_diagnostics "$tg_arn" "$ip"
+        --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null)
+    if [ -z "$tg_arn" ] || [ "$tg_arn" = "None" ]; then
+        log "  nginx-alb: could not resolve target group ARN"
         return 1
     fi
 
-    if ! wait_for_http_200 "http://${ip}/" 300; then
-        log "  nginx-alb: targets healthy but no HTTP 200 after 300s — dumping diagnostics"
-        dump_nginx_alb_diagnostics "$tg_arn" "$ip"
+    wait_for_alb_healthy "$tg_arn" 300 || {
+        log "  nginx-alb: no healthy targets after 300s"
         return 1
-    fi
+    }
+
+    wait_for_http_200 "http://${ip}/" 300 || {
+        log "  nginx-alb: targets healthy but no HTTP 200 after 300s"
+        return 1
+    }
 }
 
 assert_nginx_webserver() {
@@ -303,6 +234,7 @@ run_workbook() {
         return 1
     fi
 
+    CURRENT_WORKBOOK="$example"
     log "=== ${example} ==="
     cd "$path"
     rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
@@ -371,4 +303,5 @@ for workbook in nginx-alb bastion-private-subnet nginx-webserver s3-webapp; do
     fi
 done
 
+CURRENT_WORKBOOK=""
 log "All workbooks passed"

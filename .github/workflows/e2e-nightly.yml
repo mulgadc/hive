@@ -1,9 +1,6 @@
 name: E2E Nightly
 
 on:
-  push:
-    branches:
-      - fix/nbd-zero-use-writeat
   schedule:
     - cron: "0 14 * * *" # 00:00 AEST = 14:00 UTC
   workflow_dispatch:
