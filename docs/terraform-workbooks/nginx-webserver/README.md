@@ -65,6 +65,8 @@ Or create a `main.tf` file and paste the full configuration below.
 
 ### Step 2. Deploy
 
+The workbook defaults to `t3.small` (2 vCPU, 2 GiB). On clusters without that type registered, override with `TF_VAR_instance_type` — query what's available with `aws ec2 describe-instance-types`.
+
 ```bash
 export AWS_PROFILE=spinifex
 tofu init

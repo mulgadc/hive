@@ -1,10 +1,6 @@
 name: Spinifex E2E Nightly
 
 on:
-  # TEMP: push trigger scoped to the Phase 1 feature branch for iterative testing.
-  # Remove this `push:` block before merging to main — nightly then runs on cron only.
-  push:
-    branches: [ feat/e2e-nightly-matrix-phase1 ]
   schedule:
     - cron: "0 14 * * *" # 00:00 AEST = 14:00 UTC
   workflow_dispatch:
@@ -31,10 +27,10 @@ jobs:
         include:
           - { cell: 2,  install: binary, topo: single,     net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-single, extra: "" }
           - { cell: 9,  install: binary, topo: real-multi, net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-multi,  extra: "" }
-          - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-pseudo, extra: "tofu-examples" }
+          - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-single, extra: "tofu-examples" }
 
     runs-on: [ self-hosted, "${{ matrix.runner }}" ]
-    timeout-minutes: 40
+    timeout-minutes: 35
     env:
       TOFU_LOG: /tmp/e2e-nightly-cell-${{ matrix.cell }}-${{ github.run_id }}.log
 

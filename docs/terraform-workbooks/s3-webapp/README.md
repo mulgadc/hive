@@ -84,6 +84,8 @@ Before deploying, create a `terraform.tfvars` with your Predastore credentials. 
 
 ### Step 4. Deploy
 
+The workbook defaults to `t3.small` (2 vCPU, 2 GiB). On clusters without that type registered, override with `TF_VAR_instance_type` — query what's available with `aws ec2 describe-instance-types`.
+
 ```bash
 export AWS_PROFILE=spinifex
 tofu init
