@@ -128,6 +128,13 @@ assert_bastion_private_subnet() {
 
 dump_nginx_alb_diagnostics() {
     local tg_arn="${1:-}"
+    local alb_ip="${2:-}"
+
+    if [ -n "$alb_ip" ]; then
+        log "  --- curl -v http://${alb_ip}/ (final attempt) ---"
+        curl -vk --max-time 10 "http://${alb_ip}/" 2>&1 | head -100 || true
+    fi
+
     log "  --- elbv2 system instances (spinifex:managed-by=elbv2) ---"
     aws ec2 describe-instances \
         --filters 'Name=tag:spinifex:managed-by,Values=elbv2' \
@@ -148,6 +155,22 @@ dump_nginx_alb_diagnostics() {
             aws ec2 describe-instances --instance-ids "$tgt_id" \
                 --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Code,StateReason.Message,PrivateIpAddress,PublicIpAddress]' \
                 --output table || true
+        done
+        log "  --- curl each backend public IP directly (isolates lb-agent vs backend) ---"
+        aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
+            --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
+        while read -r tgt_id; do
+            [ -z "$tgt_id" ] && continue
+            local pub
+            pub=$(aws ec2 describe-instances --instance-ids "$tgt_id" \
+                --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null)
+            if [ -n "$pub" ] && [ "$pub" != "None" ]; then
+                local code
+                code=$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "http://${pub}/" 2>&1 || echo "curl-failed")
+                log "    backend ${tgt_id} @ ${pub}: HTTP ${code}"
+            else
+                log "    backend ${tgt_id}: no public IP"
+            fi
         done
     fi
     log "  --- daemon: lb-agent-specific lines ---"
@@ -203,11 +226,15 @@ assert_nginx_alb() {
     fi
     if ! wait_for_alb_healthy "$tg_arn" 300; then
         log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
-        dump_nginx_alb_diagnostics "$tg_arn"
+        dump_nginx_alb_diagnostics "$tg_arn" "$ip"
         return 1
     fi
 
-    wait_for_http_200 "http://${ip}/" 300
+    if ! wait_for_http_200 "http://${ip}/" 300; then
+        log "  nginx-alb: targets healthy but no HTTP 200 after 300s — dumping diagnostics"
+        dump_nginx_alb_diagnostics "$tg_arn" "$ip"
+        return 1
+    fi
 }
 
 assert_nginx_webserver() {

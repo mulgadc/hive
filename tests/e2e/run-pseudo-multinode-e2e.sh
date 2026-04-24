@@ -385,7 +385,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
     SSH_HOSTS+=("$SSH_HOST")
 
     # Wait for SSH to become ready (VM boot + cloud-init)
-    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 30
+    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 60
 
     # Test basic SSH connectivity
     test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
