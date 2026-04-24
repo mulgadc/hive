@@ -84,6 +84,12 @@ const (
 	// OVS bridge (br-ext). Requires centralized NAT like macvlan because the
 	// Linux bridge intermediary breaks distributed NAT hairpin routing.
 	BridgeModeVeth = "veth"
+	// OvnExternalBridge is the OVS bridge that ovn-bridge-mappings targets
+	// for the "external" localnet. Owned by setup-ovn.sh's ovn-bridge-mappings
+	// setup and independent of dhcp_bind_bridge (which is Linux-side in veth
+	// mode). Named as a constant so the vpcd sanity check refers to the
+	// contract, not a hardcoded string (D18).
+	OvnExternalBridge = "br-ext"
 )
 
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.

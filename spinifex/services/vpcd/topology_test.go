@@ -3,6 +3,7 @@ package vpcd
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
@@ -2402,5 +2403,105 @@ func TestEnsureLocalnetOptions_NoOpWhenAlreadyCorrect(t *testing.T) {
 	if mock.UpdateLogicalSwitchPortCalls != startUpdates {
 		t.Errorf("expected no UpdateLogicalSwitchPort call when already correct (idempotent); got %d new calls",
 			mock.UpdateLogicalSwitchPortCalls-startUpdates)
+	}
+}
+
+func TestEnsureLocalnetOptions_NoOpInDirectModeWhenAbsent(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-d"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-d", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-d",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external"},
+	})
+	start := mock.UpdateLogicalSwitchPortCalls
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeDirect))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-d"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	if mock.UpdateLogicalSwitchPortCalls != start {
+		t.Errorf("direct mode + no nat-addresses should be a no-op; got %d new calls",
+			mock.UpdateLogicalSwitchPortCalls-start)
+	}
+}
+
+func TestEnsureLocalnetOptions_HandlesNilOptionsMap(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-n"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-n", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-n",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+	})
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-n"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	port, _ := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-n")
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("expected nat-addresses=router after nil-map init, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestEnsureLocalnetOptions_ErrorOnMissingPort(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	err := topo.ensureLocalnetOptions(ctx, "ext-port-missing")
+	if err == nil {
+		t.Fatal("expected error when port missing")
+	}
+	if !strings.Contains(err.Error(), "ext-port-missing") {
+		t.Errorf("error should name the port; got: %v", err)
+	}
+}
+
+// reconcileIGW must surface the CreateLogicalSwitchPort error and roll back
+// the external switch when the localnet port name collides (e.g. a stale
+// pre-existing port from a prior attach that leaked).
+func TestTopologyHandler_ReconcileIGW_LocalnetPortCreateError(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+
+	// Pre-create VPC router.
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-vpc-clash",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "vpc-clash", "spinifex:cidr": "10.0.0.0/16"},
+	})
+
+	// Pre-seed a logical switch port named "ext-port-vpc-clash" on an
+	// unrelated switch so reconcileIGW's CreateLogicalSwitchPort call
+	// collides with the existing port.
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "stale-switch"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "stale-switch", &nbdb.LogicalSwitchPort{
+		Name: "ext-port-vpc-clash",
+		Type: "localnet",
+	})
+
+	err := topo.reconcileIGW(ctx, "vpc-clash", "igw-clash")
+	if err == nil {
+		t.Fatal("expected error from reconcileIGW when localnet port collides")
+	}
+	if !strings.Contains(err.Error(), "create localnet port") {
+		t.Errorf("expected 'create localnet port' in error; got: %v", err)
+	}
+
+	// The external switch must have been rolled back.
+	if _, err := mock.GetLogicalSwitch(ctx, "ext-vpc-clash"); err == nil {
+		t.Error("expected external switch to be rolled back after port-create failure")
 	}
 }
