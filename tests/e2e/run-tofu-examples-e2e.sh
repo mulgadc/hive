@@ -126,36 +126,20 @@ assert_bastion_private_subnet() {
         | grep -q '^uid='
 }
 
-assert_nginx_alb() {
-    # ALB DNS (*.elb.spinifex.local) isn't resolvable from the host — README
-    # documents fetching the public IP via elbv2 describe-load-balancers.
-    local name ip tg_arn
-    name=$(tofu output -raw alb_name)
-    ip=$(aws elbv2 describe-load-balancers --names "$name" \
-        --query 'LoadBalancers[0].AvailabilityZones[].LoadBalancerAddresses[].IpAddress' \
-        --output text | awk '{print $1}')
-    if [ -z "$ip" ]; then
-        log "  nginx-alb: no public IP for ${name}"
-        return 1
-    fi
-    log "  nginx-alb: ALB ${name} public IP ${ip}"
-
-    tg_arn=$(aws elbv2 describe-target-groups --names nginx-alb-tg \
-        --query 'TargetGroups[0].TargetGroupArn' --output text 2>&1)
-    log "  nginx-alb: target group ARN: ${tg_arn}"
-    if [ -z "$tg_arn" ] || [[ "$tg_arn" == *Error* ]] || [[ "$tg_arn" == None ]]; then
-        log "  nginx-alb: could not resolve target group ARN, aborting"
-        return 1
-    fi
-    if ! wait_for_alb_healthy "$tg_arn" 300; then
-        log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
+dump_nginx_alb_diagnostics() {
+    local tg_arn="${1:-}"
+    log "  --- elbv2 system instances (spinifex:managed-by=elbv2) ---"
+    aws ec2 describe-instances \
+        --filters 'Name=tag:spinifex:managed-by,Values=elbv2' \
+        --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress,StateReason.Message]' \
+        --output table || true
+    log "  --- all running instances ---"
+    aws ec2 describe-instances \
+        --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Message,PrivateIpAddress,PublicIpAddress,Tags[?Key==`Name`].Value|[0]]' \
+        --output table || true
+    if [ -n "$tg_arn" ]; then
         log "  --- target health ---"
         aws elbv2 describe-target-health --target-group-arn "$tg_arn" || true
-        log "  --- elbv2 system instances (spinifex:managed-by=elbv2) ---"
-        aws ec2 describe-instances \
-            --filters 'Name=tag:spinifex:managed-by,Values=elbv2' \
-            --query 'Reservations[].Instances[].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress,StateReason.Message]' \
-            --output table || true
         log "  --- registered target instances (full state) ---"
         aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
             --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
@@ -165,31 +149,61 @@ assert_nginx_alb() {
                 --query 'Reservations[].Instances[].[InstanceId,State.Name,StateReason.Code,StateReason.Message,PrivateIpAddress,PublicIpAddress]' \
                 --output table || true
         done
-        log "  --- daemon: lb-agent-specific lines ---"
-        sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-            grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed' | tail -80 || true
-        log "  --- daemon: errors/panics/fatal since workbook started ---"
-        sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-            grep -iE 'panic|fatal|ERROR|level=error' | tail -80 || true
-        log "  --- daemon: restarts in last 15 min ---"
-        sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-            grep -iE 'Started |Stopping|Stopped|Main PID|killed' | tail -40 || true
-        log "  --- cloud-init status on reachable targets ---"
-        aws elbv2 describe-target-health --target-group-arn "$tg_arn" \
-            --query 'TargetHealthDescriptions[].Target.Id' --output text 2>/dev/null | tr '\t' '\n' | \
-        while read -r tgt_id; do
-            [ -z "$tgt_id" ] && continue
-            local pub
-            pub=$(aws ec2 describe-instances --instance-ids "$tgt_id" \
-                --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || true)
-            [ -z "$pub" ] || [ "$pub" = "None" ] && continue
-            echo "  target ${tgt_id} @ ${pub}:"
-            local key="$(pwd)/nginx-alb-demo.pem"
-            [ -f "$key" ] && chmod 600 "$key"
-            ssh "${SSH_OPTS[@]}" -i "$key" "ec2-user@${pub}" \
-                'cloud-init status 2>/dev/null; systemctl is-active nginx 2>/dev/null; ss -tlnp 2>/dev/null | grep :80 || true' \
-                2>&1 | sed 's/^/    /' || true
-        done
+    fi
+    log "  --- daemon: lb-agent-specific lines ---"
+    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed|failed launch' | tail -80 || true
+    log "  --- daemon: errors/panics/fatal since workbook started ---"
+    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'panic|fatal|ERROR|level=error' | tail -80 || true
+    log "  --- daemon: restarts in last 15 min ---"
+    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'Started |Stopping|Stopped|Main PID|killed' | tail -40 || true
+    log "  --- viperblock: AccessDenied / nbdkit / zero-data errors ---"
+    sudo journalctl -u spinifex-viperblock --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'AccessDenied|signature does not match|nbdkit|Broken pipe|NBDKit exited|zero data' | tail -60 || true
+    log "  --- awsgw: errors ---"
+    sudo journalctl -u spinifex-awsgw --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'level=error|InternalError|status":5' | tail -40 || true
+}
+
+assert_nginx_alb() {
+    # ALB DNS (*.elb.spinifex.local) isn't resolvable from the host — README
+    # documents fetching the public IP via elbv2 describe-load-balancers.
+    local name ip tg_arn attempt
+    name=$(tofu output -raw alb_name)
+
+    # Retry describe-load-balancers: the gateway intermittently returns
+    # InternalError during ALB provisioning while the lb-agent VM is booting.
+    ip=""
+    for attempt in 1 2 3 4 5 6; do
+        ip=$(aws elbv2 describe-load-balancers --names "$name" \
+            --query 'LoadBalancers[0].AvailabilityZones[].LoadBalancerAddresses[].IpAddress' \
+            --output text 2>/dev/null | awk '{print $1}')
+        if [ -n "$ip" ] && [ "$ip" != "None" ]; then
+            break
+        fi
+        log "  nginx-alb: describe-load-balancers attempt ${attempt} returned no IP, retrying in 10s"
+        sleep 10
+    done
+    if [ -z "$ip" ] || [ "$ip" = "None" ]; then
+        log "  nginx-alb: no public IP for ${name} after retries"
+        dump_nginx_alb_diagnostics ""
+        return 1
+    fi
+    log "  nginx-alb: ALB ${name} public IP ${ip}"
+
+    tg_arn=$(aws elbv2 describe-target-groups --names nginx-alb-tg \
+        --query 'TargetGroups[0].TargetGroupArn' --output text 2>&1)
+    log "  nginx-alb: target group ARN: ${tg_arn}"
+    if [ -z "$tg_arn" ] || [[ "$tg_arn" == *Error* ]] || [[ "$tg_arn" == None ]]; then
+        log "  nginx-alb: could not resolve target group ARN, aborting"
+        dump_nginx_alb_diagnostics ""
+        return 1
+    fi
+    if ! wait_for_alb_healthy "$tg_arn" 300; then
+        log "  nginx-alb: no healthy targets after 300s — dumping diagnostics"
+        dump_nginx_alb_diagnostics "$tg_arn"
         return 1
     fi
 
