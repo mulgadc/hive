@@ -2783,11 +2783,21 @@ func (d *Daemon) wireLBAgentConfig() {
 
 	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
 	// Precedence:
-	//   1. AWSGW listens on a specific WAN IP + br-mgmt present → use WAN IP
-	//      and add host route via br-mgmt for internal LBs.
-	//   2. br-mgmt present + AWSGW on 0.0.0.0 → br-mgmt IP (both LB flavours
+	//   1. br-mgmt present + AWSGW on a dedicated IP distinct from AdvertiseIP
+	//      (multi-node: AWSGW on a mgmt-only IP, VPC path can't reach it) →
+	//      gateway URL is the AWSGW bind IP and lb-agent gets a bootcmd host
+	//      route via br-mgmt.
+	//   2. AdvertiseIP set (single-node, or multi-node where AWSGW binds to
+	//      the advertised IP) → AdvertiseIP. VMs reach it via VPC → external
+	//      (OVN's own dnat_and_snat SNATs their reply back to the ALB EIP).
+	//      Critically, we do NOT add the mgmt host route here: when host IPs
+	//      on the WAN share the advertiseIP, the /32 route would steal the
+	//      return path for host-initiated ALB connections — replies would
+	//      egress via mgmt with the VM's 10.x source IP, bypass OVN's SNAT,
+	//      and arrive at the host with a source that doesn't match the open
+	//      TCP socket (the client dialed the EIP, not the VM IP).
+	//   3. br-mgmt present + AWSGW on 0.0.0.0 → br-mgmt IP (both LB flavours
 	//      reach the daemon via mgmt).
-	//   3. This node's AdvertiseIP (single-node default install) → AdvertiseIP.
 	//   4. DevNetworking shim → 10.0.2.2.
 	//   5. AWSGW bound to specific IP (no br-mgmt, no advertise) → that IP.
 	//   6. Else: error and skip assignment — no silent empty URL.
@@ -2802,17 +2812,20 @@ func (d *Daemon) wireLBAgentConfig() {
 	advertiseIP := d.config.AdvertiseIP
 
 	switch {
-	case d.mgmtBridgeIP != "" && awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback():
-		// Multi-node: AWSGW listens on a specific WAN IP. Use that IP as the
-		// gateway URL; internal LBs get a host route via br-mgmt.
+	case d.mgmtBridgeIP != "" && awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" &&
+		!net.ParseIP(awsgwBindIP).IsLoopback() && awsgwBindIP != advertiseIP:
+		// Multi-node: AWSGW on a dedicated mgmt IP. VMs can't reach it via
+		// VPC → external, so add a bootcmd host route via br-mgmt.
 		gatewayHost = awsgwBindIP
 		d.mgmtRouteVia = awsgwBindIP
-	case d.mgmtBridgeIP != "":
-		// Multi-node with AWSGW on 0.0.0.0 — br-mgmt reaches all LBs.
-		gatewayHost = d.mgmtBridgeIP
 	case advertiseIP != "" && advertiseIP != "0.0.0.0":
-		// Single-node default install — off-host clients dial the advertised IP.
+		// Single-node, or multi-node where AWSGW binds to AdvertiseIP: VMs
+		// reach AWSGW via the normal VPC → external path. No mgmt host route.
 		gatewayHost = advertiseIP
+	case d.mgmtBridgeIP != "":
+		// br-mgmt present + AWSGW on 0.0.0.0 and no advertiseIP — br-mgmt IP
+		// is the only reachable address.
+		gatewayHost = d.mgmtBridgeIP
 	case d.config.Daemon.DevNetworking:
 		gatewayHost = "10.0.2.2"
 	case awsgwBindIP != "" && awsgwBindIP != "0.0.0.0":
