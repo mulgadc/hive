@@ -709,3 +709,64 @@ Requires pool mode with external IPAM (NOT dev_networking).
 ### Phase 4: Cleanup (trap)
 - Terminate app instances, wait for terminated
 - Delete key pair, subnet, IGW, VPC
+
+## DDIL (`tests/e2e/ddil/`)
+
+Go-based harness and scenarios that exercise the Denied / Disrupted /
+Intermittent / Limited failure modes called out in the DDIL vulnerability
+assessment. Design and rationale live in
+[`docs/development/improvements/ddil-e2e-test-harness.md`](../../../docs/development/improvements/ddil-e2e-test-harness.md);
+the Go helper API lives in
+[`tests/e2e/ddil/harness/`](./ddil/harness/) with the authoritative link
+profile values in [`harness/profiles.go`](./ddil/harness/profiles.go).
+
+Scenarios begin as `t.Skip("requires <dep>")` and are flipped to real
+assertions by the hardening epics they cover (daemon-local-autonomy,
+predastore-ddil-hardening). The status column below is the authoritative
+live state — update it in the same PR that changes the test body.
+`TestCoverageDrift` enforces the letter column against the
+`TestScenario<L>_...` functions in `ddil/scenarios/`.
+
+### Scenarios
+
+| Letter | Scenario | DDIL finding closed | Status |
+|--------|----------|---------------------|--------|
+| A | NATS-only kill (daemon stays up, standalone mode) | Finding 1 | SKIPPED |
+| B | Daemon restart without NATS (recovers from local state) | Finding 1 | SKIPPED |
+| C | Clean cluster-network partition (majority + isolated both progress) | Finding 1/2 | SKIPPED |
+| D | Degraded link under SATCOM profile (fan-out + Raft) | Finding 3 | SKIPPED |
+| E | Predastore write under partition (repair journal drains on heal) | Finding 2 | SKIPPED |
+| F | Raft under SATCOM latency (≤1 election over 5 min) | Finding 3 | SKIPPED |
+
+### Link profile validation
+
+Values in `harness/profiles.go` are unvalidated approximations derived
+from public specifications — real-hardware measurement is deferred until
+SATCOM/HF access is available. Update the last column when a measurement
+lands.
+
+| Profile | Specification source | Validation status | Last measured against real hardware |
+|---------|----------------------|-------------------|-------------------------------------|
+| LAN | baseline | unvalidated | — |
+| WAN | public site-to-site norms | unvalidated | — |
+| LTEDegraded | public congested-cellular norms | unvalidated | — |
+| SATCOM | published GEO SATCOM figures | unvalidated | — |
+| HFData | HF modem specifications | unvalidated | — |
+| Flapping | synthetic (10s up / 5s down) | unvalidated | — |
+
+### Known gaps
+
+- Chaos framework (randomised fault injection, long-running stress) —
+  follow-up plan TBD.
+- Multi-day partition — requires long-running CI infrastructure;
+  follow-up plan TBD.
+- Real-hardware SATCOM/HF validation — follow-up plan TBD.
+- Clock skew injection — no hardening epic claims Finding 7 yet;
+  revisit when one lands.
+- Dual-NIC cluster network — Scenario C uses peer-IP `iptables` rules on
+  the single-NIC tofu-cluster today; dedicated cluster NIC is deferred
+  to `docs/development/improvements/e2e-multinode-dual-nic.md` (TBC).
+- Dockerised per-node pseudo-multinode isolation — candidate under
+  [`docs/development/improvements/docker-e2e-local.md`](../../../docs/development/improvements/docker-e2e-local.md).
+- Full Go migration of the rest of the E2E suite — TBD follow-up to the
+  DDIL harness pilot.

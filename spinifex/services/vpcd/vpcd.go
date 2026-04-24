@@ -70,11 +70,11 @@ type Config struct {
 	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
 	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
 	ExternalInterface string
-	// WanBridge is the OVS bridge name for WAN traffic.
-	// Maps to OVN logical network "external" via ovn-bridge-mappings.
-	// Typically "br-ext" (veth mode linking Linux bridge to OVS) or the
-	// bridge name itself when the default route is already on an OVS bridge.
-	WanBridge string
+	// DhcpBindBridge is the bridge where the DHCP client binds its AF_PACKET
+	// socket. In veth mode this is the Linux bridge that holds the WAN NIC
+	// (e.g. "br-wan"); in direct mode this is the OVS bridge holding the
+	// WAN NIC. Never the OVN-side "br-ext" — that never sees LAN DHCP.
+	DhcpBindBridge string
 	// BridgeMode is "direct", "macvlan", or "veth". Direct bridge adds the WAN
 	// NIC directly to the OVS bridge; macvlan creates a sub-interface; veth uses
 	// a veth pair to link a Linux bridge to OVS. When empty, auto-detected at
@@ -298,20 +298,12 @@ func launchService(cfg *Config) error {
 	defer liveClient.Close()
 	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
-	// Detect bridge mode: if not explicitly configured, auto-detect by checking
-	// whether the WAN bridge has a macvlan port or a physical NIC.
-	bridgeMode := cfg.BridgeMode
-	if bridgeMode == "" && cfg.ExternalInterface != "" {
-		bridgeMode = detectBridgeMode(cfg.ExternalInterface)
+	bridgeMode, dhcpBindBridge := resolveBridgeConfig(cfg.BridgeMode, cfg.ExternalInterface, cfg.DhcpBindBridge)
+	slog.Info("External bridge mode", "mode", bridgeMode, "dhcp_bind_bridge", dhcpBindBridge)
+	if err := verifyBridgeMode(bridgeMode, cfg.ExternalInterface, dhcpBindBridge); err != nil {
+		slog.Error("vpcd: bridge mode sanity check failed", "err", err)
+		return err
 	}
-	if bridgeMode == "" {
-		bridgeMode = BridgeModeMacvlan // default for backward compatibility
-	}
-	wanBridge := cfg.WanBridge
-	if wanBridge == "" {
-		wanBridge = "br-wan"
-	}
-	slog.Info("External bridge mode", "mode", bridgeMode, "wan_bridge", wanBridge)
 
 	// Reconcile OVN topology from bootstrap config before subscribing.
 	// This ensures the default VPC topology exists even if admin init ran
@@ -400,6 +392,11 @@ func launchService(cfg *Config) error {
 		}
 	}()
 
+	// Pass 3: Retrofit localnet options on every external switch. Walks OVN
+	// directly so stale/missing KV records can't hide a stale nat-addresses
+	// or cleared network_name. Idempotent; silent when all correct.
+	topo.RetrofitAllExternalLocalnetOptions(ctx)
+
 	slog.Info("vpcd service started, waiting for VPC lifecycle events",
 		"subscriptions", len(subs), "dhcp_subscriptions", len(dhcpSubs))
 
@@ -412,25 +409,145 @@ func launchService(cfg *Config) error {
 	return nil
 }
 
+// resolveBridgeConfig picks the bridge mode and DHCP-bind-bridge to use,
+// auto-detecting mode when unset. Empty mode stays empty — verifyBridgeMode
+// rejects it with a list of supported values (D12). Empty bind bridge
+// defaults to "br-wan", the consumer-router convention.
+func resolveBridgeConfig(cfgBridgeMode, externalIface, cfgDhcpBindBridge string) (string, string) {
+	bridgeMode := cfgBridgeMode
+	if bridgeMode == "" && externalIface != "" {
+		bridgeMode = detectBridgeMode(externalIface)
+	}
+	dhcpBindBridge := cfgDhcpBindBridge
+	if dhcpBindBridge == "" {
+		dhcpBindBridge = "br-wan"
+	}
+	return bridgeMode, dhcpBindBridge
+}
+
+// ifaceIsMacvlan returns true when the given interface exists and is a
+// macvlan sub-interface. Injected as a var so detectBridgeMode tests can stub
+// it without launching ip(8).
+var ifaceIsMacvlan = func(name string) bool {
+	out, err := exec.Command("ip", "-d", "link", "show", name).CombinedOutput()
+	return err == nil && strings.Contains(string(out), "macvlan")
+}
+
+// ifaceExists returns true when the kernel reports the named link.
+var ifaceExists = func(name string) bool {
+	return exec.Command("ip", "link", "show", name).Run() == nil
+}
+
 // detectBridgeMode checks how the WAN bridge is wired:
 //   - macvlan: spx-ext-{iface} macvlan sub-interface exists
 //   - veth: veth-wan-ovs interface exists (Linux bridge linked to OVS via veth pair)
 //   - direct: physical NIC is added directly to the OVS bridge
+//
+// Each decision point logs at Info so `journalctl -u spinifex-vpcd | grep
+// bridge` surfaces the full trail. The fall-through case logs at Warn — the
+// silent Debug fall-through is what let the veth-persistence bug hide for
+// weeks (mulga-998.b Fix 2).
 func detectBridgeMode(externalIface string) string {
 	macvlanName := "spx-ext-" + externalIface
-	out, err := exec.Command("ip", "-d", "link", "show", macvlanName).CombinedOutput()
-	if err == nil && strings.Contains(string(out), "macvlan") {
-		slog.Debug("vpcd: detected macvlan interface on WAN bridge", "iface", macvlanName)
+	if ifaceIsMacvlan(macvlanName) {
+		slog.Info("vpcd: detected macvlan interface on WAN bridge", "iface", macvlanName, "mode", BridgeModeMacvlan)
 		return BridgeModeMacvlan
 	}
-	// Check for veth pair linking a Linux bridge to OVS (setup-ovn.sh creates
-	// veth-wan-br ↔ veth-wan-ovs when the default route is on a Linux bridge).
-	if _, vethErr := exec.Command("ip", "link", "show", "veth-wan-ovs").CombinedOutput(); vethErr == nil {
-		slog.Debug("vpcd: detected veth pair linking Linux bridge to OVS")
+	if ifaceExists("veth-wan-ovs") {
+		slog.Info("vpcd: detected veth pair linking Linux bridge to OVS", "mode", BridgeModeVeth)
 		return BridgeModeVeth
 	}
-	slog.Debug("vpcd: no macvlan or veth found, assuming direct bridge mode", "checked", macvlanName)
+	slog.Warn("vpcd: no macvlan or veth interface found, assuming direct bridge mode",
+		"external_iface", externalIface, "checked_macvlan", macvlanName, "checked_veth", "veth-wan-ovs",
+		"mode", BridgeModeDirect)
 	return BridgeModeDirect
+}
+
+// portToBr returns the OVS bridge that owns `port`. Returns "" when the port
+// is not in OVSDB. Used by the post-detect sanity checks.
+//
+// Uses Output() (stdout only) because vpcd.service runs with AmbientCapabilities
+// set, which causes sudo's PAM to emit "sudo: unable to send audit message"
+// warnings on stderr. CombinedOutput would merge those into stdout and poison
+// the bridge-name compare.
+var portToBr = func(port string) (string, error) {
+	out, err := sudoCommand("ovs-vsctl", "port-to-br", port).Output()
+	if err != nil {
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("ovs-vsctl port-to-br %s: %s: %w", port, stderr, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// readLinkMaster returns the master of a kernel link by reading
+// /sys/class/net/<iface>/master. Returns "" if the link has no master.
+var readLinkMaster = func(iface string) (string, error) {
+	target, err := os.Readlink(filepath.Join("/sys/class/net", iface, "master"))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Base(target), nil
+}
+
+// verifyBridgeMode is the post-detect sanity check. It refuses to start vpcd
+// when the chosen bridge mode does not match the host plumbing (D4+D18):
+//
+//   - direct: ExternalInterface must be an OVS port on DhcpBindBridge. That is
+//     the whole contract of direct mode.
+//   - veth: (a) veth-wan-ovs must be an OVS port on OvnExternalBridge — the
+//     OVN side, owned by setup-ovn.sh's ovn-bridge-mappings. (b) veth-wan-br
+//     must be enslaved to DhcpBindBridge — the Linux side, where the DHCP
+//     client sees LAN frames.
+//   - empty / unknown: fail with the list of supported values.
+//
+// Fail-start, not soft-degrade — the distributed-NAT-on-veth-host footgun is
+// exactly what this plan set out to kill.
+func verifyBridgeMode(mode, externalIface, dhcpBindBridge string) error {
+	switch mode {
+	case BridgeModeDirect:
+		if externalIface == "" {
+			return fmt.Errorf("vpcd: direct bridge mode requires external_interface (the WAN NIC name)")
+		}
+		if dhcpBindBridge == "" {
+			return fmt.Errorf("vpcd: direct bridge mode requires dhcp_bind_bridge (the OVS bridge holding the WAN NIC)")
+		}
+		br, err := portToBr(externalIface)
+		if err != nil {
+			return fmt.Errorf("vpcd: direct bridge mode: %w", err)
+		}
+		if br != dhcpBindBridge {
+			return fmt.Errorf("vpcd: direct bridge mode: %q is on OVS bridge %q, expected %q (dhcp_bind_bridge)",
+				externalIface, br, dhcpBindBridge)
+		}
+		return nil
+	case BridgeModeVeth:
+		if dhcpBindBridge == "" {
+			return fmt.Errorf("vpcd: veth bridge mode requires dhcp_bind_bridge (the Linux bridge holding the WAN NIC)")
+		}
+		br, err := portToBr("veth-wan-ovs")
+		if err != nil {
+			return fmt.Errorf("vpcd: veth bridge mode: veth-wan-ovs not on OVS — is setup-ovn.sh's veth branch installed and systemd-networkd up? %w", err)
+		}
+		if br != OvnExternalBridge {
+			return fmt.Errorf("vpcd: veth bridge mode: veth-wan-ovs is on OVS bridge %q, expected %q",
+				br, OvnExternalBridge)
+		}
+		master, err := readLinkMaster("veth-wan-br")
+		if err != nil {
+			return fmt.Errorf("vpcd: veth bridge mode: veth-wan-br missing or has no master — systemd-networkd drop-in not applied? %w", err)
+		}
+		if master != dhcpBindBridge {
+			return fmt.Errorf("vpcd: veth bridge mode: veth-wan-br master is %q, expected %q (dhcp_bind_bridge)",
+				master, dhcpBindBridge)
+		}
+		return nil
+	default:
+		return fmt.Errorf("vpcd: unknown bridge_mode %q — supported values: %q, %q",
+			mode, BridgeModeDirect, BridgeModeVeth)
+	}
 }
 
 // setMacvlanMAC sets the MAC address on a macvlan interface. The interface is

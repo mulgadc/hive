@@ -514,12 +514,12 @@ func TestExternalIPAM_DHCPAllocateAndRelease(t *testing.T) {
 	stub.nextIP = "192.168.1.200"
 
 	pool := ExternalPoolConfig{
-		Name:      "wan-dhcp",
-		Source:    "dhcp",
-		Gateway:   "192.168.1.1",
-		GatewayIP: "192.168.1.1", // pre-set so initPool skips gateway DORA
-		PrefixLen: 24,
-		WanBridge: "br-wan",
+		Name:           "wan-dhcp",
+		Source:         "dhcp",
+		Gateway:        "192.168.1.1",
+		GatewayIP:      "192.168.1.1", // pre-set so initPool skips gateway DORA
+		PrefixLen:      24,
+		DhcpBindBridge: "br-wan",
 	}
 	ipam, err := NewExternalIPAM(nc, js, []ExternalPoolConfig{pool})
 	require.NoError(t, err)
@@ -560,7 +560,7 @@ func TestExternalIPAM_DHCPAcquireErrorPropagates(t *testing.T) {
 
 	pool := ExternalPoolConfig{
 		Name: "wan-dhcp-err", Source: "dhcp", Gateway: "192.168.1.1",
-		GatewayIP: "192.168.1.1", PrefixLen: 24, WanBridge: "br-wan",
+		GatewayIP: "192.168.1.1", PrefixLen: 24, DhcpBindBridge: "br-wan",
 	}
 	ipam, err := NewExternalIPAM(nc, js, []ExternalPoolConfig{pool})
 	require.NoError(t, err)
@@ -577,7 +577,7 @@ func TestExternalIPAM_DHCPGatewayFromLease(t *testing.T) {
 
 	pool := ExternalPoolConfig{
 		Name: "wan-dhcp-gw", Source: "dhcp", Gateway: "192.168.3.1",
-		PrefixLen: 24, WanBridge: "br-wan",
+		PrefixLen: 24, DhcpBindBridge: "br-wan",
 		// GatewayIP intentionally empty — initPool must pull it from DHCP.
 	}
 	_, err := NewExternalIPAM(nc, js, []ExternalPoolConfig{pool})
@@ -683,7 +683,7 @@ func TestExternalIPAM_DHCPGatewayErrorPropagates(t *testing.T) {
 
 	pool := ExternalPoolConfig{
 		Name: "wan-gw-err", Source: "dhcp", Gateway: "192.168.1.1",
-		PrefixLen: 24, WanBridge: "br-wan",
+		PrefixLen: 24, DhcpBindBridge: "br-wan",
 	}
 	_, err := NewExternalIPAM(nc, js, []ExternalPoolConfig{pool})
 	require.Error(t, err)
@@ -698,7 +698,7 @@ func TestExternalIPAM_DHCPReleaseErrorIsNonFatal(t *testing.T) {
 
 	pool := ExternalPoolConfig{
 		Name: "wan-rel-err", Source: "dhcp", Gateway: "192.168.1.1",
-		GatewayIP: "192.168.1.1", PrefixLen: 24, WanBridge: "br-wan",
+		GatewayIP: "192.168.1.1", PrefixLen: 24, DhcpBindBridge: "br-wan",
 	}
 	ipam, err := NewExternalIPAM(nc, js, []ExternalPoolConfig{pool})
 	require.NoError(t, err)

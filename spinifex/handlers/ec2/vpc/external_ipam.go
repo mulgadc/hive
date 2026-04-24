@@ -51,16 +51,16 @@ type ExternalIPAMRecord struct {
 
 // ExternalPoolConfig is the admin-defined pool from spinifex.toml.
 type ExternalPoolConfig struct {
-	Name       string
-	Source     string // "static" (default) or "dhcp"
-	RangeStart string
-	RangeEnd   string
-	Gateway    string
-	GatewayIP  string
-	PrefixLen  int
-	Region     string
-	AZ         string
-	WanBridge  string // OVS bridge for DHCP leases (e.g. "br-ext")
+	Name           string
+	Source         string // "static" (default) or "dhcp"
+	RangeStart     string
+	RangeEnd       string
+	Gateway        string
+	GatewayIP      string
+	PrefixLen      int
+	Region         string
+	AZ             string
+	DhcpBindBridge string // Bridge where the DHCP AF_PACKET socket binds (e.g. "br-wan"). Linux bridge in veth mode; OVS bridge in direct mode. Never "br-ext".
 }
 
 // IsDHCP returns true if this pool obtains IPs from router DHCP.
@@ -133,7 +133,7 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	// refreshed until the pool is torn down.
 	var gatewayLease *dhcpLeaseResult
 	if gwIP == "" && pool.IsDHCP() {
-		lease, dhcpErr := ObtainDHCPLease(m.nc, pool.WanBridge,
+		lease, dhcpErr := ObtainDHCPLease(m.nc, pool.DhcpBindBridge,
 			"gateway-"+pool.Name,
 			"gateway-"+pool.Name,
 			"mulga-spinifex-gw",
@@ -226,7 +226,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 	var dhcpLease *dhcpLeaseResult
 	if pool != nil && pool.IsDHCP() {
 		hostname, vendorClass := dhcpIdentityOptions(eniID, instanceID, poolName)
-		lease, err := ObtainDHCPLease(m.nc, pool.WanBridge, clientID, hostname, vendorClass, poolName)
+		lease, err := ObtainDHCPLease(m.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, poolName)
 		if err != nil {
 			return "", fmt.Errorf("DHCP lease for %s: %w", clientID, err)
 		}
