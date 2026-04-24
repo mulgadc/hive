@@ -162,6 +162,9 @@ dump_nginx_alb_diagnostics() {
     log "  --- viperblock: AccessDenied / nbdkit / zero-data errors ---"
     sudo journalctl -u spinifex-viperblock --since '15 min ago' --no-pager 2>/dev/null | \
         grep -iE 'AccessDenied|signature does not match|nbdkit|Broken pipe|NBDKit exited|zero data' | tail -60 || true
+    log "  --- predastore: SigV4 mismatches (canonicalRequest dump) ---"
+    sudo journalctl -u spinifex-predastore --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'SigV4 signature mismatch|AccessDenied' | tail -40 || true
     log "  --- awsgw: errors ---"
     sudo journalctl -u spinifex-awsgw --since '15 min ago' --no-pager 2>/dev/null | \
         grep -iE 'level=error|InternalError|status":5' | tail -40 || true
