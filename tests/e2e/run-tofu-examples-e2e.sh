@@ -133,7 +133,22 @@ dump_nginx_alb_diagnostics() {
     if [ -n "$alb_ip" ]; then
         log "  --- curl -v http://${alb_ip}/ (final attempt) ---"
         curl -vk --max-time 10 "http://${alb_ip}/" 2>&1 | head -100 || true
+        log "  --- TCP probes to ALB IP (is the VM even reachable?) ---"
+        for port in 22 80 443 8080; do
+            if timeout 3 bash -c "</dev/tcp/${alb_ip}/${port}" 2>/dev/null; then
+                log "    ${alb_ip}:${port} open"
+            else
+                log "    ${alb_ip}:${port} closed/filtered"
+            fi
+        done
+        log "  --- ping ${alb_ip} (3 packets) ---"
+        ping -c 3 -W 2 "$alb_ip" 2>&1 | tail -10 || true
     fi
+
+    log "  --- spx get vms (all VMs, including system) ---"
+    sudo -u spinifex-daemon spx get vms 2>&1 | head -50 || \
+        spx get vms 2>&1 | head -50 || \
+        log "    spx get vms unavailable"
 
     log "  --- elbv2 system instances (spinifex:managed-by=elbv2) ---"
     aws ec2 describe-instances \
@@ -173,9 +188,12 @@ dump_nginx_alb_diagnostics() {
             fi
         done
     fi
-    log "  --- daemon: lb-agent-specific lines ---"
+    log "  --- daemon: lb-agent / elbv2 lines ---"
     sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
-        grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed|failed launch' | tail -80 || true
+        grep -iE 'LB agent gateway URL|LBAgentHeartbeat|lbagent|lb-agent|healthrep|target health changed|failed launch|elbv2|ELBv2|GetLBConfig|CreateListener|RegisterTargets|CreateLoadBalancer|LaunchSystemInstance|system instance|dnat_and_snat|floating.?ip' | tail -120 || true
+    log "  --- daemon: NATS subject activity (last 15 min) ---"
+    sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
+        grep -iE 'subject=|topic=|nats.*elbv2|nats.*ec2\.' | tail -40 || true
     log "  --- daemon: errors/panics/fatal since workbook started ---"
     sudo journalctl -u spinifex-daemon --since '15 min ago' --no-pager 2>/dev/null | \
         grep -iE 'panic|fatal|ERROR|level=error' | tail -80 || true
