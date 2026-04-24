@@ -1,7 +1,7 @@
 [Unit]
 Description=Spinifex VPC Daemon (OVN Networking)
 PartOf=spinifex.target
-After=spinifex-nats.service spinifex-daemon.service
+After=spinifex-nats.service spinifex-daemon.service systemd-networkd.service openvswitch-switch.service
 Wants=spinifex-nats.service
 
 [Service]

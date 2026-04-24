@@ -107,6 +107,16 @@ if ip link show veth-wan-br >/dev/null 2>&1; then
     sudo ip link del veth-wan-br 2>/dev/null || true
 fi
 
+# Remove veth persistence units (Fix 1, mulga-998.b). Without this, systemd-networkd
+# recreates the veth on next reboot even after a full dev reset.
+if [ -e /etc/systemd/network/15-spinifex-veth-wan.netdev ] || \
+   [ -e /etc/systemd/network/15-spinifex-veth-wan.network ]; then
+    echo "  Deleting veth persistence units"
+    sudo rm -f /etc/systemd/network/15-spinifex-veth-wan.netdev \
+               /etc/systemd/network/15-spinifex-veth-wan.network
+    sudo networkctl reload 2>/dev/null || true
+fi
+
 # Remove macvlan interfaces created by setup-ovn.sh
 for iface in $(ip -o link show type macvlan 2>/dev/null | awk -F': ' '{print $2}' | grep '^spx-ext-'); do
     echo "  Deleting macvlan: $iface"
