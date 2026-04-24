@@ -47,6 +47,13 @@ func discover(sysfsRoot string) ([]GPUDevice, error) {
 		vendorID := normHex(vendorRaw)
 		deviceID := normHex(deviceRaw)
 
+		// Only NVIDIA and AMD GPUs are eligible for VFIO passthrough.
+		// Intel iGPUs are the host's primary display and must stay on the host driver.
+		if vendorID != "10de" && vendorID != "1002" {
+			slog.Debug("gpu discover: skipping non-passthrough vendor", "addr", entry.Name(), "vendor", vendorID)
+			continue
+		}
+
 		group, err := readIOMMUGroup(devPath)
 		if err != nil {
 			slog.Debug("gpu discover: IOMMU group unavailable", "addr", entry.Name(), "err", err)
@@ -68,8 +75,12 @@ func discover(sysfsRoot string) ([]GPUDevice, error) {
 		}
 
 		// Enrich model name and VRAM from the built-in table, then try
-		// vendor-specific tools for a more precise value.
+		// lspci (PCI ID database) for cards not in the table, then
+		// nvidia-smi for precise VRAM on NVIDIA cards.
 		gpu.Model, gpu.MemoryMiB = lookupModel(vendorID, deviceID)
+		if gpu.Model == "" {
+			enrichFromLspci(&gpu)
+		}
 		if gpu.Model == "" {
 			gpu.Model = fmt.Sprintf("Unknown GPU %s:%s", vendorID, deviceID)
 		}
@@ -83,6 +94,23 @@ func discover(sysfsRoot string) ([]GPUDevice, error) {
 
 	slog.Debug("gpu discover: found GPUs", "count", len(gpus))
 	return gpus, nil
+}
+
+// enrichFromLspci attempts to populate Model from the system PCI ID database
+// via lspci -vmm. This covers any card known to the database without needing
+// vendor-specific tools or a hardcoded table.
+func enrichFromLspci(g *GPUDevice) {
+	out, err := exec.Command("lspci", "-vmm", "-s", g.PCIAddress).Output()
+	if err != nil {
+		return
+	}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		name, ok := strings.CutPrefix(line, "Device:\t")
+		if ok && strings.TrimSpace(name) != "" {
+			g.Model = strings.TrimSpace(name)
+			return
+		}
+	}
 }
 
 // enrichNVIDIA attempts to populate Model and MemoryMiB from nvidia-smi.
