@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -926,4 +927,53 @@ func ParsePredastoreNodeIDFromConfig(tomlContent string, ip string) int {
 		return 0
 	}
 	return FindNodeIDByIP(cfg.DB, ip)
+}
+
+// SetGPUPassthrough idempotently writes gpu_passthrough = <enabled> for the
+// given node into spinifex.toml, preserving all other content and comments.
+// Returns nil without touching the file if the setting is already correct.
+func SetGPUPassthrough(tomlPath, node string, enabled bool) error {
+	raw, err := os.ReadFile(tomlPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", tomlPath, err)
+	}
+	text := string(raw)
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+
+	sectionPat := `\[nodes\.` + regexp.QuoteMeta(node) + `\.daemon\]`
+
+	// Already correct — no-op.
+	alreadyOK := regexp.MustCompile(
+		sectionPat + `(?:(?!\[)[\s\S])*?gpu_passthrough\s*=\s*` + value,
+	)
+	if alreadyOK.MatchString(text) {
+		return nil
+	}
+
+	// Setting exists with the wrong value — flip it.
+	flipRe := regexp.MustCompile(`(gpu_passthrough\s*=\s*)(?:true|false)`)
+	if flipRe.MatchString(text) {
+		replaced := false
+		text = flipRe.ReplaceAllStringFunc(text, func(m string) string {
+			if replaced {
+				return m
+			}
+			replaced = true
+			return "gpu_passthrough = " + value
+		})
+	} else if regexp.MustCompile(sectionPat).MatchString(text) {
+		// [nodes.N.daemon] section exists, key absent — add after header.
+		text = regexp.MustCompile(sectionPat).ReplaceAllString(
+			text, "$0\ngpu_passthrough = "+value,
+		)
+	} else {
+		// No daemon section at all — append one.
+		text = strings.TrimRight(text, "\n") +
+			"\n\n[nodes." + node + ".daemon]\ngpu_passthrough = " + value + "\n"
+	}
+
+	return os.WriteFile(tomlPath, []byte(text), 0600)
 }
