@@ -1017,7 +1017,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		ExternalMode:   externalMode,
 		ExternalIface:  externalIface,
-		WanBridge:      detectedWanBridge(detectedNet),
+		DhcpBindBridge: detectedDhcpBindBridge(detectedNet),
 		ExternalDHCP:   useExternalDHCP,
 		PoolName:       "wan",
 		PoolSource:     externalSource,
@@ -2007,7 +2007,7 @@ func applyNetworkConfig(settings *admin.ConfigSettings, nc *formation.NetworkCon
 		detected, err := admin.DetectNetwork()
 		if err == nil && detected.WAN != nil {
 			settings.ExternalIface = detected.WAN.Name
-			settings.WanBridge = detectedWanBridge(detected)
+			settings.DhcpBindBridge = detectedDhcpBindBridge(detected)
 		}
 	}
 }
@@ -2095,23 +2095,25 @@ func writeBootstrapFilesWithAdmin(configDir, bootstrapDir string, masterKey []by
 	return handlers_iam.SaveBootstrapData(filepath.Join(bootstrapDir, "bootstrap.json"), bd)
 }
 
-// detectedWanBridge returns the OVS bridge name that OVN bridge-mappings should
-// use for WAN traffic. If the WAN interface is already an OVS bridge, returns
-// its name directly. If it's a Linux bridge, returns "br-ext" — setup-ovn.sh
-// will create this OVS bridge and link it to the Linux bridge via a veth pair.
-// If it's a physical NIC, returns "br-wan" as the default.
-func detectedWanBridge(detected *admin.DetectedNetwork) string {
+// detectedDhcpBindBridge returns the bridge name where the vpcd DHCP client
+// should bind its AF_PACKET socket — i.e. the interface that physically sees
+// LAN DHCP traffic.
+//
+//   - Default route on a bridge (Linux or OVS, `br-*` prefix): return the
+//     bridge name verbatim. In veth mode this is the Linux bridge holding the
+//     WAN NIC; in direct mode this is the OVS bridge holding the WAN NIC.
+//   - Default route on a bare physical NIC: return "br-wan" as the name the
+//     installer will create.
+//
+// Never returns "br-ext". br-ext is the OVN-side bridge owned by
+// setup-ovn.sh's ovn-bridge-mappings and never sees LAN DHCP frames.
+func detectedDhcpBindBridge(detected *admin.DetectedNetwork) string {
 	if detected == nil || detected.WAN == nil {
 		return ""
 	}
 	name := detected.WAN.Name
 	if strings.HasPrefix(name, "br-") {
-		// Check if it's an OVS bridge (use directly) or Linux bridge (need br-ext)
-		if out, err := exec.Command("sudo", "ovs-vsctl", "br-exists", name).CombinedOutput(); err == nil && len(out) == 0 {
-			return name // OVS bridge — use directly
-		}
-		// Linux bridge — setup-ovn.sh creates br-ext + veth pair
-		return "br-ext"
+		return name
 	}
 	return "br-wan"
 }

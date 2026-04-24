@@ -68,11 +68,11 @@ type Config struct {
 	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
 	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
 	ExternalInterface string
-	// WanBridge is the OVS bridge name for WAN traffic.
-	// Maps to OVN logical network "external" via ovn-bridge-mappings.
-	// Typically "br-ext" (veth mode linking Linux bridge to OVS) or the
-	// bridge name itself when the default route is already on an OVS bridge.
-	WanBridge string
+	// DhcpBindBridge is the bridge where the DHCP client binds its AF_PACKET
+	// socket. In veth mode this is the Linux bridge that holds the WAN NIC
+	// (e.g. "br-wan"); in direct mode this is the OVS bridge holding the
+	// WAN NIC. Never the OVN-side "br-ext" — that never sees LAN DHCP.
+	DhcpBindBridge string
 	// BridgeMode is "direct", "macvlan", or "veth". Direct bridge adds the WAN
 	// NIC directly to the OVS bridge; macvlan creates a sub-interface; veth uses
 	// a veth pair to link a Linux bridge to OVS. When empty, auto-detected at
@@ -305,11 +305,11 @@ func launchService(cfg *Config) error {
 	if bridgeMode == "" {
 		bridgeMode = BridgeModeMacvlan // default for backward compatibility
 	}
-	wanBridge := cfg.WanBridge
-	if wanBridge == "" {
-		wanBridge = "br-wan"
+	dhcpBindBridge := cfg.DhcpBindBridge
+	if dhcpBindBridge == "" {
+		dhcpBindBridge = "br-wan"
 	}
-	slog.Info("External bridge mode", "mode", bridgeMode, "wan_bridge", wanBridge)
+	slog.Info("External bridge mode", "mode", bridgeMode, "dhcp_bind_bridge", dhcpBindBridge)
 
 	// Reconcile OVN topology from bootstrap config before subscribing.
 	// This ensures the default VPC topology exists even if admin init ran

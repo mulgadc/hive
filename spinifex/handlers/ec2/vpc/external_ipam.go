@@ -43,16 +43,16 @@ type ExternalIPAMRecord struct {
 
 // ExternalPoolConfig is the admin-defined pool from spinifex.toml.
 type ExternalPoolConfig struct {
-	Name       string
-	Source     string // "static" (default) or "dhcp"
-	RangeStart string
-	RangeEnd   string
-	Gateway    string
-	GatewayIP  string
-	PrefixLen  int
-	Region     string
-	AZ         string
-	WanBridge  string // OVS bridge for DHCP leases (e.g. "br-ext")
+	Name           string
+	Source         string // "static" (default) or "dhcp"
+	RangeStart     string
+	RangeEnd       string
+	Gateway        string
+	GatewayIP      string
+	PrefixLen      int
+	Region         string
+	AZ             string
+	DhcpBindBridge string // Bridge where the DHCP AF_PACKET socket binds (e.g. "br-wan"). Linux bridge in veth mode; OVS bridge in direct mode. Never "br-ext".
 }
 
 // IsDHCP returns true if this pool obtains IPs from router DHCP.
@@ -115,7 +115,7 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 
 	// For DHCP pools, obtain the gateway IP from router DHCP if not set
 	if gwIP == "" && pool.IsDHCP() {
-		dhcpIP, dhcpErr := ObtainDHCPLease(pool.WanBridge, "gateway-"+pool.Name)
+		dhcpIP, dhcpErr := ObtainDHCPLease(pool.DhcpBindBridge, "gateway-"+pool.Name)
 		if dhcpErr != nil {
 			return fmt.Errorf("DHCP gateway lease for pool %q: %w", pool.Name, dhcpErr)
 		}
@@ -196,7 +196,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 
 		var ip string
 		if pool != nil && pool.IsDHCP() {
-			ip, err = ObtainDHCPLease(pool.WanBridge, clientID)
+			ip, err = ObtainDHCPLease(pool.DhcpBindBridge, clientID)
 			if err != nil {
 				return "", fmt.Errorf("DHCP lease for %s: %w", clientID, err)
 			}
@@ -223,7 +223,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 		if _, err := m.kv.Update(poolName, data, revision); err != nil {
 			// CAS conflict — if we obtained a DHCP lease, release it before retrying
 			if pool != nil && pool.IsDHCP() {
-				_ = ReleaseDHCPLease(pool.WanBridge, clientID)
+				_ = ReleaseDHCPLease(pool.DhcpBindBridge, clientID)
 			}
 			slog.Debug("external IPAM CAS conflict, retrying", "pool", poolName, "attempt", attempt)
 			continue
@@ -260,7 +260,7 @@ func (m *ExternalIPAM) ReleaseIP(poolName, ip string) error {
 			if clientID == "" {
 				clientID = alloc.InstanceId
 			}
-			if releaseErr := ReleaseDHCPLease(pool.WanBridge, clientID); releaseErr != nil {
+			if releaseErr := ReleaseDHCPLease(pool.DhcpBindBridge, clientID); releaseErr != nil {
 				slog.Warn("Failed to release DHCP lease", "pool", poolName, "ip", ip, "err", releaseErr)
 			}
 		}
