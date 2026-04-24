@@ -219,12 +219,7 @@ if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" = "None" ]; then
 fi
 log "Using instance_type=${INSTANCE_TYPE}"
 
-# nginx-alb is disabled pending: (1) vpcd port-group live OVN client
-# (CreatePortGroup/AddACL not yet implemented → SG rules are no-ops),
-# (2) viperblock zero-write block-alignment bug that crashes lb-agent boot,
-# (3) external-IP allocator reusing an ENI EIP for the ALB. Re-enable once
-# those land.
-for workbook in bastion-private-subnet nginx-webserver s3-webapp; do
+for workbook in bastion-private-subnet nginx-webserver nginx-alb s3-webapp; do
     if ! run_workbook "$workbook"; then
         log "FAIL ${workbook} — aborting remaining workbooks"
         exit 1
