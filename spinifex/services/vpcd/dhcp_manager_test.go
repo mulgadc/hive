@@ -323,6 +323,64 @@ func TestDHCPManager_JitterWithinBounds(t *testing.T) {
 	}
 }
 
+func TestNewDHCPManager_RejectsNilDeps(t *testing.T) {
+	_, nc, js := testutil.StartTestJetStream(t)
+
+	_, err := NewDHCPManager(nil, js, dhcp.NewFake())
+	require.ErrorContains(t, err, "nats.Conn is required")
+
+	_, err = NewDHCPManager(nc, nil, dhcp.NewFake())
+	require.ErrorContains(t, err, "JetStreamContext is required")
+
+	_, err = NewDHCPManager(nc, js, nil)
+	require.ErrorContains(t, err, "dhcp.Client is required")
+}
+
+func TestDHCPManager_OptionsApply(t *testing.T) {
+	_, nc, js := testutil.StartTestJetStream(t)
+
+	customMAC := func(string) net.HardwareAddr {
+		mac, _ := net.ParseMAC("02:de:ad:be:ef:01")
+		return mac
+	}
+	m, err := NewDHCPManager(nc, js, dhcp.NewFake(),
+		WithDHCPMACFunc(customMAC),
+		WithDHCPAcquireTimeout(1*time.Second),
+		WithDHCPJitterFraction(0.05),
+	)
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+	require.Equal(t, time.Second, m.acquireTimeout)
+	require.InDelta(t, 0.05, m.jitterFraction, 0.0001)
+	require.Equal(t, "02:de:ad:be:ef:01", m.macForClientID("anything").String())
+}
+
+func TestDHCPManager_BootstrapEmptyBucket(t *testing.T) {
+	_, nc, js := testutil.StartTestJetStream(t)
+	m, err := NewDHCPManager(nc, js, dhcp.NewFake())
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+
+	// No leases in KV → Bootstrap is a clean no-op.
+	require.NoError(t, m.Bootstrap(context.Background()))
+}
+
+func TestDHCPManager_JitterWithZeroFractionReturnsInput(t *testing.T) {
+	_, nc, js := testutil.StartTestJetStream(t)
+	m, err := NewDHCPManager(nc, js, dhcp.NewFake(), WithDHCPJitterFraction(0))
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+	require.Equal(t, 100*time.Millisecond, m.jitter(100*time.Millisecond))
+	require.Equal(t, time.Duration(0), m.jitter(0))
+}
+
+func TestDHCPManager_ClassifyRenewErr(t *testing.T) {
+	require.Equal(t, "unknown", classifyRenewErr(nil))
+	require.Equal(t, "nak", classifyRenewErr(errors.New("got NAK from server")))
+	require.Equal(t, "server_unreachable", classifyRenewErr(errors.New("i/o timeout")))
+	require.Equal(t, "renew_failed", classifyRenewErr(errors.New("something else")))
+}
+
 func TestDHCPManager_EncodeDecodeLeaseRoundTrip(t *testing.T) {
 	mac, _ := net.ParseMAC("02:00:00:de:ad:be")
 	in := &dhcp.Lease{

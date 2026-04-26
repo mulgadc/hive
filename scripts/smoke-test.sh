@@ -53,7 +53,7 @@ if [ ! -f "$SSH_KEY.pub" ]; then
 fi
 
 echo "==> Importing SSH key"
-aws ec2 import-key-pair --key-name spinifex-key \
+! aws ec2 import-key-pair --key-name spinifex-key \
     --public-key-material "fileb://$SSH_KEY.pub"
 aws ec2 describe-key-pairs
 
@@ -93,9 +93,12 @@ if [[ "$TEST_GPU" == "1" ]]; then
 fi
 
 # --- Import AMI ---
+# --- Import AMI ---
 echo "==> Importing AMI"
+
 LOCAL_IMAGE="$HOME/images/ubuntu-24.04.img"
 ARCH=$(uname -m)
+
 case "$ARCH" in
     x86_64)        IMG_ARCH="x86_64"; IMAGE_NAME="ubuntu-24.04-x86_64" ;;
     aarch64|arm64) IMG_ARCH="arm64";  IMAGE_NAME="ubuntu-24.04-arm64"  ;;
@@ -105,13 +108,23 @@ case "$ARCH" in
         ;;
 esac
 
-if [ -f "$LOCAL_IMAGE" ]; then
-    echo "  Using local image: $LOCAL_IMAGE"
-    sudo /usr/local/bin/spx admin images import \
-        --file "$LOCAL_IMAGE" --distro ubuntu --version 24.04 --arch "$IMG_ARCH"
+AMI_NAME="ami-${IMAGE_NAME}"
+
+EXISTING_AMI_ID=$(aws ec2 describe-images \
+    --query "Images[?Name=='${AMI_NAME}'] | [0].ImageId" \
+    --output text)
+
+if [ -n "$EXISTING_AMI_ID" ] && [ "$EXISTING_AMI_ID" != "None" ]; then
+    echo "  AMI already exists, skipping import: $AMI_NAME ($EXISTING_AMI_ID)"
 else
-    echo "  Downloading image: $IMAGE_NAME"
-    sudo /usr/local/bin/spx admin images import --name "$IMAGE_NAME"
+    if [ -f "$LOCAL_IMAGE" ]; then
+        echo "  Using local image: $LOCAL_IMAGE"
+        sudo /usr/local/bin/spx admin images import \
+            --file "$LOCAL_IMAGE" --distro ubuntu --version 24.04 --arch "$IMG_ARCH"
+    else
+        echo "  Downloading image: $IMAGE_NAME"
+        sudo /usr/local/bin/spx admin images import --name "$IMAGE_NAME"
+    fi
 fi
 
 # --- Launch smoke-test instance ---
@@ -124,7 +137,10 @@ else
     INSTANCE_TYPE="t3.small"
 fi
 
-AMI_ID=$(aws ec2 describe-images --query "Images[0].ImageId" --output text)
+AMI_ID=$(aws ec2 describe-images \
+    --query "Images[?Name=='${AMI_NAME}'] | [0].ImageId" \
+    --output text)
+
 if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
     echo "❌ No AMI found"
     exit 1

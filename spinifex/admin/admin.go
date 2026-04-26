@@ -49,6 +49,9 @@ type ConfigSettings struct {
 	Az     string
 	Port   string
 	BindIP string
+	// AdvertiseIP is the off-host dial target rendered into the local node's
+	// [nodes.X].advertise field. Empty → callers fall back to BindIP.
+	AdvertiseIP string
 
 	// Cluster settings
 	ClusterBindIP string
@@ -69,7 +72,7 @@ type ConfigSettings struct {
 	// External networking for public subnets
 	ExternalMode   string   // "pool" or "" (disabled)
 	ExternalIface  string   // WAN NIC name (e.g., "eth0", "eth1")
-	WanBridge      string   // OVS bridge for WAN traffic (default "br-wan")
+	DhcpBindBridge string   // Bridge where the DHCP AF_PACKET socket binds (Linux bridge in veth mode, OVS bridge in direct mode; never "br-ext")
 	ExternalDHCP   bool     // Obtain gateway IP via DHCP on macvlan/bridge
 	PoolName       string   // External pool name (e.g., "wan")
 	PoolSource     string   // IP source: "static" (default) or "dhcp" (from router DHCP)
@@ -794,9 +797,14 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 }
 
 // SetupAWSCredentials updates ~/.aws/credentials and ~/.aws/config.
-// bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", defaults to "localhost".
+// bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", the
+// operator's local ~/.aws/config endpoint_url falls back to "localhost" (this
+// runs on the same box as the gateway). wanIP is reserved for a future
+// --operator-endpoint flag that will let remote operators point their CLI at
+// the host's WAN IP; today it is accepted but unused.
 // When running under sudo, writes to SUDO_USER's home instead of root's.
-func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) error {
+func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP, wanIP string) error {
+	_ = wanIP
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err

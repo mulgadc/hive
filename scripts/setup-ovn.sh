@@ -20,6 +20,10 @@
 #   --macvlan            Create macvlan off --wan-iface instead of moving NIC directly.
 #                        SSH-safe for single-NIC hosts where WAN NIC carries SSH.
 #   --dhcp               Obtain gateway IP via DHCP on the WAN bridge interface
+#   --mgmt-bridge=NAME   OVS bridge for system-instance control plane (default: br-mgmt)
+#   --mgmt-cidr=CIDR     IPv4 CIDR to assign on the mgmt bridge (default: 10.15.8.1/24)
+#   --mgmt-iface=NAME    Physical/virtual NIC to enslave to the mgmt bridge (multi-node only)
+#   --no-mgmt-bridge     Skip mgmt bridge provisioning (for dev-networking hosts)
 #   --ovn-remote=ADDR    OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip=IP        Geneve tunnel endpoint IP (default: auto-detect)
 #   --chassis-id=ID      OVN chassis identifier (default: chassis-$(hostname -s))
@@ -55,6 +59,10 @@ WAN_BRIDGE=""
 WAN_IFACE=""
 MACVLAN_MODE=false
 EXTERNAL_DHCP=false
+MGMT_BRIDGE_ENABLED=true
+MGMT_BRIDGE="br-mgmt"
+MGMT_CIDR="10.15.8.1/24"
+MGMT_IFACE=""
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
 CHASSIS_ID=""
@@ -67,11 +75,15 @@ for arg in "$@"; do
         --dhcp)             EXTERNAL_DHCP=true ;;
         --wan-bridge=*)     WAN_BRIDGE="${arg#*=}" ;;
         --wan-iface=*)      WAN_IFACE="${arg#*=}" ;;
+        --mgmt-bridge=*)    MGMT_BRIDGE="${arg#*=}" ;;
+        --mgmt-cidr=*)      MGMT_CIDR="${arg#*=}" ;;
+        --mgmt-iface=*)     MGMT_IFACE="${arg#*=}" ;;
+        --no-mgmt-bridge)   MGMT_BRIDGE_ENABLED=false ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
         --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
         --chassis-id=*)     CHASSIS_ID="${arg#*=}" ;;
         --help|-h)
-            head -44 "$0" | tail -42
+            head -50 "$0" | tail -48
             exit 0
             ;;
         *)
@@ -293,6 +305,20 @@ if [ -n "$WAN_BRIDGE" ]; then
     echo ""
     echo "Step 3b: Configuring WAN bridge ($WAN_BRIDGE) for public subnet uplink..."
 
+    # Rip down any stale veth persistence from a previous veth-mode install
+    # when switching to any non-veth mode. Idempotent — each command uses
+    # --if-exists / 2>/dev/null to tolerate absence. Without this, the
+    # veth pair re-materialises on reboot and fights the current mode's
+    # bridge plumbing (Fix 1, mulga-998.b, per D17).
+    if [ "$WAN_BRIDGE_MODE" != "veth" ]; then
+        sudo rm -f /etc/systemd/network/15-spinifex-veth-wan.netdev \
+                   /etc/systemd/network/15-spinifex-veth-wan.network \
+                   /etc/systemd/network/16-spinifex-veth-wan-ovs.network
+        sudo networkctl reload 2>/dev/null || true
+        sudo ovs-vsctl --if-exists del-port "$WAN_BRIDGE" veth-wan-ovs
+        sudo ip link del veth-wan-br 2>/dev/null || true
+    fi
+
     case "$WAN_BRIDGE_MODE" in
         existing)
             # Already an OVS bridge (from a previous run or explicit --wan-bridge).
@@ -345,6 +371,47 @@ if [ -n "$WAN_BRIDGE" ]; then
 
             echo "  $LINUX_BRIDGE (Linux) ↔ veth pair ↔ $WAN_BRIDGE (OVS)"
             echo "  $LINUX_BRIDGE keeps its IP and routes — no interruption"
+
+            # Persist the veth pair across reboot via systemd-networkd. Veths
+            # are kernel-only and vanish on reboot; without persistence vpcd
+            # starts with the OVS port pointing at a nonexistent peer and
+            # silently falls back to direct mode (Fix 1, mulga-998.b).
+            VETH_NETDEV="/etc/systemd/network/15-spinifex-veth-wan.netdev"
+            VETH_NETWORK="/etc/systemd/network/15-spinifex-veth-wan.network"
+            VETH_OVS_NETWORK="/etc/systemd/network/16-spinifex-veth-wan-ovs.network"
+            sudo tee "$VETH_NETDEV" >/dev/null <<NETDEV
+[NetDev]
+Name=veth-wan-br
+Kind=veth
+
+[Peer]
+Name=veth-wan-ovs
+NETDEV
+            sudo tee "$VETH_NETWORK" >/dev/null <<NETWORK
+[Match]
+Name=veth-wan-br
+
+[Network]
+Bridge=$LINUX_BRIDGE
+ConfigureWithoutCarrier=yes
+NETWORK
+            # Second unit admin-ups the OVS end of the pair. OVS owns the port
+            # (enslaved via ovs-vsctl add-port above) but does not flip admin
+            # state on external ports — that's networkd's job. Without this,
+            # veth-wan-ovs stays DOWN after reboot, peer goes LOWERLAYERDOWN,
+            # br-wan loses carrier (Fix 1 follow-up, mulga-998.b).
+            sudo tee "$VETH_OVS_NETWORK" >/dev/null <<NETWORK
+[Match]
+Name=veth-wan-ovs
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+ConfigureWithoutCarrier=yes
+NETWORK
+            sudo networkctl reload 2>/dev/null || true
+            echo "  wrote $VETH_NETDEV + $VETH_NETWORK + $VETH_OVS_NETWORK (veth persists on reboot)"
             ;;
 
         direct)
@@ -448,6 +515,59 @@ if [ -n "$WAN_BRIDGE" ]; then
             echo "  WARNING: DHCP failed to obtain IP on $DHCP_IFACE"
             echo "  VMs will not have external connectivity until gateway_ip is configured"
         fi
+    fi
+fi
+
+# --- Step 3d: Management bridge for system-instance control plane ---
+# br-mgmt is an OVS bridge (not L2-learning Linux bridge, not part of OVN
+# overlay). fail-mode=standalone makes it behave like a plain L2 switch
+# without OVN flows; it is excluded from ovn-bridge-mappings so
+# ovn-controller ignores it. System instance TAPs attach via ovs-vsctl
+# add-port (see SetupMgmtTapDevice in daemon/network.go).
+if [ "$MGMT_BRIDGE_ENABLED" = true ]; then
+    echo ""
+    echo "Step 3d: Configuring management bridge ($MGMT_BRIDGE)..."
+
+    sudo ovs-vsctl --may-exist add-br "$MGMT_BRIDGE"
+    sudo ovs-vsctl set Bridge "$MGMT_BRIDGE" \
+        fail-mode=standalone \
+        other-config:disable-in-band=true
+    sudo ip link set "$MGMT_BRIDGE" up
+    echo "  $MGMT_BRIDGE: OVS bridge, fail-mode=standalone, up"
+
+    # Enslave physical/virtual mgmt NIC when provided (multi-node deployments
+    # where the node's mgmt subnet spans multiple hosts).
+    if [ -n "$MGMT_IFACE" ]; then
+        if ! ip link show "$MGMT_IFACE" >/dev/null 2>&1; then
+            echo "  ERROR: mgmt interface $MGMT_IFACE does not exist"
+            ip -o link show | awk -F': ' '{print "    " $2}'
+            exit 1
+        fi
+
+        # Drop any existing IP on the NIC — IP belongs on the bridge.
+        sudo ip addr flush dev "$MGMT_IFACE" || true
+        sudo ovs-vsctl --may-exist add-port "$MGMT_BRIDGE" "$MGMT_IFACE"
+        sudo ip link set "$MGMT_IFACE" up
+        echo "  $MGMT_IFACE: port on $MGMT_BRIDGE"
+    fi
+
+    if [ -n "$MGMT_CIDR" ]; then
+        sudo ip addr replace "$MGMT_CIDR" dev "$MGMT_BRIDGE"
+        echo "  $MGMT_BRIDGE: address $MGMT_CIDR"
+
+        # Persist the IP across reboots via a systemd-networkd drop-in. The
+        # OVS bridge definition itself survives in ovsdb; only the L3 IP
+        # needs re-applying on boot.
+        MGMT_NETD_UNIT="/etc/systemd/network/10-spinifex-mgmt.network"
+        sudo tee "$MGMT_NETD_UNIT" >/dev/null <<NETD
+[Match]
+Name=$MGMT_BRIDGE
+
+[Network]
+Address=$MGMT_CIDR
+ConfigureWithoutCarrier=yes
+NETD
+        echo "  wrote $MGMT_NETD_UNIT (IP persists on reboot via systemd-networkd)"
     fi
 fi
 
@@ -665,6 +785,17 @@ if [ -n "$WAN_BRIDGE" ]; then
         fi
     else
         echo "  $WAN_BRIDGE:$(printf '%*s' $((15 - ${#WAN_BRIDGE})) '') FAILED"
+        OK=false
+    fi
+fi
+
+# Check mgmt bridge (only if enabled)
+if [ "$MGMT_BRIDGE_ENABLED" = true ]; then
+    if sudo ovs-vsctl br-exists "$MGMT_BRIDGE"; then
+        MGMT_IP_ACTUAL=$(ip -4 -o addr show dev "$MGMT_BRIDGE" 2>/dev/null | awk '{print $4}' | head -1)
+        echo "  $MGMT_BRIDGE:$(printf '%*s' $((15 - ${#MGMT_BRIDGE})) '') OK (${MGMT_IP_ACTUAL:-no IP})"
+    else
+        echo "  $MGMT_BRIDGE:$(printf '%*s' $((15 - ${#MGMT_BRIDGE})) '') FAILED"
         OK=false
     fi
 fi
