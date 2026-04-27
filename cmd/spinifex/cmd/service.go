@@ -746,14 +746,6 @@ var vpcdStartCmd = &cobra.Command{
 			})
 		}
 
-		// Fallback chassis names derived from config node names. vpcd prefers
-		// discovering chassis from the OVN Southbound DB at startup; these are
-		// only used if that discovery fails.
-		var chassisNames []string
-		for nodeName := range clusterConfig.Nodes {
-			chassisNames = append(chassisNames, "chassis-"+nodeName)
-		}
-
 		var bootstrap *vpcd.BootstrapVPC
 		if clusterConfig.Bootstrap.VpcId != "" {
 			bootstrap = &vpcd.BootstrapVPC{
@@ -782,7 +774,6 @@ var vpcdStartCmd = &cobra.Command{
 			Debug:             false,
 			ExternalMode:      clusterConfig.Network.ExternalMode,
 			ExternalPools:     extPools,
-			ChassisNames:      chassisNames,
 			Bootstrap:         bootstrap,
 			ExternalInterface: nodeConfig.VPCD.ExternalInterface,
 			DhcpBindBridge:    nodeConfig.VPCD.DhcpBindBridge,
