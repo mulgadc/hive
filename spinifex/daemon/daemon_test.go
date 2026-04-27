@@ -82,7 +82,10 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.detachDelay = 0 // Skip sleep in tests
 
 	// Initialize services (needed for handler tests)
-	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore())
+	// jsManager is nil here; pass a nil literal to keep the StoppedInstanceStore
+	// interface itself nil (rather than a typed-nil pointer) so the service can
+	// short-circuit cleanly when no KV is available.
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore(), daemon.resourceMgr, nil)
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, objectstore.NewMemoryObjectStore(), nc)
 
 	t.Cleanup(func() {

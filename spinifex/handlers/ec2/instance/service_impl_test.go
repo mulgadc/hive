@@ -26,7 +26,7 @@ func TestNewInstanceServiceImpl(t *testing.T) {
 	store := objectstore.NewMemoryObjectStore()
 	instances := &vm.Instances{VMS: make(map[string]*vm.VM)}
 
-	svc := NewInstanceServiceImpl(cfg, instanceTypes, nil, instances, store)
+	svc := NewInstanceServiceImpl(cfg, instanceTypes, nil, instances, store, nil, nil)
 
 	require.NotNil(t, svc)
 	assert.Equal(t, cfg, svc.config)

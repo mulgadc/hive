@@ -1,4 +1,4 @@
-package daemon
+package handlers_ec2_instance
 
 import (
 	"testing"
@@ -68,14 +68,12 @@ func TestInstanceMatchesFilters_MultipleFilters_ANDLogic(t *testing.T) {
 		VpcId:        aws.String("vpc-111"),
 		State:        &ec2.InstanceState{Name: aws.String("running")},
 	}
-	// Both must match
 	filters := map[string][]string{
 		"instance-state-name": {"running"},
 		"vpc-id":              {"vpc-111"},
 	}
 	assert.True(t, instanceMatchesFilters(inst, ic, filters))
 
-	// One doesn't match
 	filters["vpc-id"] = []string{"vpc-999"}
 	assert.False(t, instanceMatchesFilters(inst, ic, filters))
 }
@@ -189,7 +187,6 @@ func TestInstanceMatchesFilters_EmptyResults(t *testing.T) {
 		InstanceType: aws.String("t3.micro"),
 		State:        &ec2.InstanceState{Name: aws.String("running")},
 	}
-	// Filter that matches nothing
 	filters := map[string][]string{"instance-type": {"c5.4xlarge"}}
 	assert.False(t, instanceMatchesFilters(inst, ic, filters))
 }
@@ -198,7 +195,7 @@ func TestParseFilters_UnknownFilterName(t *testing.T) {
 	filters := []*ec2.Filter{
 		{Name: aws.String("bogus-filter"), Values: []*string{aws.String("val")}},
 	}
-	_, err := filterutil.ParseFilters(filters, describeInstancesValidFilters)
+	_, err := filterutil.ParseFilters(filters, DescribeInstancesValidFilters)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "InvalidParameterValue")
 }

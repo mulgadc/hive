@@ -87,6 +87,14 @@ func createFullTestDaemonWithJetStream(t *testing.T, natsURL string) *Daemon {
 	err = daemon.jsManager.InitTerminatedInstanceBucket()
 	require.NoError(t, err)
 
+	// Re-bind the instance service so describe-stopped/terminated handlers see
+	// the KV that was just initialised.
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(
+		daemon.config, daemon.resourceMgr.instanceTypes, daemon.natsConn,
+		&daemon.Instances, objectstore.NewMemoryObjectStore(),
+		daemon.resourceMgr, daemon.jsManager,
+	)
+
 	return daemon
 }
 
@@ -512,6 +520,7 @@ func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(
 		daemon.config, emptyTypes, daemon.natsConn, &daemon.Instances,
 		objectstore.NewMemoryObjectStore(),
+		daemon.resourceMgr, nil,
 	)
 
 	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
@@ -2306,7 +2315,9 @@ func TestHandleEC2DescribeInstanceAttribute_InvalidJSON(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Equal(t, "ServerInternal", errResp["Code"])
+	// handleNATSRequest reports unmarshal failures as ValidationError, matching
+	// the rest of the Pattern A handlers.
+	assert.Equal(t, "ValidationError", errResp["Code"])
 }
 
 // --- Delegate handler round-trip tests (table-driven) ---
