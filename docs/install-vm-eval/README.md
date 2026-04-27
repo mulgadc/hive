@@ -220,15 +220,24 @@ Output:
 Auto-detected Linux bridge: br-wan (default route)
   Will create OVS bridge br-ext + veth pair to link them
 Auto-detected encap IP: 192.168.0.249
-Auto-detected chassis ID: chassis-spinifex
 === Spinifex OVN Compute Node Setup ===
   Management node:  true
   WAN bridge:       br-ext (veth)
   Linux bridge:     br-wan (linked via veth pair)
   OVN Remote (SB):  tcp:127.0.0.1:6642
   Encap IP:         192.168.0.249
-  Chassis ID:       chassis-spinifex
 ...
+  system-id:      "add0104e-9aec-43f0-af53-5fc89b4d91bf"
+...
+```
+
+The `system-id` is the OVS-managed chassis UUID (read back from
+`/etc/openvswitch/system-id.conf`); this is the same value that appears as
+`Chassis.name` in `ovn-sbctl show`. Cross-reference with `Chassis.hostname`
+when you need the human-readable host:
+
+```bash
+sudo ovn-sbctl --columns=name,hostname list Chassis
 ```
 
 ## Spinifex Initialize
