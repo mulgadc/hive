@@ -94,8 +94,21 @@ func Reconcile(ctx context.Context, topo *TopologyHandler, bootstrap *BootstrapV
 // ReconcileFromKV reads all VPCs, subnets, IGW attachments, and ENIs from NATS KV
 // and ensures OVN topology matches. This is Pass 2 from the Phase 12 plan — it
 // handles reboots, OVN DB loss, and any missed events. All operations are idempotent.
-func ReconcileFromKV(ctx context.Context, nc *nats.Conn, topo *TopologyHandler) ReconcileResult {
+//
+// chassisNames is the set of OVN chassis names discovered from the SBDB at
+// startup; reconcileGatewayChassis uses it to delete stale Gateway_Chassis
+// rows (e.g. left over from a chassis_name change across reboot) and rebind
+// every gateway LRP against the live chassis (mulga-999).
+func ReconcileFromKV(ctx context.Context, nc *nats.Conn, topo *TopologyHandler, chassisNames []string) ReconcileResult {
 	var result ReconcileResult
+
+	// 0. Reconcile gateway_chassis bindings before any per-VPC work. State
+	// drift here (a gateway_chassis row pointing at a chassis that no longer
+	// exists) leaves the cr-gw* port unbound — centralized NAT silently
+	// breaks. Single SB-derived list, applied once.
+	if err := topo.reconcileGatewayChassis(ctx, chassisNames); err != nil {
+		slog.Warn("vpcd reconcile-kv: gateway_chassis reconcile failed", "err", err)
+	}
 
 	js, err := nc.JetStream()
 	if err != nil {

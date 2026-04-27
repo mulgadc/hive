@@ -123,24 +123,58 @@ func TestDiscoverChassis_EmptyOutput(t *testing.T) {
 	}
 }
 
-func TestDiscoverChassis_Error_FallsBackToConfig(t *testing.T) {
+// chassisDiscoveryOrFail mirrors the fail-start branch in launchService so the
+// contract is unit-testable without a full NATS + OVN NB stand-up. Any change
+// to the fail-start semantics must also update this helper (mulga-999).
+func chassisDiscoveryOrFail(sbAddr string) ([]string, error) {
+	names, err := discoverChassis(sbAddr)
+	if err != nil {
+		return nil, fmt.Errorf("vpcd: discover OVN chassis: %w", err)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("vpcd: no OVN chassis registered in SBDB — is ovn-controller running and connected?")
+	}
+	return names, nil
+}
+
+// TestLaunchService_FailsOnDiscoverChassisError pins the fail-start contract:
+// when the SBDB query errors, vpcd must surface a wrapped error rather than
+// guessing a chassis name (which is what the pre-mulga-999 fallback did).
+func TestLaunchService_FailsOnDiscoverChassisError(t *testing.T) {
 	orig := discoverChassis
 	defer func() { discoverChassis = orig }()
-
 	discoverChassis = func(sbAddr string) ([]string, error) {
 		return nil, fmt.Errorf("connection refused")
 	}
 
-	// Simulate the fallback logic from launchService
-	_, err := discoverChassis("")
+	_, err := chassisDiscoveryOrFail("")
 	if err == nil {
-		t.Fatal("expected error from discoverChassis")
+		t.Fatal("expected error to propagate from discoverChassis")
+	}
+	if !strings.Contains(err.Error(), "discover OVN chassis") {
+		t.Errorf("expected wrapped error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("expected underlying cause to be preserved, got: %v", err)
+	}
+}
+
+// TestLaunchService_FailsOnEmptyChassisDiscovery pins the no-fallback
+// contract: an empty SBDB chassis list (typical when ovn-controller hasn't
+// registered yet) must fail-start rather than silently bind nothing.
+func TestLaunchService_FailsOnEmptyChassisDiscovery(t *testing.T) {
+	orig := discoverChassis
+	defer func() { discoverChassis = orig }()
+	discoverChassis = func(sbAddr string) ([]string, error) {
+		return []string{}, nil
 	}
 
-	// Fallback to config (as launchService does)
-	chassisNames := []string{"chassis-node1"}
-	if len(chassisNames) != 1 || chassisNames[0] != "chassis-node1" {
-		t.Errorf("expected fallback to config names, got %v", chassisNames)
+	_, err := chassisDiscoveryOrFail("")
+	if err == nil {
+		t.Fatal("expected error when SBDB has zero chassis registered")
+	}
+	if !strings.Contains(err.Error(), "no OVN chassis registered") {
+		t.Errorf("expected fail-start message, got: %v", err)
 	}
 }
 

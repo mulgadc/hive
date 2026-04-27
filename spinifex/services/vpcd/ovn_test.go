@@ -524,3 +524,73 @@ func TestNBDB_FullDatabaseModel(t *testing.T) {
 		}
 	}
 }
+
+// --- SetGatewayChassis idempotency (mulga-999) ---
+
+func TestSetGatewayChassis_Idempotent(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	if err := mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-A"}); err != nil {
+		t.Fatalf("CreateLogicalRouter: %v", err)
+	}
+	if err := mock.CreateLogicalRouterPort(ctx, "vpc-A", &nbdb.LogicalRouterPort{Name: "gw-A"}); err != nil {
+		t.Fatalf("CreateLogicalRouterPort: %v", err)
+	}
+
+	if err := mock.SetGatewayChassis(ctx, "gw-A", "chassis-1", 20); err != nil {
+		t.Fatalf("SetGatewayChassis (1): %v", err)
+	}
+	if err := mock.SetGatewayChassis(ctx, "gw-A", "chassis-1", 20); err != nil {
+		t.Fatalf("SetGatewayChassis (2): %v", err)
+	}
+
+	rows, err := mock.ListGatewayChassis(ctx)
+	if err != nil {
+		t.Fatalf("ListGatewayChassis: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d (%v)", len(rows), rows)
+	}
+	if mock.SetGatewayChassisCalls != 1 {
+		t.Errorf("expected 1 create call, got %d", mock.SetGatewayChassisCalls)
+	}
+	if mock.UpdateGatewayChassisPriorityCalls != 0 {
+		t.Errorf("expected 0 priority updates, got %d", mock.UpdateGatewayChassisPriorityCalls)
+	}
+}
+
+func TestSetGatewayChassis_UpdatesPriority(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	if err := mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-A"}); err != nil {
+		t.Fatalf("CreateLogicalRouter: %v", err)
+	}
+	if err := mock.CreateLogicalRouterPort(ctx, "vpc-A", &nbdb.LogicalRouterPort{Name: "gw-A"}); err != nil {
+		t.Fatalf("CreateLogicalRouterPort: %v", err)
+	}
+
+	if err := mock.SetGatewayChassis(ctx, "gw-A", "chassis-1", 20); err != nil {
+		t.Fatalf("SetGatewayChassis at 20: %v", err)
+	}
+	if err := mock.SetGatewayChassis(ctx, "gw-A", "chassis-1", 15); err != nil {
+		t.Fatalf("SetGatewayChassis at 15: %v", err)
+	}
+
+	rows, err := mock.ListGatewayChassis(ctx)
+	if err != nil {
+		t.Fatalf("ListGatewayChassis: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row (mutated, not duplicated), got %d", len(rows))
+	}
+	if rows[0].Priority != 15 {
+		t.Errorf("expected priority 15 after update, got %d", rows[0].Priority)
+	}
+	if mock.UpdateGatewayChassisPriorityCalls != 1 {
+		t.Errorf("expected 1 priority update, got %d", mock.UpdateGatewayChassisPriorityCalls)
+	}
+}

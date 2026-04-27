@@ -26,7 +26,6 @@
 #   --no-mgmt-bridge     Skip mgmt bridge provisioning (for dev-networking hosts)
 #   --ovn-remote=ADDR    OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip=IP        Geneve tunnel endpoint IP (default: auto-detect)
-#   --chassis-id=ID      OVN chassis identifier (default: chassis-$(hostname -s))
 #
 # WAN Bridge Auto-Detection:
 #   When no --wan-bridge is given, the script checks the default route interface:
@@ -65,7 +64,6 @@ MGMT_CIDR="10.15.8.1/24"
 MGMT_IFACE=""
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
-CHASSIS_ID=""
 
 # Parse arguments
 for arg in "$@"; do
@@ -81,7 +79,6 @@ for arg in "$@"; do
         --no-mgmt-bridge)   MGMT_BRIDGE_ENABLED=false ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
         --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
-        --chassis-id=*)     CHASSIS_ID="${arg#*=}" ;;
         --help|-h)
             head -50 "$0" | tail -48
             exit 0
@@ -210,12 +207,6 @@ if [ -z "$ENCAP_IP" ]; then
     fi
 fi
 
-# Auto-detect chassis ID if not specified
-if [ -z "$CHASSIS_ID" ]; then
-    CHASSIS_ID="chassis-$(hostname -s)"
-    echo "Auto-detected chassis ID: $CHASSIS_ID"
-fi
-
 echo "=== Spinifex OVN Compute Node Setup ==="
 echo "  Management node:  $MANAGEMENT"
 if [ -n "$WAN_BRIDGE" ]; then
@@ -231,7 +222,6 @@ else
 fi
 echo "  OVN Remote (SB):  $OVN_REMOTE"
 echo "  Encap IP:         $ENCAP_IP"
-echo "  Chassis ID:       $CHASSIS_ID"
 echo ""
 
 # --- Step 1: Install packages ---
@@ -578,7 +568,6 @@ echo "Step 4: Setting OVS external_ids for OVN..."
 if [ -n "$WAN_BRIDGE" ]; then
     BRIDGE_MAPPINGS="external:${WAN_BRIDGE}"
     sudo ovs-vsctl set Open_vSwitch . \
-        external_ids:system-id="$CHASSIS_ID" \
         external_ids:ovn-remote="$OVN_REMOTE" \
         external_ids:ovn-encap-ip="$ENCAP_IP" \
         external_ids:ovn-encap-type="geneve" \
@@ -586,13 +575,16 @@ if [ -n "$WAN_BRIDGE" ]; then
     echo "  ovn-bridge-mappings: $BRIDGE_MAPPINGS"
 else
     sudo ovs-vsctl set Open_vSwitch . \
-        external_ids:system-id="$CHASSIS_ID" \
         external_ids:ovn-remote="$OVN_REMOTE" \
         external_ids:ovn-encap-ip="$ENCAP_IP" \
         external_ids:ovn-encap-type="geneve"
 fi
 
-echo "  system-id:      $CHASSIS_ID"
+# system-id is owned by the openvswitch-switch package (persisted in
+# /etc/openvswitch/system-id.conf and re-applied on every boot). Read it back
+# rather than overriding — overriding here would drift from the on-disk value
+# and the next reboot would silently flip the chassis identity (mulga-999).
+echo "  system-id:      $(sudo ovs-vsctl get open . external_ids:system-id)"
 echo "  ovn-remote:     $OVN_REMOTE"
 echo "  ovn-encap-ip:   $ENCAP_IP"
 echo "  ovn-encap-type: geneve"

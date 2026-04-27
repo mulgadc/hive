@@ -227,177 +227,171 @@ define a range (or use `source = "dhcp"`) — no data migration needed.
 
 ## Bridge Setup — Physical Network Wiring
 
-OVN needs an OVS bridge for external connectivity. `setup-ovn.sh` auto-detects
-the best approach:
+The WAN NIC **must** be enslaved to a Linux bridge. This is a hard requirement —
+`setup-ovn.sh` will not attach a physical NIC directly to OVS, and macvlan is
+no longer supported. The Linux bridge owns the host IP, default route, and any
+DHCP lease, so SSH and management traffic stay up while OVS/OVN are configured
+underneath.
 
-- **Linux bridge on default route** (e.g. `br-wan` from cloud-init): Creates
-  OVS bridge `br-ext` and links them with a veth pair. The Linux bridge keeps
-  its IP and routes — no interruption. Bridge-mapping: `external:br-ext`.
-- **OVS bridge on default route**: Uses it directly for bridge-mappings.
-- **Physical NIC**: Stops and prints guidance (cannot safely move the NIC).
+The full datapath chain looks like this:
 
-## Two Bridges, Two Jobs
-
-Every Spinifex node has two OVS bridges:
-
-| Bridge   | Purpose                              | Ports                        |
-| -------- | ------------------------------------ | ---------------------------- |
-| `br-int` | VM overlay traffic (Geneve tunnels)  | VM TAP devices, tunnel ports |
-| `br-wan` | WAN uplink for public subnet traffic | macvlan on WAN NIC           |
-
-`br-int` is always created by `setup-ovn.sh`. `br-wan` is created only when
-a WAN bridge is configured (auto-detected or via `--wan-bridge`, required for public subnets / external connectivity).
-
-The connection between them is logical, not physical — OVN's `localnet` port type
-maps the logical external switch to `br-wan` via `ovn-bridge-mappings`.
-
-<p align="center">
-  <img src="../../../.github/assets/diagrams/vpc-datapath-localnet.svg" alt="Data path — VM TAP through br-int, OVN pipeline, localnet, br-wan, WAN" width="900">
-</p>
-
-## Bridge Modes
-
-Spinifex supports two ways to wire `br-wan` to the physical network.
-**Direct bridge** is preferred when the host has a dedicated WAN NIC. **Macvlan**
-is the fallback for single-NIC hosts where the WAN NIC is also the SSH NIC.
-
-### Direct Bridge (Preferred)
-
-The WAN NIC is added directly to `br-wan` as an OVS port. OVS sees all
-traffic on the wire — any MAC, any protocol. No filtering, no workarounds.
-
-<p align="center">
-  <img src="../../../.github/assets/diagrams/vpc-direct-bridge.svg" alt="Direct bridge mode — dedicated WAN NIC added directly to br-wan" width="900">
-</p>
-
-**Use when:** The host has a NIC dedicated to external/WAN traffic that is NOT
-used for SSH or management. Datacenter servers with separate management +
-public NICs. Homelab hosts with 2+ NICs.
-
-**Benefits over macvlan:**
-
-- **Distributed NAT**: DNAT processed on the VM's own chassis (no hairpin)
-- **No MAC workarounds**: OVS sees all frames, any MAC
-- **Host can reach VMs**: No macvlan parent↔child isolation
-- **Better multi-node performance**: External traffic stays local
-- **DHCP lease stability**: No MAC changes after lease
-
-```bash
-sudo setup-ovn.sh --wan-bridge=br-wan --wan-iface=eth1
+```
+physical NIC (e.g. `wan`)
+   └─ enslaved to ─▶ br-wan         (Linux bridge — host IP, default route, DHCP)
+                       │
+                       └─ veth pair ─▶ br-ext   (OVS bridge — OVN external uplink)
+                                          │
+                                          └─ localnet ─▶ br-int  (OVS integration bridge)
+                                                            │
+                                                            └─▶ TAP devices  (VM NICs)
 ```
 
-### Macvlan (Fallback for Single-NIC)
+`setup-ovn.sh` auto-detects the Linux bridge that owns the default route
+(typically `br-wan`, provisioned by cloud-init / netplan / systemd-networkd).
+You can override the detection with `--wan-bridge=<name>`. Once detected, the
+script creates the OVS bridge `br-ext` and links it to the WAN bridge with a
+veth pair. The Linux bridge keeps its IP and routes — no interruption.
+Bridge-mapping is set to `external:br-ext`.
 
-A macvlan sub-interface is created in bridge mode off the WAN NIC, and that
-macvlan is added to br-wan. The host keeps its IP on the original NIC —
-SSH stays up.
+If the default route is on a bare physical NIC (no bridge), `setup-ovn.sh`
+stops and prints guidance on how to convert the NIC to a bridge before
+re-running.
 
-<p align="center">
-  <img src="../../../.github/assets/diagrams/vpc-macvlan.svg" alt="Macvlan mode — WAN NIC shared between host traffic and macvlan child on br-wan" width="900">
-</p>
+### Example: Required `br-wan` State
 
-**Use when:** The WAN NIC is the same NIC used for SSH. Single-NIC homelabs,
-edge deployments. Adding the NIC directly to OVS would break host connectivity.
+The host must have something resembling this before `setup-ovn.sh` is run:
 
-**Limitations:**
-
-- Centralized NAT only (macvlan filters unicast not matching its MAC)
-- Host cannot reach VMs at their public IPs (macvlan isolation)
-- vpcd must align macvlan MAC with OVN router MAC on startup
-- Multi-node: all external traffic hairpins through the gateway chassis
-
-```bash
-sudo setup-ovn.sh --macvlan --wan-iface=eth0
+```
+7: br-wan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+    link/ether 26:df:3c:de:d0:c2 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.1.31/23 brd 192.168.1.255 scope global br-wan
+       valid_lft forever preferred_lft forever
+    inet6 fe80::24df:3cff:fede:d0c2/64 scope link proto kernel_ll
+       valid_lft forever preferred_lft forever
 ```
 
-### Mode Comparison
+The physical NIC (e.g. `wan`, `eth0`, `eno1`) is enslaved to `br-wan` and has
+no IP of its own — all L3 state lives on the bridge.
 
-| Capability               | Direct bridge            | Macvlan                          |
-| ------------------------ | ------------------------ | -------------------------------- |
-| NAT mode                 | Distributed (local DNAT) | Centralized (gateway hairpin)    |
-| Multi-node external perf | Optimal                  | Hairpin through gateway chassis  |
-| Host → VM public IP      | Works                    | Blocked (kernel isolation)       |
-| MAC alignment needed     | No                       | Yes (fragile startup step)       |
-| Gratuitous ARPs needed   | No                       | Yes (`nat-addresses=router`)     |
-| Works on single-NIC      | No (breaks SSH)          | Yes                              |
-| DHCP lease stability     | Clean                    | Fragile (MAC changes post-lease) |
+Example netplan that produces this:
 
-### How setup-ovn.sh Decides
+```yaml
+network:
+  version: 2
+  ethernets:
+    wan:
+      dhcp4: false
+  bridges:
+    br-wan:
+      interfaces: [wan]
+      dhcp4: true
+```
 
-| Flags                                  | Result                                          |
-| -------------------------------------- | ----------------------------------------------- |
-| `--wan-bridge=br-wan --wan-iface=eth1` | Direct bridge: NIC added to br-wan              |
-| `--macvlan --wan-iface=eth0`           | Macvlan: sub-interface created, added to br-wan |
-| (no WAN bridge)                        | Only br-int created, no WAN connectivity        |
+## Three Bridges, Three Jobs
 
-### Setup (Macvlan Mode)
+Every Spinifex node has three bridges in the datapath:
+
+| Bridge   | Type         | Created By                  | Purpose                                       | Ports                        |
+| -------- | ------------ | --------------------------- | --------------------------------------------- | ---------------------------- |
+| `br-wan` | Linux bridge | Host (cloud-init / netplan) | Host WAN uplink — owns host IP and default route | Physical WAN NIC, veth peer  |
+| `br-ext` | OVS bridge   | `setup-ovn.sh`              | OVN external uplink (`localnet`)              | veth peer to `br-wan`        |
+| `br-int` | OVS bridge   | `setup-ovn.sh`              | VM overlay traffic (Geneve tunnels)           | VM TAP devices, tunnel ports |
+
+`br-wan` is provisioned by your distro's network configuration (cloud-init,
+netplan, systemd-networkd, ifupdown). The name is configurable; `br-wan` is
+the convention. `br-int` and `br-ext` are always created by `setup-ovn.sh`.
+
+The link between `br-ext` and the VM datapath is logical, not physical: OVN's
+`localnet` port type maps the logical external switch to `br-ext` via
+`ovn-bridge-mappings`. Frames egressing a VM travel TAP → `br-int` → OVN
+pipeline → `br-ext` → veth → `br-wan` → physical NIC → wire.
+
+<p align="center">
+  <img src="../../../.github/assets/diagrams/vpc-datapath-localnet.svg" alt="Data path — VM TAP through br-int, OVN pipeline, br-ext, veth pair, br-wan, physical NIC" width="900">
+</p>
+
+## Running setup-ovn.sh
+
+```bash
+# Auto-detect the WAN bridge (recommended)
+sudo setup-ovn.sh
+
+# Explicitly specify the WAN bridge name
+sudo setup-ovn.sh --wan-bridge=br-wan
+```
 
 In environments where the WAN IP comes from a router's DHCP server (homelab,
-small office), add `--dhcp` to obtain a gateway IP from the router automatically:
+small office), add `--dhcp` to obtain a gateway IP from the router
+automatically:
 
 ```bash
-sudo setup-ovn.sh --macvlan --wan-iface=eth0 --dhcp
+sudo setup-ovn.sh --dhcp
 ```
 
 This requests an IP from the **router's DHCP** (e.g., 192.168.1.1 serving
 addresses on the LAN). This is not Spinifex's internal OVN DHCP that assigns
 private IPs to VMs — it's your network's existing DHCP server.
 
-### Macvlan Internals
+| Flags                          | Result                                                                |
+| ------------------------------ | --------------------------------------------------------------------- |
+| (no flags)                     | Auto-detect WAN bridge from default route, create `br-int` + `br-ext` |
+| `--wan-bridge=<name>`          | Use the specified Linux bridge as the WAN uplink                      |
+| `--dhcp`                       | Obtain the OVN gateway IP from the router's DHCP                      |
 
-macvlan in `bridge` mode creates a virtual interface that shares the parent NIC's
-physical wire but has its own MAC address. The Linux kernel blocks direct L2
-frames between a parent interface and its macvlan children.
-
-| Path                      | Works? | Why                                               |
-| ------------------------- | ------ | ------------------------------------------------- |
-| VM → internet             | Yes    | SNAT through OVN router → macvlan → WAN NIC → WAN |
-| LAN device → VM public IP | Yes    | LAN → WAN NIC → macvlan → br-wan → OVN            |
-| Host → VM public IP       | No     | macvlan isolation (kernel blocks parent↔child)    |
-| Host → VM private IP      | Yes    | Overlay via br-int (unrelated to br-wan)          |
+If no Linux bridge owns the default route, `setup-ovn.sh` exits with guidance
+rather than silently breaking host connectivity.
 
 ## Per-Node Configuration
 
-Different nodes in a cluster can have different WAN NICs:
+Different nodes in a cluster can have different WAN bridges and NICs:
 
 ```toml
 [nodes.node1.vpcd]
-external_interface = "eth1"
+external_interface = "br-wan"
 
 [nodes.node2.vpcd]
-external_interface = "eth0"
+external_interface = "br-public"
 
 [nodes.node3.vpcd]
-external_interface = "bond0"       # bonded NIC
+external_interface = "br-wan"      # br-wan enslaving bond0
 ```
 
-Each node runs `setup-ovn.sh` with its own WAN bridge configuration. OVN doesn't
-care which NIC the macvlan is on — only that `ovn-bridge-mappings` is set.
+`external_interface` is the **Linux bridge** that owns the WAN uplink on this
+node — not the physical NIC. The physical NIC lives underneath the bridge.
+Each node runs `setup-ovn.sh` with its own WAN bridge name (or relies on
+auto-detection). OVN only requires `ovn-bridge-mappings` to point at `br-ext`.
 
 ## Bridge Verification
 
 ```bash
-# Check br-wan exists
-sudo ovs-vsctl br-exists br-wan && echo "OK" || echo "MISSING"
+# OVS bridges created by setup-ovn.sh
+sudo ovs-vsctl br-exists br-int && echo "br-int OK" || echo "br-int MISSING"
+sudo ovs-vsctl br-exists br-ext && echo "br-ext OK" || echo "br-ext MISSING"
 
-# Check the physical port
-sudo ovs-vsctl list-ports br-wan
-# Multi-NIC: shows "eth1" (or your WAN NIC)
-# Single-NIC: shows "spx-ext-eth0" (macvlan name)
+# Linux WAN bridge owns the host IP and default route
+ip -br addr show br-wan
+ip route show default
+# Default route's dev should be br-wan (or your WAN bridge name)
 
-# Check bridge mappings
+# br-ext should have one veth port linking it to br-wan
+sudo ovs-vsctl list-ports br-ext
+# Expect: a veth name (e.g. "veth-wan-ovs")
+
+# Confirm the matching peer is enslaved to the Linux WAN bridge
+sudo bridge link show | grep br-wan
+
+# Bridge mappings must point at br-ext
 sudo ovs-vsctl get Open_vSwitch . external-ids:ovn-bridge-mappings
-# Output: "external:br-wan"
+# Output: "external:br-ext"
 
-# Check macvlan (single-NIC only)
-ip link show spx-ext-eth0
-# Shows: state UP, type macvlan mode bridge
+# Physical NIC is enslaved to br-wan (master should be br-wan)
+ip -d link show wan
 ```
 
 ## Network Flow Diagram
 
 <p align="center">
-  <img src="../../../.github/assets/diagrams/vpc-host-flow.svg" alt="Bare-metal host — br-int overlay, br-wan WAN bridge with macvlan, OVN NAT pipeline" width="900">
+  <img src="../../../.github/assets/diagrams/vpc-host-flow.svg" alt="Bare-metal host — br-int overlay, br-ext OVS uplink, br-wan Linux bridge, physical NIC, OVN NAT pipeline" width="900">
 </p>
 
 ## Configuration Reference
@@ -480,12 +474,12 @@ These are different things:
 [nodes.spx1.vpcd]
 ovn_nb_addr        = "tcp:10.1.3.181:6641"   # OVN Northbound DB
 ovn_sb_addr        = "tcp:10.1.3.181:6642"   # OVN Southbound DB
-external_interface = "eth1"                   # WAN NIC name
+external_interface = "br-wan"                 # WAN Linux bridge name
 ```
 
-| Field                | Description                                                                                                                                                      |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `external_interface` | Physical NIC for WAN traffic. A macvlan sub-interface is created on this NIC for br-wan. Different servers may have different names (eth1, eno2, enp3s0, bond0). |
+| Field                | Description                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `external_interface` | Linux bridge that owns the WAN uplink on this node (e.g. `br-wan`, `br-public`). The physical NIC is enslaved to this bridge — not configured here. Different nodes may differ. |
 
 ## Pool Selection Logic
 
@@ -544,11 +538,13 @@ gateway     = "192.168.1.1"
 prefix_len  = 24
 
 [nodes.homelab.vpcd]
-external_interface = "eth0"
+external_interface = "br-wan"
 ```
 
-**Setup:** Change your router's DHCP range to end at .149. Run
-`setup-ovn.sh --macvlan --wan-iface=eth0` (or auto-detected if WAN is already a bridge).
+**Setup:** Configure `br-wan` to enslave your physical WAN NIC (netplan,
+cloud-init, or systemd-networkd). Change your router's DHCP range to end
+at .149. Run `sudo setup-ovn.sh` — it auto-detects the WAN bridge from the
+default route, or specify it with `--wan-bridge=br-wan`.
 
 ## Homelab / Dev (DHCP Pool — No Range Reservation)
 
@@ -570,7 +566,7 @@ prefix_len  = 24
 dns_servers = ["192.168.1.1", "8.8.8.8"]
 
 [nodes.homelab.vpcd]
-external_interface = "eth0"
+external_interface = "br-wan"
 ```
 
 **Setup:** No router changes needed. Spinifex requests IPs from the router's
@@ -582,7 +578,7 @@ on the host (`apt install isc-dhcp-client`).
 ```
 ISP-assigned: 203.0.113.0/28 (14 usable IPs)
 ISP gateway: 203.0.113.1
-Servers: 3x with separate mgmt (eth0) and public (eth1) NICs
+Servers: 3x with separate mgmt NIC (eth0) and public NIC enslaved to br-wan
 ```
 
 ```toml
@@ -597,16 +593,20 @@ gateway     = "203.0.113.1"
 prefix_len  = 28
 
 [nodes.dc1.vpcd]
-external_interface = "eth1"
+external_interface = "br-wan"      # br-wan enslaves eth1
 
 [nodes.dc2.vpcd]
-external_interface = "eth1"
+external_interface = "br-wan"      # br-wan enslaves eth1
 
 [nodes.dc3.vpcd]
-external_interface = "eno1"
+external_interface = "br-public"   # br-public enslaves eno1
 ```
 
 ## Enterprise On-Prem (VLAN)
+
+The Linux WAN bridge enslaves a VLAN sub-interface (e.g. `eth1.200`) instead
+of a raw NIC. From OVN's perspective nothing changes — `external_interface`
+still points at the bridge.
 
 ```toml
 [network]
@@ -620,10 +620,10 @@ gateway     = "172.16.0.1"
 prefix_len  = 24
 
 [nodes.srv1.vpcd]
-external_interface = "eth1.200"     # VLAN-tagged sub-interface
+external_interface = "br-dmz"      # br-dmz enslaves eth1.200
 
 [nodes.srv2.vpcd]
-external_interface = "bond0.200"    # Bonded NIC with VLAN tag
+external_interface = "br-dmz"      # br-dmz enslaves bond0.200
 ```
 
 ## Edge / Branch (Outbound Only)
@@ -639,7 +639,7 @@ gateway_ip = "10.0.0.50"
 prefix_len = 24
 
 [nodes.edge1.vpcd]
-external_interface = "eth0"
+external_interface = "br-wan"
 ```
 
 ## Multi-Region (Multiple Pools)
@@ -800,14 +800,15 @@ ovn-nbctl lr-route-add vpc-{vpcId} 0.0.0.0/0 192.168.1.1
 ## Per-Instance Public IP
 
 ```bash
-# 1:1 NAT (centralized — processed on gateway chassis, uses router MAC)
-ovn-nbctl lr-nat-add vpc-{vpcId} dnat_and_snat {public_ip} {private_ip}
+# 1:1 NAT — distributed (DNAT processed on the VM's own chassis)
+ovn-nbctl lr-nat-add vpc-{vpcId} dnat_and_snat {public_ip} {private_ip} \
+  port-{eniId} {vm_mac}
 ```
 
-> **Note:** Spinifex uses centralized NAT (no `external_mac` / `logical_port`)
-> because macvlan-based external bridges can only receive unicast traffic matching
-> the macvlan's own MAC. The router port MAC is set on the macvlan, and OVN uses
-> it for all ARP replies. For single-node, there is no performance difference.
+With the WAN NIC on a Linux bridge wired to OVS via veth, OVS sees every frame
+on the wire regardless of MAC, so OVN can use distributed NAT. The DNAT is
+processed on the chassis hosting the VM rather than hairpinning through a
+single gateway chassis.
 
 ## Security Group
 
@@ -863,8 +864,13 @@ sudo ovn-nbctl pg-get-ports sg-{groupId}
 
 ## 1. Set Up OVN Bridges
 
+Make sure the WAN NIC is enslaved to a Linux bridge (e.g. `br-wan`) and that
+bridge owns the default route. Then run:
+
 ```bash
-sudo setup-ovn.sh --macvlan --wan-iface=eth0
+sudo setup-ovn.sh                       # auto-detect WAN bridge
+# or
+sudo setup-ovn.sh --wan-bridge=br-wan   # explicit
 ```
 
 ## 2. Configure External IP Pool
@@ -937,7 +943,7 @@ sudo ovn-nbctl list Logical_Switch_Port port-eni-{eniId}
 # Gateway chassis assignment
 sudo ovn-nbctl list Logical_Router_Port gw-vpc-{vpcId}
 
-# Localnet port options (check nat-addresses=router)
+# Localnet port options (network_name should be "external")
 sudo ovn-nbctl get Logical_Switch_Port ext-port-vpc-{vpcId} options
 ```
 
@@ -987,24 +993,30 @@ sudo ovs-vsctl get Open_vSwitch . external_ids
 ### Network Interfaces
 
 ```bash
-# Check macvlan exists and has correct MAC
-ip -d link show spx-ext-{nic}
+# Physical NIC should be enslaved to br-wan ("master br-wan")
+ip -d link show {nic}
 
-# Check macvlan is attached to OVS (look for "openvswitch_slave")
-ip -d link show spx-ext-{nic} | grep openvswitch
+# Linux WAN bridge — owns the host IP and default route
+ip -br addr show br-wan
+ip route show default
+
+# OVS bridges and the veth linking br-ext to br-wan
+sudo ovs-vsctl list-ports br-ext
+bridge link show | grep br-wan
 
 # Interface traffic stats (RX/TX counts, drops)
-ip -s link show spx-ext-{nic}
+ip -s link show {nic}
+ip -s link show br-wan
 ```
 
 ### Packet Capture
 
 ```bash
-# Capture on the OVS bridge (sees traffic after OVS processing)
-sudo tcpdump -i br-wan -n -e arp
+# Capture on the OVS uplink bridge (frames between OVN and br-wan)
+sudo tcpdump -i br-ext -n -e arp
 
-# Capture on the macvlan (sees what leaves/enters the wire)
-sudo tcpdump -i spx-ext-{nic} -n -e "host {public_ip}"
+# Capture on the Linux WAN bridge (frames between br-ext veth and the NIC)
+sudo tcpdump -i br-wan -n -e "host {public_ip}"
 
 # Capture on the physical NIC (sees everything on the wire)
 sudo tcpdump -i {nic} -n "host {public_ip}"
@@ -1082,12 +1094,18 @@ Work through these checks in order — each eliminates a class of issues.
 ### 1. Verify OVS wiring
 
 ```bash
-# br-wan must exist with the macvlan port
-sudo ovs-vsctl show | grep -A5 br-wan
+# br-int and br-ext must exist
+sudo ovs-vsctl show | grep -E "Bridge (br-int|br-ext)"
 
-# Bridge mappings must be set
+# br-ext should have a veth port linking it to br-wan
+sudo ovs-vsctl list-ports br-ext
+
+# The Linux WAN bridge should have the physical NIC and the veth peer
+bridge link show | grep br-wan
+
+# Bridge mappings must point at br-ext
 sudo ovs-vsctl get Open_vSwitch . external-ids:ovn-bridge-mappings
-# Expected: "external:br-wan"
+# Expected: "external:br-ext"
 ```
 
 ### 2. Verify chassis and gateway scheduling
@@ -1111,7 +1129,8 @@ If these don't match, see "Chassis name mismatch" below.
 ```bash
 sudo ovn-nbctl lr-nat-list vpc-$VPC | grep dnat_and_snat
 # Must show the public IP → private IP mapping
-# Must NOT have external_mac or logical_port set (centralized NAT)
+# For distributed NAT, external_mac and logical_port should be set
+# (the VM's MAC and ENI port name)
 ```
 
 ### 4. Verify ARP resolution
@@ -1122,20 +1141,21 @@ From another host on the same LAN, check if OVN responds to ARP:
 # On the remote host:
 ping -c 1 {public_ip}
 ip neigh show {public_ip}
-# Should show the OVN router MAC (02:00:00:xx:xx:xx)
+# Should show the VM's ENI MAC (distributed NAT) or the OVN router MAC
 ```
 
-If ARP fails, check the macvlan MAC alignment:
+If ARP fails, confirm the WAN bridge is forwarding:
 
 ```bash
-# On the Spinifex host:
-# Gateway router MAC
-sudo ovn-nbctl get Logical_Router_Port gw-vpc-{vpcId} mac
-# Macvlan MAC
-ip link show spx-ext-{nic} | grep ether
+# Physical NIC must be enslaved to br-wan
+ip -d link show {nic} | grep "master br-wan"
 
-# These MUST match. If they don't, vpcd failed to set the macvlan MAC.
-# Check vpcd.log for "macvlan MAC aligned" or errors.
+# br-wan must be UP and have an IP
+ip -br addr show br-wan
+
+# br-ext must have a veth port whose peer is enslaved to br-wan
+sudo ovs-vsctl list-ports br-ext
+bridge link show | grep br-wan
 ```
 
 ### 5. Verify packet flow with tcpdump
@@ -1146,15 +1166,16 @@ Capture at each layer to find where packets stop:
 # Layer 1: Does the ARP/ICMP arrive on the physical NIC?
 sudo tcpdump -i {nic} -n "host {public_ip}"
 
-# Layer 2: Does it reach br-wan?
+# Layer 2: Does it cross the Linux WAN bridge?
 sudo tcpdump -i br-wan -n "host {public_ip}"
 
-# Layer 3: Does it reach the macvlan output?
-sudo tcpdump -i spx-ext-{nic} -n -e "host {public_ip}"
+# Layer 3: Does it reach the OVS uplink bridge?
+sudo tcpdump -i br-ext -n -e "host {public_ip}"
 ```
 
-If traffic arrives on the physical NIC but not br-wan, the macvlan is
-filtering it. Check MAC alignment (step 4).
+If traffic arrives on the physical NIC but not br-wan, the NIC is not
+enslaved to the bridge. If it reaches br-wan but not br-ext, the veth
+pair between them is missing or down — re-run `setup-ovn.sh`.
 
 ### 6. Use ovn-trace for pipeline debugging
 
@@ -1197,77 +1218,46 @@ sudo systemctl start ovn-central ovn-controller
 
 ### Chassis Name Mismatch
 
-**Symptom:** Gateway chassis is set in NB but the SB has no matching chassis.
-`ovn-nbctl show` reports a gateway chassis name that doesn't appear in
-`ovn-sbctl show`. Gateway traffic (SNAT/DNAT) doesn't work.
+After mulga-999, vpcd uses the OVS-managed UUID (persisted at
+`/etc/openvswitch/system-id.conf` by the `openvswitch-switch` package and
+re-applied on every boot) as the canonical chassis identity. The chassis name
+across OVS `external_ids:system-id`, OVN SB `Chassis.name`, and NB
+`Gateway_Chassis.chassis_name` is always the same value, so the mismatch
+class that this section previously documented can no longer recur.
 
-**Cause:** Three names must align:
+`ReconcileFromKV` runs a `reconcileGatewayChassis` pre-step on every vpcd
+startup that deletes any stale `Gateway_Chassis` row left over from earlier
+installs (where `setup-ovn.sh` fabricated `chassis-$(hostname -s)`) and
+re-binds every gateway LRP against the live SBDB chassis. Pre-mulga-999
+brokenness recovers automatically on the first vpcd restart after upgrade —
+no manual `ovn-nbctl destroy` required.
 
-1. OVS `external_ids:system-id` → what ovn-controller registers as
-2. OVN SB `Chassis.name` → what actually exists in the SB DB
-3. vpcd's chassis name → `chassis-{nodeName}` from config
+### WAN NIC Not Enslaved to a Bridge
 
-If `setup-ovn.sh` used `chassis-$(hostname -s)` but vpcd uses
-`chassis-{nodeName}`, they'll differ on any host where hostname ≠ node name.
+**Symptom:** `setup-ovn.sh` exits with an error like "default route is on a
+physical NIC, not a bridge" and refuses to continue.
 
-**Diagnosis:**
+**Cause:** Spinifex requires the WAN NIC to be enslaved to a Linux bridge
+(typically `br-wan`). Macvlan is no longer supported, and attaching the NIC
+directly to OVS would break SSH and any other host services using the NIC.
 
-```bash
-# What OVS has
-sudo ovs-vsctl get Open_vSwitch . external-ids:system-id
-# What SB registered
-sudo ovn-sbctl list Chassis | grep name
-# What vpcd expects
-grep node /etc/spinifex/spinifex.toml | head -1
+**Fix:** Move the host IP and default route onto a Linux bridge. Example
+netplan:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    wan:
+      dhcp4: false
+  bridges:
+    br-wan:
+      interfaces: [wan]
+      dhcp4: true
 ```
 
-**Fix:** `reset-dev-env.sh` passes `--chassis-id=chassis-node1` to
-`setup-ovn.sh`. For manual fix:
-
-```bash
-sudo ovs-vsctl set Open_vSwitch . external_ids:system-id=chassis-node1
-sudo systemctl restart ovn-controller
-```
-
-### Macvlan Unicast Filtering (Inbound Traffic Lost)
-
-**Symptom:** VM gets DHCP, outbound works (ping 8.8.8.8 from VM), but inbound
-from the LAN to the VM's public IP fails. ARP replies go out but ICMP never
-arrives at br-wan.
-
-**Cause:** macvlan in bridge mode only delivers unicast frames matching its own
-MAC. OVN announces the router MAC for external IPs, but the macvlan has a
-different (random) MAC. Broadcasts (ARP requests) pass through; unicast return
-traffic is filtered by the kernel macvlan subsystem.
-
-**Diagnosis:**
-
-```bash
-# Compare these two — they must match
-sudo ovn-nbctl get Logical_Router_Port gw-vpc-{vpcId} mac
-ip link show spx-ext-{nic} | grep ether
-
-# If they differ, inbound unicast is being dropped
-```
-
-**Fix:** vpcd automatically aligns the macvlan MAC on startup. If it failed:
-
-```bash
-# Get the gateway MAC from OVN
-GW_MAC=$(sudo ovn-nbctl get Logical_Router_Port gw-vpc-{vpcId} mac | tr -d '"')
-
-# Set it on the macvlan
-sudo ip link set spx-ext-{nic} down
-sudo ip link set spx-ext-{nic} address $GW_MAC
-sudo ip link set spx-ext-{nic} up
-```
-
-Also ensure the DNAT rule uses centralized NAT (no `external_mac`):
-
-```bash
-sudo ovn-nbctl lr-nat-list vpc-{vpcId}
-# The dnat_and_snat row should have EMPTY external_mac and logical_port columns
-```
+Apply (`sudo netplan apply`), confirm the host IP is now on `br-wan`
+(`ip -br addr show br-wan`), and re-run `setup-ovn.sh`.
 
 ### Stale ARP on Remote Hosts
 
@@ -1282,7 +1272,7 @@ sudo ip neigh flush dev {nic} {public_ip}
 ping {public_ip}   # should work now
 ```
 
-OVN's `nat-addresses=router` option sends periodic gratuitous ARPs that will
+OVN sends periodic gratuitous ARPs from the chassis hosting the VM that will
 eventually update remote ARP caches, but flushing is faster for testing.
 
 ### Security Group Rules Not Taking Effect

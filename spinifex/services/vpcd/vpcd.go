@@ -61,10 +61,6 @@ type Config struct {
 	ExternalMode string
 	// ExternalPools holds the cluster-wide external IP pool configs.
 	ExternalPools []ExternalPoolConfig
-	// ChassisNames are fallback OVN chassis identifiers for gateway HA scheduling.
-	// Normally discovered from the OVN Southbound DB at startup. Only used if
-	// SBDB discovery fails.
-	ChassisNames []string
 	// Bootstrap holds the default VPC config from spinifex.toml for first-boot reconciliation.
 	Bootstrap *BootstrapVPC
 	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
@@ -331,17 +327,20 @@ func launchService(cfg *Config) error {
 		topoOpts = append(topoOpts, WithExternalNetwork(cfg.ExternalMode, cfg.ExternalPools))
 		slog.Info("External network enabled", "mode", cfg.ExternalMode, "pools", len(cfg.ExternalPools))
 	}
-	// Discover chassis from OVN SBDB (source of truth). Fall back to config
-	// if SBDB query fails (e.g., SBDB address not configured).
+	// Discover chassis from OVN SBDB. The OVS-managed system-id (persisted at
+	// /etc/openvswitch/system-id.conf and re-applied on every boot) is the
+	// canonical chassis identity; SBDB is the only source of truth. Fail-start
+	// rather than guess — a missing chassis means ovn-controller hasn't
+	// registered yet (boot race) and systemd's Restart=on-failure will retry.
 	chassisNames, err := discoverChassis(cfg.OVNSBAddr)
 	if err != nil {
-		slog.Warn("Failed to discover chassis from OVN SBDB, falling back to config", "err", err)
-		chassisNames = cfg.ChassisNames
+		return fmt.Errorf("vpcd: discover OVN chassis: %w", err)
 	}
-	if len(chassisNames) > 0 {
-		topoOpts = append(topoOpts, WithChassisNames(chassisNames))
-		slog.Info("Gateway chassis configured", "source", "sbdb", "chassis", chassisNames)
+	if len(chassisNames) == 0 {
+		return fmt.Errorf("vpcd: no OVN chassis registered in SBDB — is ovn-controller running and connected?")
 	}
+	topoOpts = append(topoOpts, WithChassisNames(chassisNames))
+	slog.Info("vpcd: gateway chassis discovered", "chassis", chassisNames)
 	topoOpts = append(topoOpts, WithBridgeMode(bridgeMode))
 	topo := NewTopologyHandler(liveClient, topoOpts...)
 
@@ -376,7 +375,7 @@ func launchService(cfg *Config) error {
 
 	// Pass 2: Reconcile from NATS KV (handles reboots, OVN DB loss, missed events).
 	// Runs after subscribing so new events are not missed during reconciliation.
-	ReconcileFromKV(ctx, nc, topo)
+	ReconcileFromKV(ctx, nc, topo, chassisNames)
 
 	// DHCP manager: services vpc.dhcp.acquire/release requests from the
 	// daemon-side ExternalIPAM handlers, runs a renewal goroutine per lease,

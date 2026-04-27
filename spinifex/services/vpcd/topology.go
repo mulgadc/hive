@@ -1291,6 +1291,74 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	return nil
 }
 
+// reconcileGatewayChassis brings every gateway LRP's HA-scheduling state into
+// agreement with the live SBDB chassis list. Two-phase:
+//
+//  1. Delete Gateway_Chassis rows whose chassis_name no longer matches any
+//     entry in validNames. These rows are inevitable when the OVS system-id
+//     changes across a reboot (mulga-999): NB still references the old
+//     chassis-* name, but the SB Chassis row is now under a UUID, so OVN
+//     can't resolve the binding and cr-gw* port-bindings sit empty.
+//
+//  2. Re-bind every LRP tagged spinifex:role=gateway against validNames via
+//     the idempotent SetGatewayChassis. Existing rows with matching priority
+//     are no-ops; mismatched priorities are mutated; missing rows are
+//     created.
+//
+// Called as the first step of ReconcileFromKV so chassis state is correct
+// before any reconcileVPC / reconcileIGW work. Failures are logged and
+// returned but do not abort the rest of the reconcile loop — partial
+// progress is better than none.
+func (h *TopologyHandler) reconcileGatewayChassis(ctx context.Context, validNames []string) error {
+	valid := make(map[string]struct{}, len(validNames))
+	for _, n := range validNames {
+		valid[n] = struct{}{}
+	}
+
+	rows, err := h.ovn.ListGatewayChassis(ctx)
+	if err != nil {
+		return fmt.Errorf("list gateway_chassis: %w", err)
+	}
+	for _, gc := range rows {
+		if _, ok := valid[gc.ChassisName]; ok {
+			continue
+		}
+		// Gateway_Chassis.Name is "lrpName-chassisName" (see SetGatewayChassis).
+		// The chassis suffix is unique because chassis names are globally
+		// unique; trimming it leaves the owning LRP name.
+		lrpName := strings.TrimSuffix(gc.Name, "-"+gc.ChassisName)
+		if err := h.ovn.DeleteGatewayChassis(ctx, lrpName, gc.UUID); err != nil {
+			slog.Warn("vpcd: failed to delete stale gateway_chassis",
+				"row", gc.Name, "chassis_name", gc.ChassisName, "err", err)
+			continue
+		}
+		slog.Warn("vpcd: deleted stale gateway_chassis",
+			"row", gc.Name, "chassis_name", gc.ChassisName, "lrp", lrpName)
+	}
+
+	if len(validNames) == 0 {
+		return nil
+	}
+
+	lrps, err := h.ovn.ListLogicalRouterPorts(ctx)
+	if err != nil {
+		return fmt.Errorf("list logical_router_port: %w", err)
+	}
+	for _, lrp := range lrps {
+		if lrp.ExternalIDs["spinifex:role"] != "gateway" {
+			continue
+		}
+		for i, name := range validNames {
+			priority := max(20-(i*5), 1)
+			if err := h.ovn.SetGatewayChassis(ctx, lrp.Name, name, priority); err != nil {
+				slog.Warn("vpcd: failed to set gateway chassis on rebind",
+					"lrp", lrp.Name, "chassis", name, "priority", priority, "err", err)
+			}
+		}
+	}
+	return nil
+}
+
 // --- Helpers ---
 
 // subnetGateway computes the gateway IP (.1) from a CIDR string.
