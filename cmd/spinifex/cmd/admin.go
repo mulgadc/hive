@@ -2336,17 +2336,17 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 	}
 
 	banner := fmt.Sprintf(`
-  +----------------------------------------------------+
-  |         Spinifex  —  Mulga Defense Corporation     |
-  +----------------------------------------------------+
-  |  Node:      %-39s|
-  |  Login:     %-39s|
-  |  Dashboard: %-39s|
-  |  API:       %-39s|
-  |  SSH:       %-39s|
-  +----------------------------------------------------+
-  |  AWS credentials:  cat ~/.aws/credentials          |
-  +----------------------------------------------------+
+  +----------------------------------------------------------------+
+  |            Spinifex  —  Mulga Defense Corporation              |
+  +----------------------------------------------------------------+
+  |  Node:      %-49s|
+  |  Login:     %-49s|
+  |  Dashboard: %-49s|
+  |  API:       %-49s|
+  |  SSH:       %-49s|
+  +----------------------------------------------------------------+
+  |  AWS credentials:  cat ~/.aws/credentials                      |
+  +----------------------------------------------------------------+
 
 `,
 		hostname,
@@ -2428,23 +2428,23 @@ func gpuBannerSection() string {
 		line1 = modelLine + " - passthrough enabled"
 	case iommuActive && vfioPresent:
 		line1 = modelLine + " - ready to enable"
-		line2 = "spx admin gpu enable"
+		line2 = "sudo spx admin gpu enable"
 	default:
 		line1 = modelLine + " - setup needed"
 		line2 = "sudo spx admin gpu setup"
 	}
 
-	const maxLen = 39
+	const maxLen = 55
 	if len([]rune(line1)) > maxLen {
 		line1 = string([]rune(line1)[:maxLen-3]) + "..."
 	}
 
-	section := "  +----------------------------------------------------+\n" +
-		fmt.Sprintf("  |  GPU:       %-39s|\n", line1)
+	section := "  +----------------------------------------------------------------+\n" +
+		fmt.Sprintf("  |  GPU: %-55s|\n", line1)
 	if line2 != "" {
-		section += fmt.Sprintf("  |             %-39s|\n", line2)
+		section += fmt.Sprintf("  |        %-55s|\n", line2)
 	}
-	section += "  +----------------------------------------------------+\n\n"
+	section += "  +----------------------------------------------------------------+\n\n"
 	return section
 }
 
