@@ -382,23 +382,14 @@ func (m *JetStreamManager) WriteServiceManifest(nodeID string, services []string
 }
 
 // WriteState writes the instance state to the KV store for the given node.
-// It acquires instances.Mu internally.
+// Caller must hold instances.Mu — caller is the local-state writer and the lock
+// is needed across the local file write + KV sync to keep the snapshot consistent.
 func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) error {
-	instances.Mu.Lock()
-	defer instances.Mu.Unlock()
-
 	if m.kv == nil {
 		return errors.New("KV bucket not initialized")
 	}
 
-	// Create a struct without the mutex to avoid copying the lock
-	state := struct {
-		VMS map[string]*vm.VM `json:"vms"`
-	}{
-		VMS: instances.VMS,
-	}
-
-	jsonData, err := json.Marshal(state)
+	jsonData, err := marshalInstanceState(instances)
 	if err != nil {
 		return err
 	}
@@ -423,6 +414,59 @@ func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) er
 
 	slog.Debug("Wrote state to JetStream KV", "key", key, "instances", len(instances.VMS))
 	return nil
+}
+
+// WriteStateBestEffort attempts to push instance state to KV with a deadline.
+// On timeout or error, it logs a warning and returns — never blocks the caller
+// past `timeout` and never returns an error. Used when the local state file is
+// the source of truth and KV is a best-effort cache.
+//
+// Caller must hold instances.Mu so the marshalled snapshot is consistent.
+//
+// Note: kv.Put has no context API. On timeout, the in-flight Put goroutine
+// continues and completes (or fails) on its own. This leaks at most one
+// goroutine per write; under sustained partition the leak is bounded by
+// WriteState call cadence (per-state-transition, not a tight loop).
+func (m *JetStreamManager) WriteStateBestEffort(nodeID string, instances *vm.Instances, timeout time.Duration) {
+	if m.kv == nil {
+		slog.Debug("KV bucket not initialized, skipping cluster sync", "node", nodeID)
+		return
+	}
+
+	jsonData, err := marshalInstanceState(instances)
+	if err != nil {
+		slog.Warn("KV sync skipped: marshal failed", "node", nodeID, "err", err)
+		return
+	}
+
+	key := InstanceStatePrefix + nodeID
+	done := make(chan error, 1)
+	go func() {
+		_, putErr := m.kv.Put(key, jsonData)
+		done <- putErr
+	}()
+
+	select {
+	case putErr := <-done:
+		if putErr != nil {
+			slog.Warn("KV sync failed (best-effort)", "key", key, "err", putErr)
+			return
+		}
+		slog.Debug("Wrote state to KV (best-effort)", "key", key, "instances", len(instances.VMS))
+	case <-time.After(timeout):
+		slog.Warn("KV sync timed out (best-effort)", "key", key, "timeout", timeout)
+	}
+}
+
+// marshalInstanceState produces the JSON wire form of instances without copying
+// the embedded sync.Mutex. Caller must hold instances.Mu.
+func marshalInstanceState(instances *vm.Instances) ([]byte, error) {
+	state := struct {
+		VMS map[string]*vm.VM `json:"vms"`
+	}{
+		VMS: instances.VMS,
+	}
+	return json.Marshal(state)
 }
 
 // LoadState loads the instance state from the KV store for the given node

@@ -807,7 +807,9 @@ func (d *Daemon) Start() error {
 
 	d.waitForClusterReady()
 	d.upgradeJetStreamReplicas()
-	d.restoreInstances()
+	if err := d.restoreInstances(); err != nil {
+		return fmt.Errorf("restore instances: %w", err)
+	}
 
 	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
 	// that are already in use by running system instances.
@@ -1034,8 +1036,10 @@ func (d *Daemon) migrateTerminatedToKV(instance *vm.VM) bool {
 const maxConcurrentRecovery = 2
 
 // restoreInstances loads persisted VM state and re-launches instances that are
-// neither terminated nor flagged as user-stopped.
-func (d *Daemon) restoreInstances() {
+// neither terminated nor flagged as user-stopped. Returns an error only when
+// local state is unreadable (corrupt JSON or unknown schema_version) — those
+// are fatal because silently dropping instance state would orphan running VMs.
+func (d *Daemon) restoreInstances() error {
 	// Check for clean shutdown marker
 	cleanShutdown := false
 	if d.jsManager != nil {
@@ -1053,10 +1057,8 @@ func (d *Daemon) restoreInstances() {
 		time.Sleep(3 * time.Second)
 	}
 
-	err := d.LoadState()
-	if err != nil {
-		slog.Warn("Failed to load state, continuing with empty state", "error", err)
-		return
+	if err := d.LoadState(); err != nil {
+		return fmt.Errorf("load state: %w", err)
 	}
 
 	slog.Info("Loaded state", "instance count", len(d.Instances.VMS))
@@ -1258,6 +1260,7 @@ func (d *Daemon) restoreInstances() {
 	if err := d.WriteState(); err != nil {
 		slog.Error("Failed to persist state after restore", "error", err)
 	}
+	return nil
 }
 
 // isInstanceProcessRunning checks if the QEMU process for an instance is still alive.
@@ -1481,33 +1484,64 @@ func (d *Daemon) ClusterManager() error {
 	return nil
 }
 
-// WriteState writes the instance state to JetStream KV store (required).
-// It acquires d.Instances.Mu internally.
+// kvSyncTimeout bounds the best-effort cluster sync so a degraded NATS does
+// not stall every state transition. 1s is well above healthy KV.Put latency
+// and well below a user-visible delay.
+const kvSyncTimeout = time.Second
+
+// localStatePath returns the on-disk path to this daemon's instance state file.
+func (d *Daemon) localStatePath() string {
+	if d.config == nil {
+		return LocalStatePath("", "")
+	}
+	return LocalStatePath(d.config.DataDir, d.config.BaseDir)
+}
+
+// WriteState persists the instance state. Local file is the source of truth;
+// JetStream KV is best-effort cluster cache. The local write is fatal on
+// failure; KV failures are logged and swallowed so partition-time clients
+// never see "KV down" errors.
+//
+// Acquires d.Instances.Mu internally. Lock is held across the local write and
+// the bounded KV sync so the snapshot stays consistent.
 func (d *Daemon) WriteState() error {
-	if d.jsManager == nil {
-		return fmt.Errorf("JetStream manager not initialized - cannot write state")
+	d.Instances.Mu.Lock()
+	defer d.Instances.Mu.Unlock()
+
+	path := d.localStatePath()
+	if err := WriteLocalState(path, &d.Instances); err != nil {
+		slog.Error("Local state write failed", "path", path, "error", err)
+		return fmt.Errorf("write local state: %w", err)
 	}
-	if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
-		slog.Error("JetStream write failed", "error", err)
-		return fmt.Errorf("failed to write state to JetStream: %w", err)
+
+	if d.jsManager != nil {
+		d.jsManager.WriteStateBestEffort(d.node, &d.Instances, kvSyncTimeout)
 	}
+
 	return nil
 }
 
-// LoadState loads the instance state from JetStream KV store (required)
+// LoadState loads the instance state from the local file. Missing file is the
+// fresh-install signal (start with empty map). Corrupt or unknown-schema files
+// are fatal — caller refuses start rather than silently losing data. There is
+// no KV fallback: a fresh node has empty KV anyway, so silent KV-fallback on
+// file loss would just mask bugs.
 func (d *Daemon) LoadState() error {
-	if d.jsManager == nil {
-		return fmt.Errorf("JetStream manager not initialized - cannot load state")
-	}
-
-	instances, err := d.jsManager.LoadState(d.node)
+	path := d.localStatePath()
+	state, err := ReadLocalState(path)
 	if err != nil {
-		slog.Error("JetStream load failed", "error", err)
-		return fmt.Errorf("failed to load state from JetStream: %w", err)
+		slog.Error("Local state load failed", "path", path, "error", err)
+		return fmt.Errorf("read local state: %w", err)
 	}
 
-	// Copy only the VMS map, not the mutex
-	d.Instances.VMS = instances.VMS
+	if state == nil {
+		d.Instances.VMS = make(map[string]*vm.VM)
+		slog.Info("No local state file, starting with empty instance map", "path", path)
+		return nil
+	}
+
+	d.Instances.VMS = state.VMS
+	slog.Info("Loaded local state", "path", path, "instances", len(state.VMS))
 	return nil
 }
 

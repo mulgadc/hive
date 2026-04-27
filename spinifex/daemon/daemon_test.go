@@ -915,9 +915,10 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	err = daemon.jsManager.InitKVBucket()
 	require.NoError(t, err)
 
-	// Pre-populate JetStream with test state
+	// Pre-populate the local state file with test state. Post-1a, LoadState
+	// reads from the local file (KV is best-effort cache only).
 	testInstances := &vm.Instances{VMS: vms}
-	err = daemon.jsManager.WriteState("node-1", testInstances)
+	err = WriteLocalState(daemon.localStatePath(), testInstances)
 	require.NoError(t, err)
 
 	// Manually trigger the LoadState and allocation logic normally found in Start()
@@ -3123,19 +3124,62 @@ func TestInstanceTypeMemoryMiB_NilSafety(t *testing.T) {
 }
 
 // --- Daemon.WriteState / Daemon.LoadState nil jsManager ---
+//
+// Post-1a: local file is the source of truth, KV is best-effort. A nil
+// jsManager is a valid configuration (e.g. standalone daemon, fresh install
+// before NATS is up) and must not block local persistence.
 
 func TestDaemon_WriteState_NilJSManager(t *testing.T) {
-	d := &Daemon{jsManager: nil}
-	err := d.WriteState()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "JetStream manager not initialized")
+	tmpDir := t.TempDir()
+	d := &Daemon{
+		jsManager: nil,
+		config:    &config.Config{BaseDir: tmpDir},
+		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-1": {ID: "i-1"}}},
+	}
+	require.NoError(t, d.WriteState())
+
+	state, err := ReadLocalState(LocalStatePath("", tmpDir))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Contains(t, state.VMS, "i-1")
 }
 
 func TestDaemon_LoadState_NilJSManager(t *testing.T) {
-	d := &Daemon{jsManager: nil}
+	tmpDir := t.TempDir()
+	require.NoError(t, WriteLocalState(LocalStatePath("", tmpDir), &vm.Instances{
+		VMS: map[string]*vm.VM{"i-seed": {ID: "i-seed"}},
+	}))
+
+	d := &Daemon{
+		jsManager: nil,
+		config:    &config.Config{BaseDir: tmpDir},
+	}
+	require.NoError(t, d.LoadState())
+	assert.Contains(t, d.Instances.VMS, "i-seed")
+}
+
+func TestDaemon_LoadState_MissingFileIsFreshInstall(t *testing.T) {
+	d := &Daemon{
+		jsManager: nil,
+		config:    &config.Config{BaseDir: t.TempDir()},
+	}
+	require.NoError(t, d.LoadState())
+	assert.Empty(t, d.Instances.VMS)
+}
+
+func TestDaemon_LoadState_CorruptFileFatal(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := LocalStatePath("", tmpDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
+
+	d := &Daemon{
+		jsManager: nil,
+		config:    &config.Config{BaseDir: tmpDir},
+	}
 	err := d.LoadState()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "JetStream manager not initialized")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read local state")
 }
 
 // --- GetAvailableInstanceTypeInfos edge cases ---

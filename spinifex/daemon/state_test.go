@@ -573,7 +573,7 @@ func TestTransitionState_MultipleInstancesIndependent(t *testing.T) {
 func simulateCleanRestore(t *testing.T, daemon *Daemon) {
 	t.Helper()
 	require.NoError(t, daemon.jsManager.WriteShutdownMarker(daemon.node))
-	daemon.restoreInstances()
+	require.NoError(t, daemon.restoreInstances())
 }
 
 // TestRestoreInstances_StoppingFinalizedToStopped verifies that an instance
