@@ -125,7 +125,7 @@ jobs:
 
       - name: Upload DDIL Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ddil-results-${{ github.run_id }}
           path: ${{ runner.temp }}/ddil-results
