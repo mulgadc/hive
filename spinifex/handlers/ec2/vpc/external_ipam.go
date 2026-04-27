@@ -123,7 +123,6 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	} else if errors.Is(err, nats.ErrKeyNotFound) {
 		// If key not found, proceed to creation
 		slog.Info("external IPAM pool not found, creating", "pool", pool.Name)
-
 	} else if chk.RangeStart != pool.RangeStart || chk.RangeEnd != pool.RangeEnd || chk.Source != pool.Source {
 		// Validate our pool has not changed, e.g editing spinifex.toml and specifying a new start/end/source
 		slog.Info("external IPAM pool start/end range changed, updating KV", "pool", pool.Name, "RangeStart", pool.RangeStart, "RangeEnd", pool.RangeEnd)
