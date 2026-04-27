@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/gpu"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -38,15 +41,28 @@ var adminGpuDisableCmd = &cobra.Command{
 	Run:   runAdminGpuDisable,
 }
 
+var adminGpuSetupCmd = &cobra.Command{
+	Use:   "setup",
+	Short: "Configure this host for GPU passthrough (IOMMU, vfio-pci, nouveau blacklist)",
+	Long: `Idempotent host setup for GPU passthrough. Run once before a reboot to configure
+GRUB, vfio-pci early binding, and the nouveau blacklist; then run again after the
+reboot to verify bindings and enable GPU passthrough in the daemon.
+
+Must be run as root.`,
+	Run: runAdminGpuSetup,
+}
+
 func init() {
 	adminCmd.AddCommand(adminGpuCmd)
 	adminGpuCmd.AddCommand(adminGpuStatusCmd)
 	adminGpuCmd.AddCommand(adminGpuEnableCmd)
 	adminGpuCmd.AddCommand(adminGpuDisableCmd)
+	adminGpuCmd.AddCommand(adminGpuSetupCmd)
 
 	adminGpuStatusCmd.Flags().String("node", "", "Target node name (default: local node)")
 	adminGpuEnableCmd.Flags().String("node", "", "Target node name (default: local node)")
 	adminGpuDisableCmd.Flags().String("node", "", "Target node name (default: local node)")
+	adminGpuSetupCmd.Flags().String("node", "", "Target node name (default: local node)")
 }
 
 // gpuNodeStatus queries NATS and returns the NodeStatusResponse for the target node.
@@ -155,7 +171,7 @@ func gpuToggle(cmd *cobra.Command, enable bool) {
 		if !resp.GPUCapable {
 			fmt.Fprintln(os.Stderr, "Error: prerequisites not met on this node.")
 			if !resp.GPUCapable {
-				fmt.Fprintln(os.Stderr, "  Run 'sudo spx-test-gpu' to diagnose and configure the host.")
+				fmt.Fprintln(os.Stderr, "  Run 'sudo spx admin gpu setup' to configure the host.")
 			}
 			os.Exit(1)
 		}
@@ -214,4 +230,214 @@ func runAdminGpuEnable(cmd *cobra.Command, _ []string) {
 
 func runAdminGpuDisable(cmd *cobra.Command, _ []string) {
 	gpuToggle(cmd, false)
+}
+
+func runAdminGpuSetup(cmd *cobra.Command, _ []string) {
+	if os.Getuid() != 0 {
+		fmt.Fprintln(os.Stderr, "Error: spx admin gpu setup must be run as root.")
+		os.Exit(1)
+	}
+
+	fmt.Println("==> Detecting GPU")
+	devices, err := gpu.Discover()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "GPU discovery failed: %v\n", err)
+		os.Exit(1)
+	}
+	if len(devices) == 0 {
+		fmt.Fprintln(os.Stderr, "No NVIDIA or AMD GPU found — is the card seated?")
+		os.Exit(1)
+	}
+	for _, d := range devices {
+		fmt.Printf("    %s - %s\n", d.PCIAddress, d.Model)
+	}
+
+	fmt.Println("==> Collecting PCI IDs for vfio-pci")
+	ids := gpuSetupCollectVFIOIDs(devices)
+	idsCSV := strings.Join(ids, ",")
+	fmt.Printf("    IDs: %s\n", idsCSV)
+
+	rebootNeeded := false
+
+	fmt.Println("==> Checking IOMMU")
+	iommuEntries, _ := os.ReadDir("/sys/kernel/iommu_groups/")
+	if len(iommuEntries) > 0 {
+		fmt.Println("    Active")
+	} else {
+		params := gpuSetupIOMMMUParams()
+		changed, err := gpuSetupAddGRUBParams(params)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to update GRUB: %v\n", err)
+			os.Exit(1)
+		}
+		if changed {
+			fmt.Printf("    GRUB updated with: %s\n", params)
+		} else {
+			fmt.Println("    GRUB already has IOMMU params — refreshing")
+		}
+		ug := exec.Command("update-grub")
+		ug.Stdout, ug.Stderr = os.Stdout, os.Stderr
+		if err := ug.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "update-grub failed: %v\n", err)
+			os.Exit(1)
+		}
+		rebootNeeded = true
+	}
+
+	fmt.Println("==> Configuring vfio udev rule")
+	const vfioUdevRule = "/etc/udev/rules.d/99-spinifex-vfio.rules"
+	if _, err := os.Stat(vfioUdevRule); os.IsNotExist(err) {
+		rule := "SUBSYSTEM==\"vfio\", GROUP=\"spinifex\", MODE=\"0660\"\n"
+		if err := os.WriteFile(vfioUdevRule, []byte(rule), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write vfio udev rule: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("    Rule installed")
+		_ = exec.Command("udevadm", "control", "--reload-rules").Run()
+		_ = exec.Command("udevadm", "trigger", "--subsystem-match=vfio").Run()
+	} else {
+		fmt.Println("    Rule already present")
+	}
+
+	fmt.Println("==> Configuring nouveau blacklist")
+	const nouveauConf = "/etc/modprobe.d/blacklist-nouveau.conf"
+	if _, err := os.Stat(nouveauConf); os.IsNotExist(err) {
+		if err := os.WriteFile(nouveauConf, []byte("blacklist nouveau\noptions nouveau modeset=0\n"), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write nouveau blacklist: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("    nouveau blacklisted")
+		rebootNeeded = true
+	} else {
+		fmt.Println("    Already blacklisted")
+	}
+
+	fmt.Println("==> Configuring vfio-pci early binding")
+	const vfioPCIConf = "/etc/modprobe.d/vfio-pci.conf"
+	existing, _ := os.ReadFile(vfioPCIConf)
+	if !strings.Contains(string(existing), "ids="+idsCSV) {
+		if err := os.WriteFile(vfioPCIConf, []byte("options vfio-pci ids="+idsCSV+"\n"), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write vfio-pci.conf: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("    vfio-pci.conf written (ids=%s)\n", idsCSV)
+		rebootNeeded = true
+	} else {
+		fmt.Printf("    Already configured for %s\n", idsCSV)
+	}
+
+	const initramfsModules = "/etc/initramfs-tools/modules"
+	modData, _ := os.ReadFile(initramfsModules)
+	if !strings.Contains(string(modData), "vfio_pci") {
+		f, err := os.OpenFile(initramfsModules, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open initramfs modules: %v\n", err)
+			os.Exit(1)
+		}
+		_, werr := fmt.Fprint(f, "\n# vfio early binding for GPU passthrough\nvfio\nvfio_iommu_type1\nvfio_pci\n")
+		f.Close()
+		if werr != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write initramfs modules: %v\n", werr)
+			os.Exit(1)
+		}
+		fmt.Println("    vfio modules added to initramfs")
+		rebootNeeded = true
+	} else {
+		fmt.Println("    vfio modules already in initramfs")
+	}
+
+	if rebootNeeded {
+		fmt.Println("==> Updating initramfs")
+		ui := exec.Command("update-initramfs", "-u")
+		ui.Stdout, ui.Stderr = os.Stdout, os.Stderr
+		if err := ui.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "update-initramfs failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("\nSetup complete — reboot required.")
+		fmt.Println("  sudo reboot")
+		fmt.Println("  Then re-run: sudo spx admin gpu setup")
+		return
+	}
+
+	fmt.Println("==> Verifying vfio-pci module")
+	if _, err := os.Stat("/sys/module/vfio_pci"); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "vfio_pci not loaded — check: journalctl -b | grep vfio")
+		os.Exit(1)
+	}
+	fmt.Println("    Loaded")
+
+	fmt.Println("==> Verifying GPU driver binding")
+	for _, d := range devices {
+		driverLink := "/sys/bus/pci/devices/" + d.PCIAddress + "/driver"
+		target, err := os.Readlink(driverLink)
+		driver := filepath.Base(target)
+		if err != nil || driver != "vfio-pci" {
+			fmt.Fprintf(os.Stderr, "%s is bound to %q, not vfio-pci\n", d.PCIAddress, driver)
+			fmt.Fprintf(os.Stderr, "  Check: ls -la %s\n", driverLink)
+			os.Exit(1)
+		}
+		fmt.Printf("    %s - vfio-pci\n", d.PCIAddress)
+	}
+
+	fmt.Println("==> Enabling GPU passthrough")
+	gpuToggle(cmd, true)
+}
+
+// gpuSetupCollectVFIOIDs collects vendor:device PCI ID pairs for each GPU and
+// all sibling PCI functions on the same device slot (e.g. GPU + HDMI audio).
+// All siblings must bind to vfio-pci together for IOMMU group isolation.
+func gpuSetupCollectVFIOIDs(devices []gpu.GPUDevice) []string {
+	seen := make(map[string]bool)
+	var ids []string
+	for _, d := range devices {
+		prefix := d.PCIAddress[:strings.LastIndex(d.PCIAddress, ".")]
+		matches, _ := filepath.Glob("/sys/bus/pci/devices/" + prefix + ".*")
+		for _, m := range matches {
+			vb, err1 := os.ReadFile(m + "/vendor")
+			db, err2 := os.ReadFile(m + "/device")
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			v := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(string(vb))), "0x")
+			dv := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(string(db))), "0x")
+			id := v + ":" + dv
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+func gpuSetupIOMMMUParams() string {
+	data, _ := os.ReadFile("/proc/cpuinfo")
+	if strings.Contains(string(data), "GenuineIntel") {
+		return "intel_iommu=on iommu=pt"
+	}
+	return "amd_iommu=on iommu=pt"
+}
+
+// gpuSetupAddGRUBParams appends iommu kernel params to GRUB_CMDLINE_LINUX_DEFAULT.
+// Returns (true, nil) if the file was modified, (false, nil) if params were already present.
+func gpuSetupAddGRUBParams(params string) (bool, error) {
+	const grubFile = "/etc/default/grub"
+	data, err := os.ReadFile(grubFile)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", grubFile, err)
+	}
+	content := string(data)
+	if strings.Contains(content, "intel_iommu=on") || strings.Contains(content, "amd_iommu=on") {
+		return false, nil
+	}
+	re := regexp.MustCompile(`(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*)"`)
+	updated := re.ReplaceAllString(content, `${1} `+params+`"`)
+	if updated == content {
+		return false, fmt.Errorf("GRUB_CMDLINE_LINUX_DEFAULT not found in %s", grubFile)
+	}
+	if err := os.WriteFile(grubFile, []byte(updated), 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", grubFile, err)
+	}
+	return true, nil
 }

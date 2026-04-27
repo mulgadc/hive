@@ -45,6 +45,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/formation"
+	"github.com/mulgadc/spinifex/spinifex/gpu"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -2355,6 +2356,8 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 		"spinifex@"+currentIP,
 	)
 
+	banner += gpuBannerSection()
+
 	// Write to /etc/issue — displayed on the console before the login prompt.
 	// Overwrite entirely; this is a purpose-built appliance so we own this file.
 	if err := os.WriteFile("/etc/issue", []byte(banner), 0o644); err != nil {
@@ -2392,6 +2395,77 @@ func appendBannerToMotd(banner string) error {
 		}
 	}
 	return os.WriteFile(motdPath, []byte(base+sentinel+banner), 0o644)
+}
+
+// gpuBannerSection returns an optional banner box section describing GPU state.
+// Returns "" when no GPU hardware is detected. Safe to call at boot before the
+// daemon starts — all checks are sysfs/file reads, no NATS required.
+func gpuBannerSection() string {
+	devices, err := gpu.Discover()
+	if err != nil || len(devices) == 0 {
+		return ""
+	}
+
+	iommuEntries, _ := os.ReadDir("/sys/kernel/iommu_groups/")
+	iommuActive := len(iommuEntries) > 0
+
+	_, vfioErr := os.Stat("/sys/module/vfio_pci")
+	vfioPresent := vfioErr == nil
+
+	passthroughEnabled := false
+	cfgPath := DefaultConfigFile()
+	if cfg, err := config.LoadConfig(cfgPath); err == nil {
+		if nodeCfg, ok := cfg.Nodes[cfg.Node]; ok {
+			passthroughEnabled = nodeCfg.Daemon.GPUPassthrough
+		}
+	}
+
+	modelLine := gpuModelSummary(devices)
+
+	var line1, line2 string
+	switch {
+	case passthroughEnabled:
+		line1 = modelLine + " - passthrough enabled"
+	case iommuActive && vfioPresent:
+		line1 = modelLine + " - ready to enable"
+		line2 = "spx admin gpu enable"
+	default:
+		line1 = modelLine + " - setup needed"
+		line2 = "sudo spx admin gpu setup"
+	}
+
+	const maxLen = 39
+	if len([]rune(line1)) > maxLen {
+		line1 = string([]rune(line1)[:maxLen-3]) + "..."
+	}
+
+	section := "  +----------------------------------------------------+\n" +
+		fmt.Sprintf("  |  GPU:       %-39s|\n", line1)
+	if line2 != "" {
+		section += fmt.Sprintf("  |             %-39s|\n", line2)
+	}
+	section += "  +----------------------------------------------------+\n\n"
+	return section
+}
+
+func gpuModelSummary(devices []gpu.GPUDevice) string {
+	counts := make(map[string]int)
+	var order []string
+	for _, d := range devices {
+		if counts[d.Model] == 0 {
+			order = append(order, d.Model)
+		}
+		counts[d.Model]++
+	}
+	var parts []string
+	for _, m := range order {
+		if n := counts[m]; n > 1 {
+			parts = append(parts, fmt.Sprintf("%dx %s", n, m))
+		} else {
+			parts = append(parts, m)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // parseNodeConf reads a KEY=VALUE shell-format file and returns a map.
