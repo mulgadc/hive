@@ -167,7 +167,71 @@ type Daemon struct {
 	// are fully initialized. The health endpoint reports "starting" until ready.
 	ready atomic.Bool
 
+	// mode is the daemon's connectivity state — "cluster" when NATS is
+	// reachable, "standalone" when disconnected. Read-only via Mode(); flipped
+	// from utils/nats.go disconnect/reconnect callbacks (see onNATSDisconnect /
+	// onNATSReconnect). Initialised "standalone" so callers reading before
+	// connectNATS() returns get a sensible answer.
+	mode atomic.Value
+
+	// natsRetryCount counts disconnect→reconnect cycles since process start.
+	// Bumped from onNATSReconnect; surfaced via NATSRetryCount() for the
+	// /local/status endpoint added in 1b.
+	natsRetryCount atomic.Int64
+
 	mu sync.Mutex
+}
+
+// Daemon connectivity modes stored in Daemon.mode.
+const (
+	DaemonModeStandalone = "standalone"
+	DaemonModeCluster    = "cluster"
+)
+
+// Mode returns the daemon's current connectivity mode ("cluster" or
+// "standalone"). Safe to call from any goroutine.
+func (d *Daemon) Mode() string {
+	v := d.mode.Load()
+	if v == nil {
+		return DaemonModeStandalone
+	}
+	s, ok := v.(string)
+	if !ok {
+		return DaemonModeStandalone
+	}
+	return s
+}
+
+// NATSRetryCount returns the number of disconnect→reconnect cycles observed
+// since process start.
+func (d *Daemon) NATSRetryCount() int64 {
+	return d.natsRetryCount.Load()
+}
+
+// onNATSDisconnect runs when the NATS client loses its connection. Flips the
+// daemon to standalone mode so /local/status callers and scatter-gather
+// bailouts react immediately. Must not block — runs on a NATS client goroutine.
+func (d *Daemon) onNATSDisconnect(_ *nats.Conn, _ error) {
+	d.mode.Store(DaemonModeStandalone)
+}
+
+// onNATSReconnect runs when the NATS client reattaches to a server. Flips back
+// to cluster mode, bumps the retry counter, and pushes the full local instance
+// state to KV so the cluster view re-converges. The KV push is fired in a
+// goroutine because it briefly takes Instances.Mu and should not block the
+// NATS client goroutine.
+func (d *Daemon) onNATSReconnect(_ *nats.Conn) {
+	d.mode.Store(DaemonModeCluster)
+	d.natsRetryCount.Add(1)
+
+	if d.jsManager == nil {
+		return
+	}
+	go func() {
+		if err := d.WriteState(); err != nil {
+			slog.Warn("Reconnect KV resync failed", "error", err)
+		}
+	}()
 }
 
 // getSystemMemory returns the total system memory in GB
@@ -369,7 +433,7 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 		return nil, fmt.Errorf("initialize resource manager: %w", err)
 	}
 
-	return &Daemon{
+	d := &Daemon{
 		node:              cfg.Node,
 		clusterConfig:     cfg,
 		config:            &config,
@@ -380,7 +444,9 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 		natsSubscriptions: make(map[string]*nats.Subscription),
 		startTime:         time.Now(),
 		detachDelay:       1 * time.Second,
-	}, nil
+	}
+	d.mode.Store(DaemonModeStandalone)
+	return d, nil
 }
 
 // natsSub defines a single NATS subscription entry for the table-driven setup.
@@ -846,11 +912,16 @@ func (d *Daemon) Start() error {
 // be ready immediately after daemon start (e.g. if start-dev.sh is still
 // launching services). This retries for up to 5 minutes before giving up.
 func (d *Daemon) connectNATS() error {
-	nc, err := utils.ConnectNATSWithRetry(admin.DialTarget(d.config.NATS.Host), d.config.NATS.ACL.Token, d.config.NATS.CACert, d.natsRetryOpts...)
+	opts := append([]utils.RetryOption{
+		utils.WithDisconnectHandler(d.onNATSDisconnect),
+		utils.WithReconnectHandler(d.onNATSReconnect),
+	}, d.natsRetryOpts...)
+	nc, err := utils.ConnectNATSWithRetry(admin.DialTarget(d.config.NATS.Host), d.config.NATS.ACL.Token, d.config.NATS.CACert, opts...)
 	if err != nil {
 		return err
 	}
 	d.natsConn = nc
+	d.mode.Store(DaemonModeCluster)
 	return nil
 }
 

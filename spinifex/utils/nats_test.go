@@ -573,3 +573,126 @@ func TestConnectNATSWithRetry_TLSErrorNoRetry(t *testing.T) {
 	assert.Contains(t, err.Error(), "NATS TLS configuration error")
 	assert.Less(t, elapsed, time.Second, "should fail immediately without retrying")
 }
+
+// --- Disconnect/Reconnect callback tests ---
+
+func TestConnectNATS_DisconnectCallbackFires(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	disconnected := make(chan struct{}, 1)
+	nc, err := ConnectNATS(ns.ClientURL(), "", "",
+		WithDisconnectHandler(func(_ *nats.Conn, _ error) {
+			select {
+			case disconnected <- struct{}{}:
+			default:
+			}
+		}),
+	)
+	require.NoError(t, err)
+	defer nc.Close()
+	require.True(t, nc.IsConnected())
+
+	ns.Shutdown()
+
+	select {
+	case <-disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("disconnect callback did not fire")
+	}
+}
+
+func TestConnectNATS_ReconnectCallbackFires(t *testing.T) {
+	// Pin the test NATS to a specific port so we can restart it on the same URL.
+	port := freePort(t)
+	ns := startTestNATSOnPort(t, port)
+
+	reconnected := make(chan struct{}, 1)
+	nc, err := ConnectNATS(ns.ClientURL(), "", "",
+		WithReconnectHandler(func(_ *nats.Conn) {
+			select {
+			case reconnected <- struct{}{}:
+			default:
+			}
+		}),
+	)
+	require.NoError(t, err)
+	defer nc.Close()
+	require.True(t, nc.IsConnected())
+
+	ns.Shutdown()
+	// Wait until the client noticed the drop so the reconnect path runs.
+	require.Eventually(t, func() bool { return !nc.IsConnected() }, 3*time.Second, 50*time.Millisecond)
+
+	startTestNATSOnPort(t, port)
+
+	select {
+	case <-reconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconnect callback did not fire")
+	}
+}
+
+// --- Fast-fail when disconnected ---
+
+func TestNATSRequest_DisconnectedFastFail(t *testing.T) {
+	ns := startTestNATSServer(t)
+	nc, err := ConnectNATS(ns.ClientURL(), "", "")
+	require.NoError(t, err)
+	defer nc.Close()
+
+	ns.Shutdown()
+	require.Eventually(t, func() bool { return !nc.IsConnected() }, 3*time.Second, 50*time.Millisecond)
+
+	start := time.Now()
+	_, err = NATSRequest[map[string]any](nc, "ec2.Describe", struct{}{}, 5*time.Second, "")
+	elapsed := time.Since(start)
+
+	require.ErrorIs(t, err, ErrClusterUnavailable)
+	assert.Less(t, elapsed, 500*time.Millisecond, "should bail before per-call timeout")
+}
+
+func TestNATSScatterGather_DisconnectedFastFail(t *testing.T) {
+	ns := startTestNATSServer(t)
+	nc, err := ConnectNATS(ns.ClientURL(), "", "")
+	require.NoError(t, err)
+	defer nc.Close()
+
+	ns.Shutdown()
+	require.Eventually(t, func() bool { return !nc.IsConnected() }, 3*time.Second, 50*time.Millisecond)
+
+	start := time.Now()
+	_, err = NATSScatterGather[map[string]any](nc, "ec2.Describe", struct{}{}, 5*time.Second, 0, "")
+	elapsed := time.Since(start)
+
+	require.ErrorIs(t, err, ErrClusterUnavailable)
+	assert.Less(t, elapsed, 500*time.Millisecond, "should bail before fan-out timeout")
+}
+
+// --- helpers for restartable NATS server ---
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr, ok := l.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	port := addr.Port
+	require.NoError(t, l.Close())
+	return port
+}
+
+func startTestNATSOnPort(t *testing.T, port int) *server.Server {
+	t.Helper()
+	opts := &server.Options{
+		Host:   "127.0.0.1",
+		Port:   port,
+		NoLog:  true,
+		NoSigs: true,
+	}
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+	return ns
+}
