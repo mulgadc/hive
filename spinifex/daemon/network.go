@@ -40,14 +40,20 @@ func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	tapName := TapDeviceName(eniId)
 	ifaceID := OVSIfaceID(eniId)
 
-	// 0. If tap already exists (e.g. unclean shutdown), clean it up first
+	// 0. Clear any prior state on both the OVS and kernel sides. They have
+	// independent persistence — OVS conf.db survives reboot, kernel taps
+	// don't — so a /sys/class/net check alone misses orphan OVS ports left
+	// over after a host reboot or a terminate-during-pending race. The
+	// --if-exists flag makes del-port a no-op when the port is absent, so
+	// unconditional invocation is safe. Reject --may-exist add-port: it
+	// would silently keep stale external_ids:iface-id/attached-mac from a
+	// prior launch with a different ENI.
+	if err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run(); err != nil {
+		slog.Warn("Pre-create del-port failed (continuing)", "tap", tapName, "err", err)
+	}
 	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
-		slog.Warn("Stale tap device found, cleaning up before recreate", "tap", tapName)
-		if err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run(); err != nil {
-			slog.Warn("Failed to remove stale tap from br-int", "tap", tapName, "err", err)
-		}
 		if err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); err != nil {
-			slog.Warn("Failed to delete stale tap device", "tap", tapName, "err", err)
+			slog.Warn("Pre-create tap del failed (continuing)", "tap", tapName, "err", err)
 		}
 	}
 
@@ -243,11 +249,23 @@ func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
 }
 
 // CleanupMgmtTapDevice removes a management TAP device from the mgmt OVS
-// bridge and deletes it.
+// bridge and deletes it. Tolerant of missing state on either side: OVS port
+// removal is gated by --if-exists, kernel tap deletion is gated on
+// /sys/class/net/<tap> presence so callers may invoke this for an instance
+// that never reached the SetupMgmtTapDevice step.
 func CleanupMgmtTapDevice(tapName string) error {
 	// Detach from whichever OVS bridge holds this tap (usually br-mgmt)
 	if out, err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", tapName).CombinedOutput(); err != nil {
 		slog.Warn("Failed to remove mgmt tap from bridge", "tap", tapName, "err", err, "out", strings.TrimSpace(string(out)))
+	}
+
+	// Skip kernel-side delete if the tap is already gone (or was never
+	// created) — avoids a misleading "Device does not exist" error log
+	// when finalizeTermination cleans up an instance whose mgmt tap
+	// setup never completed.
+	if _, err := os.Stat("/sys/class/net/" + tapName); os.IsNotExist(err) {
+		slog.Info("Management TAP already absent", "tap", tapName)
+		return nil
 	}
 
 	// Delete TAP

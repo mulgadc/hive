@@ -1729,14 +1729,18 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				d.cleanupExtraENITaps(instance)
 			}
 
-			// Clean up management TAP and release IP
-			if instance.MgmtTap != "" {
-				if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
-					slog.Warn("Failed to clean up mgmt tap device", "tap", instance.MgmtTap, "instanceId", instance.ID, "err", err)
-				}
-				if d.mgmtIPAllocator != nil {
-					d.mgmtIPAllocator.Release(instance.ID)
-				}
+			// Clean up management TAP and release IP. Derive the name from
+			// instance.ID rather than reading instance.MgmtTap — the field
+			// is set only after SetupMgmtTapDevice returns, so a terminate
+			// that races mid-launch would skip cleanup and leak the OVS
+			// port. CleanupMgmtTapDevice is idempotent for instances that
+			// never reached the setup step.
+			mgmtTap := MgmtTapName(instance.ID)
+			if err := CleanupMgmtTapDevice(mgmtTap); err != nil {
+				slog.Warn("Failed to clean up mgmt tap device", "tap", mgmtTap, "instanceId", instance.ID, "err", err)
+			}
+			if d.mgmtIPAllocator != nil {
+				d.mgmtIPAllocator.Release(instance.ID)
 			}
 
 			// Unbind GPU from vfio-pci and rebind to its original host driver.
@@ -2032,14 +2036,31 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	return nil
 }
 
-func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
-	// Abort if instance is no longer in a launchable state (e.g., terminated
-	// by a concurrent request while waiting in the launch queue).
+// launchStillValid returns true while LaunchInstance may continue setting up
+// resources for instance. Returns false if a concurrent terminate has flipped
+// status out of pending/stopped/provisioning — at that point the terminate
+// goroutine owns cleanup and LaunchInstance must bail without further side
+// effects. Logs the abort reason at Info so it's visible without polluting
+// error logs (terminate-during-pending is an expected user-driven race).
+func (d *Daemon) launchStillValid(instance *vm.VM) bool {
 	d.Instances.Mu.Lock()
 	status := instance.Status
 	d.Instances.Mu.Unlock()
-	if status != vm.StatePending && status != vm.StateStopped && status != vm.StateProvisioning {
-		return fmt.Errorf("instance %s in %s state, not launchable", instance.ID, status)
+	if status == vm.StatePending || status == vm.StateStopped || status == vm.StateProvisioning {
+		return true
+	}
+	slog.Info("Launch aborted by concurrent terminate", "instanceId", instance.ID, "status", string(status))
+	return false
+}
+
+func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
+	// Abort if instance is no longer in a launchable state. A concurrent
+	// terminate request that flipped status to shutting-down/terminated
+	// owns the cleanup lifecycle; this path is an expected race outcome,
+	// not an error, so return nil to avoid the spurious
+	// "Failed to transition instance to running" ERROR log.
+	if !d.launchStillValid(instance) {
+		return nil
 	}
 
 	// First, confirm if the instance is already running
@@ -2065,6 +2086,15 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	if err != nil {
 		slog.Error("Failed to mount volumes", "err", err)
 		return err
+	}
+
+	// Re-check status — MountVolumes can take 30+s on cold AMIs (NBD
+	// clone), and a terminate can race in during that window. Skip the
+	// remaining setup so the concurrent terminate goroutine doesn't fight
+	// SetupTapDevice and leak resources. PR1b.1's idempotency safety net
+	// catches anything that does slip through.
+	if !d.launchStillValid(instance) {
+		return nil
 	}
 
 	// Claim GPU for GPU instance types — binds the full IOMMU group to vfio-pci.
@@ -2122,6 +2152,14 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.Instances.Mu.Lock()
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
+
+	// Final race check — QEMU is up, but if a terminate fired during
+	// StartInstance/CreateQMPClient, the concurrent goroutine has already
+	// transitioned status to shutting-down. Attempting StateRunning here
+	// would log a spurious error; let the terminate cleanup own teardown.
+	if !d.launchStillValid(instance) {
+		return nil
+	}
 
 	if err := d.TransitionState(instance, vm.StateRunning); err != nil {
 		slog.Error("Failed to transition instance to running", "instanceId", instance.ID, "err", err)
