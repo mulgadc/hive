@@ -569,12 +569,17 @@ func (s *EIPServiceImpl) findByAssociationID(accountID, associationID string) (*
 
 // publishNATEvent publishes a NAT lifecycle event to NATS for vpcd consumption.
 // This is fire-and-forget; errors are logged but do not fail the API response.
+//
+// PortName must match the OVN logical switch port name ("port-<eni-id>") because
+// vpcd sets NAT.LogicalPort to this value in distributed NAT mode (direct
+// bridge). A mismatch creates a dnat_and_snat row pointing at a nonexistent
+// port, and OVN never programs the DNAT flow.
 func (s *EIPServiceImpl) publishNATEvent(topic, vpcID, externalIP, logicalIP, eniID, mac string) {
 	utils.PublishEvent(s.natsConn, topic, natEvent{
 		VpcId:      vpcID,
 		ExternalIP: externalIP,
 		LogicalIP:  logicalIP,
-		PortName:   eniID,
+		PortName:   "port-" + eniID,
 		MAC:        mac,
 	})
 }

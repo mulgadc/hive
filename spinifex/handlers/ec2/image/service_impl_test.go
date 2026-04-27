@@ -1031,6 +1031,48 @@ func TestDescribeImages_FilterByState(t *testing.T) {
 	assert.Empty(t, out.Images)
 }
 
+func TestDescribeImages_FilterByVirtualizationType(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-hvm", Name: "hvm-img", Architecture: "x86_64",
+		Virtualization: "hvm", RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-pv", Name: "pv-img", Architecture: "x86_64",
+		Virtualization: "paravirtual", RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("virtualization-type"), Values: []*string{aws.String("hvm")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+	assert.Equal(t, "ami-hvm", *out.Images[0].ImageId)
+}
+
+func TestDescribeImages_FilterByRootDeviceType(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-ebs", Name: "ebs-img", Architecture: "x86_64",
+		Virtualization: "hvm", RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-is", Name: "is-img", Architecture: "x86_64",
+		Virtualization: "hvm", RootDeviceType: "instance-store", VolumeSizeGiB: 8,
+	})
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("root-device-type"), Values: []*string{aws.String("ebs")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+	assert.Equal(t, "ami-ebs", *out.Images[0].ImageId)
+}
+
 // --- RegisterImage tests ---
 
 // putTestSnapshotConfig writes a SnapshotConfig at {snapshotID}/metadata.json,

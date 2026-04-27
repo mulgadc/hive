@@ -1,4 +1,4 @@
-name: Spinifex DDIL E2E
+name: E2E DDIL
 
 # Phase 1 trigger: workflow_dispatch only. Nightly cron + on-main-merge
 # land in mulga-siv-5.8 once ≥4 scenarios are asserting. See

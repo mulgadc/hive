@@ -1,4 +1,4 @@
-name: Spinifex Build and Test
+name: Build and Test
 
 on:
   push:
@@ -17,7 +17,7 @@ on:
 
 jobs:
   build_and_test:
-    name: Spinifex Build and Test
+    name: Build and Test
     runs-on: ubuntu-24.04
 
     steps:
@@ -58,7 +58,7 @@ jobs:
         run: cd spinifex && scripts/diff-coverage.sh coverage.out --base HEAD~1
 
   race_detection:
-    name: Spinifex Race Detection
+    name: Race Detection
     runs-on: ubuntu-24.04
 
     steps:
@@ -92,7 +92,7 @@ jobs:
         run: make -C spinifex test-race
 
   lint_and_security:
-    name: Spinifex Lint and Security
+    name: Lint and Security
     runs-on: ubuntu-24.04
 
     steps:
