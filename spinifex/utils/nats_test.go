@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -666,6 +667,77 @@ func TestNATSScatterGather_DisconnectedFastFail(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrClusterUnavailable)
 	assert.Less(t, elapsed, 500*time.Millisecond, "should bail before fan-out timeout")
+}
+
+// --- 1c fail-fast tests: NATS request helpers reject when conn is down ---
+
+func TestNATSRequest_NilConn_ReturnsClusterUnavailable(t *testing.T) {
+	type Resp struct{}
+	_, err := NATSRequest[Resp](nil, "test.never", struct{}{}, 50*time.Millisecond, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrClusterUnavailable)
+}
+
+func TestNATSRequest_ClosedConn_ReturnsClusterUnavailable(t *testing.T) {
+	ns := startTestNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	nc.Close()
+
+	type Resp struct{}
+	_, err = NATSRequest[Resp](nc, "test.never", struct{}{}, 50*time.Millisecond, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrClusterUnavailable)
+}
+
+func TestNATSScatterGather_NilConn_ReturnsClusterUnavailable(t *testing.T) {
+	type Resp struct{}
+	_, err := NATSScatterGather[Resp](nil, "test.never", struct{}{}, 50*time.Millisecond, 1, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrClusterUnavailable)
+}
+
+func TestNATSScatterGather_ClosedConn_ReturnsClusterUnavailable(t *testing.T) {
+	ns := startTestNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	nc.Close()
+
+	type Resp struct{}
+	_, err = NATSScatterGather[Resp](nc, "test.never", struct{}{}, 50*time.Millisecond, 1, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrClusterUnavailable)
+}
+
+// --- 1c callback hook plumbing: WithDisconnectHandler / WithReconnectHandler ---
+
+func TestConnectNATS_DisconnectReconnectCallbacks(t *testing.T) {
+	port := freePort(t)
+	ns := startTestNATSOnPort(t, port)
+
+	disconnects := make(chan struct{}, 4)
+	reconnects := make(chan struct{}, 4)
+
+	nc, err := ConnectNATS("nats://127.0.0.1:"+strconv.Itoa(port), "", "",
+		WithDisconnectHandler(func(_ *nats.Conn, _ error) { disconnects <- struct{}{} }),
+		WithReconnectHandler(func(_ *nats.Conn) { reconnects <- struct{}{} }),
+	)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	ns.Shutdown()
+	select {
+	case <-disconnects:
+	case <-time.After(3 * time.Second):
+		t.Fatal("disconnect callback never fired")
+	}
+
+	startTestNATSOnPort(t, port)
+	select {
+	case <-reconnects:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconnect callback never fired")
+	}
 }
 
 // --- helpers for restartable NATS server ---

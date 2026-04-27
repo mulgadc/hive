@@ -2,10 +2,13 @@ package daemon
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,4 +94,121 @@ func startTestNATSOnPortForTest(t *testing.T, port int) *server.Server {
 	require.True(t, ns.ReadyForConnections(5*time.Second))
 	t.Cleanup(func() { ns.Shutdown() })
 	return ns
+}
+
+// TestMode_NilStored_ReturnsStandalone — bare Daemon with no mode stored returns standalone.
+// Covers the d.mode.Load() == nil branch in Mode().
+func TestMode_NilStored_ReturnsStandalone(t *testing.T) {
+	d := &Daemon{}
+	assert.Equal(t, DaemonModeStandalone, d.Mode())
+}
+
+// TestMode_WrongTypeStored_ReturnsStandalone — non-string in atomic.Value falls
+// back to standalone instead of panicking. Covers the type-assertion !ok branch.
+func TestMode_WrongTypeStored_ReturnsStandalone(t *testing.T) {
+	d := &Daemon{}
+	d.mode.Store(struct{ x string }{x: "not a string"})
+	assert.Equal(t, DaemonModeStandalone, d.Mode())
+}
+
+// TestOnNATSDisconnect_FlipsMode — direct unit test of the disconnect callback
+// without needing an actual NATS disconnect roundtrip.
+func TestOnNATSDisconnect_FlipsMode(t *testing.T) {
+	d := &Daemon{}
+	d.mode.Store(DaemonModeCluster)
+	d.onNATSDisconnect(nil, nil)
+	assert.Equal(t, DaemonModeStandalone, d.Mode())
+}
+
+// TestOnNATSReconnect_NoJetStreamManager_DoesNotPanic — reconnect with
+// jsManager nil flips mode + bumps counter but skips the goroutine WriteState.
+func TestOnNATSReconnect_NoJetStreamManager_DoesNotPanic(t *testing.T) {
+	d := &Daemon{}
+	d.mode.Store(DaemonModeStandalone)
+
+	d.onNATSReconnect(nil)
+
+	assert.Equal(t, DaemonModeCluster, d.Mode())
+	assert.Equal(t, int64(1), d.NATSRetryCount())
+}
+
+// TestLocalStatePath_NilConfig_UsesDefault — defensive path used by callers
+// that build a Daemon without populating Config (older test fixtures, etc).
+func TestLocalStatePath_NilConfig_UsesDefault(t *testing.T) {
+	d := &Daemon{}
+	assert.Equal(t, "/var/lib/spinifex/state/instance-state.json", d.localStatePath())
+}
+
+// TestLocalStatePath_RootedAtDataDir — verifies 1a's DataDir-rooted layout.
+func TestLocalStatePath_RootedAtDataDir(t *testing.T) {
+	d := &Daemon{config: &config.Config{DataDir: "/var/lib/spinifex/n1"}}
+	assert.Equal(t, "/var/lib/spinifex/n1/state/instance-state.json", d.localStatePath())
+}
+
+// TestDaemonWriteState_LocalFile — WriteState persists to the configured DataDir
+// even with a nil jsManager (best-effort KV is the second half; local file
+// must succeed standalone).
+func TestDaemonWriteState_LocalFile(t *testing.T) {
+	dataDir := t.TempDir()
+	d := &Daemon{
+		config:    &config.Config{DataDir: dataDir},
+		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-w1": {ID: "i-w1", InstanceType: "t3.micro"}}},
+	}
+
+	require.NoError(t, d.WriteState())
+
+	state, err := ReadLocalState(filepath.Join(dataDir, "state", "instance-state.json"))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, "t3.micro", state.VMS["i-w1"].InstanceType)
+}
+
+// TestDaemonLoadState_MissingFile — fresh-install path: empty map, no error.
+func TestDaemonLoadState_MissingFile(t *testing.T) {
+	d := &Daemon{
+		config:    &config.Config{DataDir: t.TempDir()},
+		Instances: vm.Instances{VMS: nil},
+	}
+	require.NoError(t, d.LoadState())
+	assert.NotNil(t, d.Instances.VMS)
+	assert.Empty(t, d.Instances.VMS)
+}
+
+// TestDaemonLoadState_RoundTrip — write, then read back into a fresh daemon
+// rooted at the same DataDir.
+func TestDaemonLoadState_RoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	writer := &Daemon{
+		config:    &config.Config{DataDir: dataDir},
+		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-rt1": {ID: "i-rt1", InstanceType: "m5.large"}}},
+	}
+	require.NoError(t, writer.WriteState())
+
+	reader := &Daemon{
+		config:    &config.Config{DataDir: dataDir},
+		Instances: vm.Instances{VMS: nil},
+	}
+	require.NoError(t, reader.LoadState())
+	assert.Len(t, reader.Instances.VMS, 1)
+	assert.Equal(t, "m5.large", reader.Instances.VMS["i-rt1"].InstanceType)
+}
+
+// TestDaemonLoadState_CorruptFile — corruption is fatal, daemon refuses start.
+func TestDaemonLoadState_CorruptFile(t *testing.T) {
+	dataDir := t.TempDir()
+	d := &Daemon{config: &config.Config{DataDir: dataDir}}
+
+	path := d.localStatePath()
+	require.NoError(t, writeCorruptStateFile(path))
+
+	err := d.LoadState()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read local state")
+}
+
+func writeCorruptStateFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte("{not json"), 0o600)
 }
