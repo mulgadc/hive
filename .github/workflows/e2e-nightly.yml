@@ -1,0 +1,188 @@
+name: E2E Nightly
+
+on:
+  schedule:
+    - cron: "0 14 * * *" # 00:00 AEST = 14:00 UTC
+  workflow_dispatch:
+    inputs:
+      cells:
+        description: "Comma-separated cell numbers to run (blank = all)"
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  GIT_BRANCH: ${{ github.ref_name }}
+  UBUNTU_GOLD_IMAGE: /mnt/disk1/gold-images/spinifex-image-builder-ubuntu-24.04.qcow2
+
+jobs:
+  matrix:
+    name: "cell-${{ matrix.cell }} (${{ matrix.topo }}/${{ matrix.net }}/${{
+      matrix.host }}${{ matrix.extra && format('/{0}', matrix.extra) || '' }})"
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - { cell: 2,  install: binary, topo: single,     net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-single, extra: "" }
+          - { cell: 9,  install: binary, topo: real-multi, net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-multi,  extra: "" }
+          - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-pseudo, extra: "tofu-examples" }
+
+    runs-on: [ self-hosted, "${{ matrix.runner }}" ]
+    timeout-minutes: 35
+    env:
+      TOFU_LOG: /tmp/e2e-nightly-cell-${{ matrix.cell }}-${{ github.run_id }}.log
+
+    steps:
+      # blank or scheduled run = full matrix.
+      # Input must be comma-separated with no whitespace (e.g. '1,2,17', not '1, 2').
+      - name: Gate on Dispatch Input
+        id: gate
+        env:
+          CELL: ${{ matrix.cell }}
+          CELLS: ${{ github.event_name == 'workflow_dispatch' && inputs.cells || '' }}
+        run: |
+          if [ -z "$CELLS" ] || [[ ",${CELLS}," == *",${CELL},"* ]]; then
+            echo "selected=true" >> "$GITHUB_OUTPUT"
+            echo "cell ${CELL} selected"
+          else
+            echo "selected=false" >> "$GITHUB_OUTPUT"
+            echo "cell ${CELL} not in '${CELLS}' — subsequent steps will skip"
+          fi
+
+      - name: Clean Workspace
+        if: steps.gate.outputs.selected == 'true'
+        run: rm -rf "$GITHUB_WORKSPACE"/*
+
+      - uses: actions/create-github-app-token@v3
+        if: steps.gate.outputs.selected == 'true'
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: mulga
+
+      - name: Resolve Mulga Branch
+        if: steps.gate.outputs.selected == 'true'
+        id: mulga-branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
+            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "mulga: using branch ${BRANCH}"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "mulga: branch ${BRANCH} not found, falling back to main"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.gate.outputs.selected == 'true'
+        with:
+          repository: mulgadc/mulga
+          ref: ${{ steps.mulga-branch.outputs.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: scripts/tofu-cluster
+          path: mulga
+
+      - name: Build Install Artifacts
+        if: steps.gate.outputs.selected == 'true'
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          ./build-install-artifacts.sh "${GIT_BRANCH}" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-tests.tar"
+
+      - name: Provision VMs
+        if: steps.gate.outputs.selected == 'true'
+        working-directory: mulga/scripts/tofu-cluster
+        env:
+          MATRIX_HOST: ${{ matrix.host }}
+        run: |
+          export TF_VAR_git_branch="${GIT_BRANCH}"
+
+          TOFU_VAR_ARGS=""
+          if [ "$MATRIX_HOST" = "ubuntu-24.04" ]; then
+            TOFU_VAR_ARGS="-var=host_image_override=${UBUNTU_GOLD_IMAGE}"
+          fi
+
+          tofu init -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars ${TOFU_VAR_ARGS} -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/${SPINIFEX_CI_ENV}.tfvars ${TOFU_VAR_ARGS} -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+
+      - name: Bootstrap via Binary Install
+        if: steps.gate.outputs.selected == 'true'
+        working-directory: mulga/scripts/tofu-cluster
+        env:
+          MATRIX_NET: ${{ matrix.net }}
+        run: |
+          if [ "$MATRIX_NET" = "dhcp" ]; then
+            unset SPX_EXTERNAL_POOL
+            export SPX_EXTERNAL_SOURCE=dhcp
+          else
+            export SPX_EXTERNAL_POOL="${SPINIFEX_CI_POOL}"
+          fi
+
+          ./bootstrap-install.sh "${SPINIFEX_CI_ENV}" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            --test-tar "${RUNNER_TEMP}/spinifex-tests.tar"
+
+      - name: Run Single Node E2E
+        if: steps.gate.outputs.selected == 'true' && matrix.topo == 'single' && matrix.extra != 'tofu-examples'
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          INVENTORY=$(tofu output -json inventory)
+          WAN_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+          ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
+            "cd ~/e2e-tests && ./run-e2e.sh && ./run-cert-e2e.sh && ENDPOINT=https://${WAN_IP}:9999 ./run-lb-e2e.sh"
+
+      - name: Run Multi Node E2E
+        if: steps.gate.outputs.selected == 'true' && matrix.topo == 'real-multi'
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          INVENTORY=$(tofu output -json inventory)
+          NODE1_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+
+          NODE_IPS=""
+          NODE_COUNT=$(echo "$INVENTORY" | jq '.nodes | length')
+          for i in $(seq 0 $((NODE_COUNT - 1))); do
+            NODE_IPS="${NODE_IPS} $(echo "$INVENTORY" | jq -r ".nodes[$i].wan_ip")"
+          done
+
+          ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
+            "cd ~/e2e-tests && ./run-multinode-e2e.sh ${NODE_IPS} && ./run-cert-e2e.sh --multinode ${NODE_IPS} && ENDPOINT=https://${NODE1_IP}:9999 ./run-lb-e2e.sh --nodes ${NODE_IPS}"
+
+      - name: Run Tofu Workbooks
+        if: matrix.extra == 'tofu-examples'
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          INVENTORY=$(tofu output -json inventory)
+          WAN_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+          ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
+            "cd ~/e2e-tests && ./run-tofu-examples-e2e.sh"
+
+      - name: Teardown
+        if: always()
+        working-directory: mulga/scripts/tofu-cluster
+        env:
+          MATRIX_HOST: ${{ matrix.host }}
+        run: |
+          TOFU_VAR_ARGS=""
+          if [ "$MATRIX_HOST" = "ubuntu-24.04" ]; then
+            TOFU_VAR_ARGS="-var=host_image_override=${UBUNTU_GOLD_IMAGE}"
+          fi
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars ${TOFU_VAR_ARGS} -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true

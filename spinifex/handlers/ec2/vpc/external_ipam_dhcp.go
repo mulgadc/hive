@@ -15,7 +15,7 @@ import (
 // ~10 s of slack for NAK + fresh DISCOVER fallbacks). A var rather than
 // a const so tests can drive the timeout error path without waiting
 // 20 s per table entry.
-var dhcpNATSTimeout = 20 * time.Second
+var dhcpNATSTimeout = 30 * time.Second
 
 // dhcpLeaseResult is the data ExternalIPAM needs from a successful acquire.
 // It maps directly from dhcp.AcquireReplyMsg; kept as a handler-side type
@@ -61,17 +61,43 @@ func ObtainDHCPLease(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poo
 		return dhcpLeaseResult{}, fmt.Errorf("marshal dhcp acquire request: %w", err)
 	}
 
-	msg, err := nc.Request(dhcp.TopicAcquire, data, dhcpNATSTimeout)
-	if err != nil {
-		return dhcpLeaseResult{}, fmt.Errorf("dhcp acquire NATS request (client %s): %w", clientID, err)
-	}
-
+	// Attempt 5 deliveres to NAT (timeout, service not started, temp errors)
 	var reply dhcp.AcquireReplyMsg
-	if err := json.Unmarshal(msg.Data, &reply); err != nil {
-		return dhcpLeaseResult{}, fmt.Errorf("unmarshal dhcp acquire reply: %w", err)
-	}
-	if reply.Error != "" {
-		return dhcpLeaseResult{}, fmt.Errorf("dhcp acquire (client %s): %s", clientID, reply.Error)
+	const maxAttempts = 5
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		msg, err := nc.Request(dhcp.TopicAcquire, data, dhcpNATSTimeout)
+		if err != nil {
+			if attempt == maxAttempts {
+				return dhcpLeaseResult{}, fmt.Errorf(
+					"dhcp acquire NATS request failed after %d attempts (client %s): %w",
+					maxAttempts,
+					clientID,
+					err,
+				)
+			}
+
+			slog.Warn(
+				"dhcp acquire NATS request failed, retrying",
+				"clientID", clientID,
+				"attempt", attempt,
+				"maxAttempts", maxAttempts,
+				"err", err,
+			)
+
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if err := json.Unmarshal(msg.Data, &reply); err != nil {
+			return dhcpLeaseResult{}, fmt.Errorf("unmarshal dhcp acquire reply: %w", err)
+		}
+
+		if reply.Error != "" {
+			return dhcpLeaseResult{}, fmt.Errorf("dhcp acquire client %s: %s", clientID, reply.Error)
+		}
+
+		break
 	}
 
 	slog.Info("DHCP lease obtained",

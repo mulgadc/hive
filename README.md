@@ -91,7 +91,7 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 
 ## Installation
 
-Installation requires an Ubuntu / Debian system. See the detailed documentation at [https://docs.mulgadc.com](https://docs.mulgadc.com) for maintaining and installing Spinifex.
+Installation requires an Ubuntu / Debian system. See the detailed documentation at [docs.mulgadc.com](https://docs.mulgadc.com) for maintaining and installing Spinifex.
 
 ### Single Node Install
 
@@ -179,4 +179,4 @@ This hybrid approach ensures Spinifex benefits from both proven engineering expe
 
 ## License
 
-Spinifex is open source under the [GNU Affero General Public License v3.0](LICENSE). You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms.
+Spinifex is open source under the [GNU Affero General Public License v3.0](LICENSE). You're free to use, modify, and deploy it anywhere you need reliable infrastructure without depending on centralized cloud platforms.

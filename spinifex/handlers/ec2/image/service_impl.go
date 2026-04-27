@@ -74,14 +74,16 @@ func NewImageServiceImplWithStore(store objectstore.ObjectStore, bucketName stri
 
 // describeImagesValidFilters defines the set of filter names accepted by DescribeImages.
 var describeImagesValidFilters = map[string]bool{
-	"name":         true,
-	"state":        true,
-	"architecture": true,
-	"image-id":     true,
-	"is-public":    true,
-	"owner-id":     true,
-	"description":  true,
-	"image-type":   true,
+	"name":                true,
+	"state":               true,
+	"architecture":        true,
+	"image-id":            true,
+	"is-public":           true,
+	"owner-id":            true,
+	"description":         true,
+	"image-type":          true,
+	"virtualization-type": true,
+	"root-device-type":    true,
 }
 
 // DescribeImages lists available AMI images by reading config.json files from S3
@@ -339,6 +341,14 @@ func imageMatchesFilters(image *ec2.Image, filters map[string][]string, tags map
 		case "image-type":
 			if image.ImageType != nil {
 				field = *image.ImageType
+			}
+		case "virtualization-type":
+			if image.VirtualizationType != nil {
+				field = *image.VirtualizationType
+			}
+		case "root-device-type":
+			if image.RootDeviceType != nil {
+				field = *image.RootDeviceType
 			}
 		default:
 			return false

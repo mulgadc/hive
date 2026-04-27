@@ -202,3 +202,44 @@ func TestWireLBAgentConfig_GatewayURL_NoAdvertiseNoBridge(t *testing.T) {
 
 	assert.Empty(t, d.elbv2Service.GatewayURL)
 }
+
+// Single-node local dev: AWSGW on 0.0.0.0, br-mgmt present, AdvertiseIP set.
+// Gateway must be AdvertiseIP (reachable via the VM's WAN NIC), NOT the
+// br-mgmt IP (guest has no DHCP on br-mgmt so that subnet is unreachable).
+func TestWireLBAgentConfig_GatewayURL_AdvertiseOverMgmtBridge(t *testing.T) {
+	cfg := &config.Config{
+		AdvertiseIP: "192.168.1.32",
+		AWSGW:       config.AWSGWConfig{Host: "0.0.0.0:9999"},
+	}
+	d := newWireLBTestDaemon(t, cfg)
+	d.mgmtBridgeIP = "10.14.8.1"
+
+	d.wireLBAgentConfig()
+
+	assert.Equal(t, "https://192.168.1.32:9999", d.elbv2Service.GatewayURL)
+	assert.Empty(t, d.mgmtRouteVia)
+	assert.Empty(t, d.elbv2Service.MgmtRouteGateway)
+	assert.Empty(t, d.elbv2Service.MgmtRouteTarget)
+}
+
+// Single-node with br-mgmt AND a specific AWSGW bind that matches AdvertiseIP
+// (e.g. `spx admin init --bind $PRIMARY_WAN`): the WAN IP is reachable via the
+// normal VPC → external path, so the bootcmd mgmt host route must NOT be
+// injected. Injecting it would divert the reply leg of host-initiated ALB
+// connections out br-mgmt, bypassing OVN SNAT and arriving at the host with a
+// source that doesn't match the open TCP socket.
+func TestWireLBAgentConfig_GatewayURL_SingleNodeBindMatchesAdvertise(t *testing.T) {
+	cfg := &config.Config{
+		AdvertiseIP: "192.168.0.17",
+		AWSGW:       config.AWSGWConfig{Host: "192.168.0.17:9999"},
+	}
+	d := newWireLBTestDaemon(t, cfg)
+	d.mgmtBridgeIP = "10.15.8.1"
+
+	d.wireLBAgentConfig()
+
+	assert.Equal(t, "https://192.168.0.17:9999", d.elbv2Service.GatewayURL)
+	assert.Empty(t, d.mgmtRouteVia)
+	assert.Empty(t, d.elbv2Service.MgmtRouteGateway)
+	assert.Empty(t, d.elbv2Service.MgmtRouteTarget)
+}
