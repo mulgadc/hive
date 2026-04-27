@@ -970,10 +970,6 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 	routerName := "vpc-" + evt.VpcId
 
 	// NAT mode depends on bridge type:
-	// - Macvlan: centralized NAT (no ExternalMAC/LogicalPort). OVN uses the
-	//   router port MAC for all ARP replies so the macvlan can receive inbound
-	//   unicast. Distributed NAT would announce the VM's MAC which the macvlan
-	//   filters out. For single-node, centralized NAT has zero overhead.
 	// - Direct bridge: distributed NAT (ExternalMAC + LogicalPort set). DNAT
 	//   is processed on the VM's own chassis — no hairpin through the gateway
 	//   chassis. This is the preferred mode for multi-node performance.

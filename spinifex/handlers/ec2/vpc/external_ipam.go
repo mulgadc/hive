@@ -39,6 +39,7 @@ type ExternalIPAllocation struct {
 // ExternalIPAMRecord tracks allocated external IPs for a single pool.
 type ExternalIPAMRecord struct {
 	PoolName   string                          `json:"pool_name"`
+	Source     string                          `json:"source"` // "static" (default) or "dhcp"
 	RangeStart string                          `json:"range_start"`
 	RangeEnd   string                          `json:"range_end"`
 	Gateway    string                          `json:"gateway"`
@@ -114,15 +115,41 @@ func (m *ExternalIPAM) initPools() error {
 }
 
 func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
-	_, _, err := m.getRecord(pool.Name)
-	if err == nil {
-		slog.Debug("external IPAM pool already initialized", "pool", pool.Name)
-		return nil // Already exists
-	}
+	chk, revision, err := m.getRecord(pool.Name)
+
+	// Catch all other errors
 	if !errors.Is(err, nats.ErrKeyNotFound) {
 		return err
+	} else if errors.Is(err, nats.ErrKeyNotFound) {
+		// If key not found, proceed to creation
+		slog.Info("external IPAM pool not found, creating", "pool", pool.Name)
+
+	} else if chk.RangeStart != pool.RangeStart || chk.RangeEnd != pool.RangeEnd || chk.Source != pool.Source {
+		// Validate our pool has not changed, e.g editing spinifex.toml and specifying a new start/end/source
+		slog.Info("external IPAM pool start/end range changed, updating KV", "pool", pool.Name, "RangeStart", pool.RangeStart, "RangeEnd", pool.RangeEnd)
+
+		// Update record with the new start/end
+		chk.RangeStart = pool.RangeStart
+		chk.RangeEnd = pool.RangeEnd
+		chk.Source = pool.Source
+
+		data, err := json.Marshal(chk)
+		if err != nil {
+			return fmt.Errorf("marshal external IPAM record: %w", err)
+		}
+
+		if _, err := m.kv.Update(pool.Name, data, revision); err != nil {
+			slog.Warn("external IPAM update failed", "pool", pool.Name)
+			return err
+		}
+
+		return nil
+	} else if err == nil {
+		slog.Info("external IPAM pool already initialized", "pool", pool.Name)
+		return nil // Already exists
 	}
 
+	// TODO: Confirm gateway IP defined, should error, given we route traffic to the upstream DHCP gateway
 	gwIP := pool.GatewayIP
 	if gwIP == "" && !pool.IsDHCP() {
 		gwIP = pool.RangeStart
