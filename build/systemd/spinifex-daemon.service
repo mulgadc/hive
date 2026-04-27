@@ -1,7 +1,7 @@
 [Unit]
 Description=Spinifex Daemon (VM Orchestration)
 PartOf=spinifex.target
-After=spinifex-nats.service spinifex-viperblock.service
+After=spinifex-nats.service spinifex-viperblock.service openvswitch-switch.service
 Wants=spinifex-nats.service
 
 [Service]
