@@ -458,6 +458,20 @@ func TestFindInterfaceByIP_NotFound(t *testing.T) {
 	}
 }
 
+// TestCleanupMgmtTapDevice_MissingKernelTap verifies the nil-safe branch
+// added to support finalizeTermination: a terminate that races mid-launch
+// (or an instance that never created a mgmt tap) must not log a misleading
+// "Device does not exist" error from `ip tuntap del`.
+func TestCleanupMgmtTapDevice_MissingKernelTap(t *testing.T) {
+	// 15-char IFNAMSIZ-compliant name that does not exist in /sys/class/net.
+	// The OVS del-port call may fail on CI without ovs-vsctl, but is
+	// best-effort + logged-warn; the kernel-presence gate short-circuits
+	// before `ip tuntap del` runs.
+	if err := CleanupMgmtTapDevice("mg-test-noexist"); err != nil {
+		t.Fatalf("expected nil for missing kernel tap, got: %v", err)
+	}
+}
+
 func TestEnsureDataRoute_NoOVS(t *testing.T) {
 	// EnsureDataRoute requires ip commands which may not work in CI.
 	// On loopback, there's no kernel subnet route, so it should return an error.
