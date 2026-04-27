@@ -11,18 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLocalStatePath_PrefersDataDir(t *testing.T) {
-	got := LocalStatePath("/data", "/base")
+func TestLocalStatePath_UsesDataDir(t *testing.T) {
+	got := LocalStatePath("/data")
 	assert.Equal(t, "/data/state/instance-state.json", got)
 }
 
-func TestLocalStatePath_FallsBackToBaseDir(t *testing.T) {
-	got := LocalStatePath("", "/base")
-	assert.Equal(t, "/base/state/instance-state.json", got)
-}
-
-func TestLocalStatePath_DefaultWhenBothEmpty(t *testing.T) {
-	got := LocalStatePath("", "")
+func TestLocalStatePath_DefaultWhenEmpty(t *testing.T) {
+	got := LocalStatePath("")
 	assert.Equal(t, "/var/lib/spinifex/state/instance-state.json", got)
 }
 

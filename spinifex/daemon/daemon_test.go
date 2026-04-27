@@ -52,6 +52,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	cfg := &config.Config{
 		BaseDir: tmpDir,
+		DataDir: tmpDir,
 		WalDir:  tmpDir,
 		NATS: config.NATSConfig{
 			Host: natsURL,
@@ -364,6 +365,7 @@ func TestDaemon_Initialization(t *testing.T) {
 
 	cfg := &config.Config{
 		BaseDir: tmpDir,
+		DataDir: tmpDir,
 		WalDir:  tmpDir,
 		NATS: config.NATSConfig{
 			Host: "nats://localhost:4222",
@@ -898,11 +900,11 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	// Create daemon with NATS connection
 	clusterCfg := &config.ClusterConfig{
 		Node:  "node-1",
-		Nodes: map[string]config.Config{"node-1": {BaseDir: tmpDir}},
+		Nodes: map[string]config.Config{"node-1": {BaseDir: tmpDir, DataDir: tmpDir}},
 	}
 	daemon, err := NewDaemon(clusterCfg)
 	require.NoError(t, err)
-	daemon.config = &config.Config{BaseDir: tmpDir}
+	daemon.config = &config.Config{BaseDir: tmpDir, DataDir: tmpDir}
 
 	// Connect to NATS and initialize JetStream
 	nc, err := nats.Connect(natsURL)
@@ -3133,12 +3135,12 @@ func TestDaemon_WriteState_NilJSManager(t *testing.T) {
 	tmpDir := t.TempDir()
 	d := &Daemon{
 		jsManager: nil,
-		config:    &config.Config{BaseDir: tmpDir},
+		config:    &config.Config{DataDir: tmpDir},
 		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-1": {ID: "i-1"}}},
 	}
 	require.NoError(t, d.WriteState())
 
-	state, err := ReadLocalState(LocalStatePath("", tmpDir))
+	state, err := ReadLocalState(LocalStatePath(tmpDir))
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Contains(t, state.VMS, "i-1")
@@ -3146,13 +3148,13 @@ func TestDaemon_WriteState_NilJSManager(t *testing.T) {
 
 func TestDaemon_LoadState_NilJSManager(t *testing.T) {
 	tmpDir := t.TempDir()
-	require.NoError(t, WriteLocalState(LocalStatePath("", tmpDir), &vm.Instances{
+	require.NoError(t, WriteLocalState(LocalStatePath(tmpDir), &vm.Instances{
 		VMS: map[string]*vm.VM{"i-seed": {ID: "i-seed"}},
 	}))
 
 	d := &Daemon{
 		jsManager: nil,
-		config:    &config.Config{BaseDir: tmpDir},
+		config:    &config.Config{DataDir: tmpDir},
 	}
 	require.NoError(t, d.LoadState())
 	assert.Contains(t, d.Instances.VMS, "i-seed")
@@ -3161,7 +3163,7 @@ func TestDaemon_LoadState_NilJSManager(t *testing.T) {
 func TestDaemon_LoadState_MissingFileIsFreshInstall(t *testing.T) {
 	d := &Daemon{
 		jsManager: nil,
-		config:    &config.Config{BaseDir: t.TempDir()},
+		config:    &config.Config{DataDir: t.TempDir()},
 	}
 	require.NoError(t, d.LoadState())
 	assert.Empty(t, d.Instances.VMS)
@@ -3169,13 +3171,13 @@ func TestDaemon_LoadState_MissingFileIsFreshInstall(t *testing.T) {
 
 func TestDaemon_LoadState_CorruptFileFatal(t *testing.T) {
 	tmpDir := t.TempDir()
-	path := LocalStatePath("", tmpDir)
+	path := LocalStatePath(tmpDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
 	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
 
 	d := &Daemon{
 		jsManager: nil,
-		config:    &config.Config{BaseDir: tmpDir},
+		config:    &config.Config{DataDir: tmpDir},
 	}
 	err := d.LoadState()
 	require.Error(t, err)
@@ -4061,6 +4063,7 @@ func TestClusterManager_TLSServesHTTPS(t *testing.T) {
 		Nodes: map[string]config.Config{
 			"node-1": {
 				BaseDir: tmpDir,
+				DataDir: tmpDir,
 				Daemon: config.DaemonConfig{
 					Host:    addr,
 					TLSCert: certPath,

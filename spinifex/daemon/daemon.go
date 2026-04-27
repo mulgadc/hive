@@ -1492,9 +1492,9 @@ const kvSyncTimeout = time.Second
 // localStatePath returns the on-disk path to this daemon's instance state file.
 func (d *Daemon) localStatePath() string {
 	if d.config == nil {
-		return LocalStatePath("", "")
+		return LocalStatePath("")
 	}
-	return LocalStatePath(d.config.DataDir, d.config.BaseDir)
+	return LocalStatePath(d.config.DataDir)
 }
 
 // WriteState persists the instance state. Local file is the source of truth;

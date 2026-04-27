@@ -34,19 +34,16 @@ type LocalState struct {
 	VMS           map[string]*vm.VM `json:"vms"`
 }
 
-// LocalStatePath returns the absolute path to the per-node instance state file.
-// Resolution order: dataDir, then baseDir, then DefaultDataDir. The first
-// non-empty value wins. Production sets dataDir (/var/lib/spinifex); tests
-// typically set baseDir to a t.TempDir().
-func LocalStatePath(dataDir, baseDir string) string {
-	root := dataDir
-	if root == "" {
-		root = baseDir
+// LocalStatePath returns the absolute path to the per-node instance state file
+// rooted at dataDir. Empty dataDir falls back to DefaultDataDir
+// (/var/lib/spinifex), the platform-shared root. The state directory sits at
+// the platform root so it lives next to other shared state (predastore,
+// viperblock data dirs) rather than nested under the daemon's own subdir.
+func LocalStatePath(dataDir string) string {
+	if dataDir == "" {
+		dataDir = DefaultDataDir
 	}
-	if root == "" {
-		root = DefaultDataDir
-	}
-	return filepath.Join(root, DefaultLocalStateDir, LocalStateFileName)
+	return filepath.Join(dataDir, DefaultLocalStateDir, LocalStateFileName)
 }
 
 // WriteLocalState atomically writes the instance state to path.
