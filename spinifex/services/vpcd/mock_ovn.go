@@ -14,34 +14,44 @@ type MockOVNClient struct {
 	mu        sync.Mutex
 	connected bool
 
-	switches     map[string]*nbdb.LogicalSwitch
-	ports        map[string]*nbdb.LogicalSwitchPort
-	routers      map[string]*nbdb.LogicalRouter
-	routerPorts  map[string]*nbdb.LogicalRouterPort
-	dhcpOpts     map[string]*nbdb.DHCPOptions
-	nats         map[string]*nbdb.NAT                      // keyed by UUID
-	staticRoutes map[string]*nbdb.LogicalRouterStaticRoute // keyed by UUID
-	portGroups   map[string]*nbdb.PortGroup                // keyed by name
-	acls         map[string]*nbdb.ACL                      // keyed by UUID
+	switches       map[string]*nbdb.LogicalSwitch
+	ports          map[string]*nbdb.LogicalSwitchPort
+	routers        map[string]*nbdb.LogicalRouter
+	routerPorts    map[string]*nbdb.LogicalRouterPort
+	dhcpOpts       map[string]*nbdb.DHCPOptions
+	nats           map[string]*nbdb.NAT                      // keyed by UUID
+	staticRoutes   map[string]*nbdb.LogicalRouterStaticRoute // keyed by UUID
+	portGroups     map[string]*nbdb.PortGroup                // keyed by name
+	acls           map[string]*nbdb.ACL                      // keyed by UUID
+	gatewayChassis map[string]*nbdb.GatewayChassis           // keyed by UUID
 
 	// UpdateLogicalSwitchPortCalls counts UpdateLogicalSwitchPort invocations
 	// so tests can assert idempotent read-before-write paths (e.g.
 	// ensureLocalnetOptions — mulga-998.b Fix 3).
 	UpdateLogicalSwitchPortCalls int
+
+	// SetGatewayChassisCalls / DeleteGatewayChassisCalls /
+	// UpdateGatewayChassisPriorityCalls let tests distinguish between
+	// "no-op", "create", "delete", and "priority update" paths through
+	// reconcileGatewayChassis (mulga-999).
+	SetGatewayChassisCalls            int
+	DeleteGatewayChassisCalls         int
+	UpdateGatewayChassisPriorityCalls int
 }
 
 // NewMockOVNClient creates a new MockOVNClient for testing.
 func NewMockOVNClient() *MockOVNClient {
 	return &MockOVNClient{
-		switches:     make(map[string]*nbdb.LogicalSwitch),
-		ports:        make(map[string]*nbdb.LogicalSwitchPort),
-		routers:      make(map[string]*nbdb.LogicalRouter),
-		routerPorts:  make(map[string]*nbdb.LogicalRouterPort),
-		dhcpOpts:     make(map[string]*nbdb.DHCPOptions),
-		nats:         make(map[string]*nbdb.NAT),
-		staticRoutes: make(map[string]*nbdb.LogicalRouterStaticRoute),
-		portGroups:   make(map[string]*nbdb.PortGroup),
-		acls:         make(map[string]*nbdb.ACL),
+		switches:       make(map[string]*nbdb.LogicalSwitch),
+		ports:          make(map[string]*nbdb.LogicalSwitchPort),
+		routers:        make(map[string]*nbdb.LogicalRouter),
+		routerPorts:    make(map[string]*nbdb.LogicalRouterPort),
+		dhcpOpts:       make(map[string]*nbdb.DHCPOptions),
+		nats:           make(map[string]*nbdb.NAT),
+		staticRoutes:   make(map[string]*nbdb.LogicalRouterStaticRoute),
+		portGroups:     make(map[string]*nbdb.PortGroup),
+		acls:           make(map[string]*nbdb.ACL),
+		gatewayChassis: make(map[string]*nbdb.GatewayChassis),
 	}
 }
 
@@ -580,6 +590,21 @@ func (m *MockOVNClient) ClearACLs(_ context.Context, portGroupName string) error
 	return nil
 }
 
+// ListLogicalRouterPorts returns every LRP across the mock state.
+func (m *MockOVNClient) ListLogicalRouterPorts(_ context.Context) ([]nbdb.LogicalRouterPort, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]nbdb.LogicalRouterPort, 0, len(m.routerPorts))
+	for _, lrp := range m.routerPorts {
+		result = append(result, *lrp)
+	}
+	return result, nil
+}
+
+// SetGatewayChassis is the idempotent read-then-decide path mirrored from
+// LiveOVNClient. Tests rely on the mock applying the same "no-op when already
+// correct" semantics so the call counters distinguish create vs. update vs.
+// no-op (mulga-999).
 func (m *MockOVNClient) SetGatewayChassis(_ context.Context, lrpName string, chassisName string, priority int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -588,7 +613,85 @@ func (m *MockOVNClient) SetGatewayChassis(_ context.Context, lrpName string, cha
 		return fmt.Errorf("logical router port %q not found", lrpName)
 	}
 	gcName := lrpName + "-" + chassisName
-	lrp.GatewayChassis = append(lrp.GatewayChassis, gcName)
-	_ = priority
+	for _, gc := range m.gatewayChassis {
+		if gc.Name != gcName {
+			continue
+		}
+		if gc.Priority == priority {
+			return nil
+		}
+		gc.Priority = priority
+		m.UpdateGatewayChassisPriorityCalls++
+		return nil
+	}
+	gc := &nbdb.GatewayChassis{
+		UUID:        utils.GenerateResourceID("gc"),
+		Name:        gcName,
+		ChassisName: chassisName,
+		Priority:    priority,
+		ExternalIDs: map[string]string{},
+		Options:     map[string]string{},
+	}
+	m.gatewayChassis[gc.UUID] = gc
+	lrp.GatewayChassis = append(lrp.GatewayChassis, gc.UUID)
+	m.SetGatewayChassisCalls++
 	return nil
+}
+
+func (m *MockOVNClient) GetGatewayChassisByName(_ context.Context, name string) (*nbdb.GatewayChassis, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, gc := range m.gatewayChassis {
+		if gc.Name == name {
+			result := *gc
+			return &result, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockOVNClient) ListGatewayChassis(_ context.Context) ([]nbdb.GatewayChassis, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]nbdb.GatewayChassis, 0, len(m.gatewayChassis))
+	for _, gc := range m.gatewayChassis {
+		result = append(result, *gc)
+	}
+	return result, nil
+}
+
+func (m *MockOVNClient) DeleteGatewayChassis(_ context.Context, lrpName string, gcUUID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lrp, exists := m.routerPorts[lrpName]
+	if !exists {
+		return fmt.Errorf("logical router port %q not found", lrpName)
+	}
+	if _, ok := m.gatewayChassis[gcUUID]; !ok {
+		return fmt.Errorf("gateway_chassis %q not found", gcUUID)
+	}
+	for i, u := range lrp.GatewayChassis {
+		if u == gcUUID {
+			lrp.GatewayChassis = append(lrp.GatewayChassis[:i], lrp.GatewayChassis[i+1:]...)
+			break
+		}
+	}
+	delete(m.gatewayChassis, gcUUID)
+	m.DeleteGatewayChassisCalls++
+	return nil
+}
+
+// SeedGatewayChassis lets tests pre-populate a Gateway_Chassis row directly,
+// bypassing the idempotent SetGatewayChassis path. Useful for setting up a
+// "stale row" scenario for reconcileGatewayChassis tests (mulga-999).
+func (m *MockOVNClient) SeedGatewayChassis(lrpName string, gc *nbdb.GatewayChassis) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gc.UUID == "" {
+		gc.UUID = utils.GenerateResourceID("gc")
+	}
+	m.gatewayChassis[gc.UUID] = gc
+	if lrp, ok := m.routerPorts[lrpName]; ok {
+		lrp.GatewayChassis = append(lrp.GatewayChassis, gc.UUID)
+	}
 }
