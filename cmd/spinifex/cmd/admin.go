@@ -2336,17 +2336,17 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 	}
 
 	banner := fmt.Sprintf(`
-  +----------------------------------------------------------------+
-  |            Spinifex  —  Mulga Defense Corporation              |
-  +----------------------------------------------------------------+
-  |  Node:      %-49s|
-  |  Login:     %-49s|
-  |  Dashboard: %-49s|
-  |  API:       %-49s|
-  |  SSH:       %-49s|
-  +----------------------------------------------------------------+
-  |  AWS credentials:  cat ~/.aws/credentials                      |
-  +----------------------------------------------------------------+
+  +----------------------------------------------------+
+  |         Spinifex  —  Mulga Defense Corporation     |
+  +----------------------------------------------------+
+  |  Node:      %-39s|
+  |  Login:     %-39s|
+  |  Dashboard: %-39s|
+  |  API:       %-39s|
+  |  SSH:       %-39s|
+  +----------------------------------------------------+
+  |  AWS credentials:  cat ~/.aws/credentials          |
+  +----------------------------------------------------+
 
 `,
 		hostname,
@@ -2434,17 +2434,17 @@ func gpuBannerSection() string {
 		line2 = "sudo spx admin gpu setup"
 	}
 
-	const maxLen = 55
+	const maxLen = 45
 	if len([]rune(line1)) > maxLen {
 		line1 = string([]rune(line1)[:maxLen-3]) + "..."
 	}
 
-	section := "  +----------------------------------------------------------------+\n" +
-		fmt.Sprintf("  |  GPU: %-55s|\n", line1)
+	section := "  +----------------------------------------------------+\n" +
+		fmt.Sprintf("  |  GPU: %-45s|\n", line1)
 	if line2 != "" {
-		section += fmt.Sprintf("  |        %-55s|\n", line2)
+		section += fmt.Sprintf("  |        %-45s|\n", line2)
 	}
-	section += "  +----------------------------------------------------------------+\n\n"
+	section += "  +----------------------------------------------------+\n\n"
 	return section
 }
 
