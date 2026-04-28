@@ -414,6 +414,12 @@ func launchService(cfg *Config) error {
 	// or cleared network_name. Idempotent; silent when all correct.
 	topo.RetrofitAllExternalLocalnetOptions(ctx)
 
+	// Pass 4: Retrofit gateway-port Networks. Reconcile gates IGW work on
+	// "ext switch missing", so a cluster shipped with the pool-IP bug
+	// (mulga-siv-26) never re-enters reconcileIGW. Walk every gateway LRP
+	// directly and rewrite stale Networks to link-local in place.
+	topo.RetrofitAllGatewayPortNetworks(ctx)
+
 	slog.Info("vpcd service started, waiting for VPC lifecycle events",
 		"subscriptions", len(subs), "dhcp_subscriptions", len(dhcpSubs))
 

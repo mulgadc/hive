@@ -907,8 +907,10 @@ func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected gateway router port: %v", err)
 	}
-	if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "192.168.1.150/24" {
-		t.Errorf("expected gateway network 192.168.1.150/24, got %v", gwPort.Networks)
+	// Gateway LRP always uses link-local, never a pool IP — pool IPs are
+	// reserved for per-VM dnat_and_snat (mulga-siv-26).
+	if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "169.254.0.1/30" {
+		t.Errorf("expected gateway network 169.254.0.1/30, got %v", gwPort.Networks)
 	}
 
 	// Verify NO blanket SNAT rule (AWS parity)
@@ -926,6 +928,10 @@ func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
 	}
 	if route.Nexthop != "192.168.1.1" {
 		t.Errorf("expected nexthop 192.168.1.1, got %s", route.Nexthop)
+	}
+	gwPortName := "gw-vpc-extpool"
+	if route.OutputPort == nil || *route.OutputPort != gwPortName {
+		t.Errorf("expected OutputPort=%s, got %v", gwPortName, route.OutputPort)
 	}
 }
 
@@ -965,8 +971,10 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 
 	router, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-gwip")
 	gwPort, _ := mock.GetLogicalRouterPort(ctx, "gw-vpc-gwip")
-	if gwPort.Networks[0] != "203.0.113.2/28" {
-		t.Errorf("expected 203.0.113.2/28, got %s", gwPort.Networks[0])
+	// Even with explicit pool.GatewayIP set, the LRP itself stays link-local
+	// (mulga-siv-26): GatewayIP is parsed for IPAM bookkeeping only.
+	if gwPort.Networks[0] != "169.254.0.1/30" {
+		t.Errorf("expected 169.254.0.1/30, got %s", gwPort.Networks[0])
 	}
 	// No blanket SNAT rule (AWS parity)
 	if len(router.NAT) != 0 {
@@ -975,6 +983,97 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 	route := mock.staticRoutes[router.StaticRoutes[0]]
 	if route.Nexthop != "203.0.113.1" {
 		t.Errorf("expected nexthop 203.0.113.1, got %s", route.Nexthop)
+	}
+	gwPortName := "gw-vpc-gwip"
+	if route.OutputPort == nil || *route.OutputPort != gwPortName {
+		t.Errorf("expected OutputPort=%s, got %v", gwPortName, route.OutputPort)
+	}
+}
+
+// TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision is the regression
+// guard for mulga-siv-26: three VPCs sharing one external pool must produce
+// three gateway LRPs with the same link-local Networks but distinct MACs and
+// distinct default routes. Pre-fix every LRP claimed pool.RangeStart and the
+// VPCs ARP-collided on br-ext.
+func TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:       "ci-multi-2",
+			RangeStart: "192.168.0.160",
+			RangeEnd:   "192.168.0.169",
+			Gateway:    "192.168.0.1",
+			PrefixLen:  24,
+		},
+	}
+	topo := NewTopologyHandler(mock, WithExternalNetwork("pool", pools))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	vpcIds := []string{"vpc-multi-a", "vpc-multi-b", "vpc-multi-c"}
+	for _, vpcId := range vpcIds {
+		_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+			Name: "vpc-" + vpcId,
+			ExternalIDs: map[string]string{
+				"spinifex:vpc_id": vpcId,
+				"spinifex:cidr":   "10.0.0.0/16",
+			},
+		})
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		if err != nil {
+			t.Fatalf("request vpc.igw-attach %s: %v", vpcId, err)
+		}
+		assertSuccess(t, resp, "attach IGW "+vpcId)
+	}
+
+	macs := make(map[string]string, len(vpcIds))
+	for _, vpcId := range vpcIds {
+		gwPortName := "gw-" + vpcId
+		gwPort, err := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if err != nil {
+			t.Fatalf("get %s: %v", gwPortName, err)
+		}
+		if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "169.254.0.1/30" {
+			t.Errorf("%s: expected Networks=[169.254.0.1/30], got %v", gwPortName, gwPort.Networks)
+		}
+		if gwPort.MAC == "" {
+			t.Errorf("%s: empty MAC", gwPortName)
+		}
+		if other, dup := macs[gwPort.MAC]; dup {
+			t.Errorf("MAC collision: %s and %s share %s", gwPortName, other, gwPort.MAC)
+		}
+		macs[gwPort.MAC] = gwPortName
+
+		router, err := mock.GetLogicalRouter(ctx, "vpc-"+vpcId)
+		if err != nil {
+			t.Fatalf("get router for %s: %v", vpcId, err)
+		}
+		if len(router.StaticRoutes) != 1 {
+			t.Fatalf("%s: expected 1 static route, got %d", vpcId, len(router.StaticRoutes))
+		}
+		route := mock.staticRoutes[router.StaticRoutes[0]]
+		if route.Nexthop != "192.168.0.1" {
+			t.Errorf("%s: expected nexthop 192.168.0.1, got %s", vpcId, route.Nexthop)
+		}
+		if route.OutputPort == nil || *route.OutputPort != gwPortName {
+			t.Errorf("%s: expected OutputPort=%s, got %v", vpcId, gwPortName, route.OutputPort)
+		}
+	}
+	if len(macs) != len(vpcIds) {
+		t.Errorf("expected %d distinct MACs, got %d", len(vpcIds), len(macs))
 	}
 }
 

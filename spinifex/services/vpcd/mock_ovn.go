@@ -30,6 +30,11 @@ type MockOVNClient struct {
 	// ensureLocalnetOptions — mulga-998.b Fix 3).
 	UpdateLogicalSwitchPortCalls int
 
+	// UpdateLogicalRouterPortCalls counts UpdateLogicalRouterPort invocations
+	// so tests can assert ensureGatewayPortNetworks only writes on drift
+	// (mulga-siv-26 D8).
+	UpdateLogicalRouterPortCalls int
+
 	// SetGatewayChassisCalls / DeleteGatewayChassisCalls /
 	// UpdateGatewayChassisPriorityCalls let tests distinguish between
 	// "no-op", "create", "delete", and "priority update" paths through
@@ -285,6 +290,18 @@ func (m *MockOVNClient) GetLogicalRouterPort(_ context.Context, name string) (*n
 	}
 	result := *lrp
 	return &result, nil
+}
+
+func (m *MockOVNClient) UpdateLogicalRouterPort(_ context.Context, lrp *nbdb.LogicalRouterPort) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.routerPorts[lrp.Name]; !exists {
+		return fmt.Errorf("logical router port %q not found", lrp.Name)
+	}
+	stored := *lrp
+	m.routerPorts[lrp.Name] = &stored
+	m.UpdateLogicalRouterPortCalls++
+	return nil
 }
 
 // DHCP Options

@@ -76,6 +76,7 @@ type OVNClient interface {
 	CreateLogicalRouterPort(ctx context.Context, routerName string, lrp *nbdb.LogicalRouterPort) error
 	DeleteLogicalRouterPort(ctx context.Context, routerName string, portName string) error
 	GetLogicalRouterPort(ctx context.Context, name string) (*nbdb.LogicalRouterPort, error)
+	UpdateLogicalRouterPort(ctx context.Context, lrp *nbdb.LogicalRouterPort) error
 	ListLogicalRouterPorts(ctx context.Context) ([]nbdb.LogicalRouterPort, error)
 
 	// DHCP Options
@@ -466,6 +467,28 @@ func (c *LiveOVNClient) GetLogicalRouterPort(ctx context.Context, name string) (
 		return nil, fmt.Errorf("logical router port %q not found", name)
 	}
 	return &ports[0], nil
+}
+
+// UpdateLogicalRouterPort rewrites mutable columns on an existing LRP.
+// Used by ensureGatewayPortNetworks to retrofit the link-local Networks
+// CIDR onto gateway ports created by older code that used pool IPs
+// (mulga-siv-26 D8). Mirrors UpdateLogicalSwitchPort.
+func (c *LiveOVNClient) UpdateLogicalRouterPort(ctx context.Context, lrp *nbdb.LogicalRouterPort) error {
+	if lrp.UUID == "" {
+		existing, err := c.GetLogicalRouterPort(ctx, lrp.Name)
+		if err != nil {
+			return fmt.Errorf("get logical router port for update: %w", err)
+		}
+		lrp.UUID = existing.UUID
+	}
+	ops, err := c.client.Where(lrp).Update(lrp)
+	if err != nil {
+		return fmt.Errorf("update logical router port ops: %w", err)
+	}
+	if err := c.transactOps(ctx, ops); err != nil {
+		return fmt.Errorf("update logical router port transact: %w", err)
+	}
+	return nil
 }
 
 // SetGatewayChassis binds a chassis to an LRP for HA gateway scheduling. Read-
