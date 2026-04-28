@@ -72,9 +72,9 @@ func TestGenerateEC2ErrorResponse_Structure(t *testing.T) {
 			// Verify request ID
 			assert.Contains(t, xmlStr, "<RequestID>"+tc.requestID+"</RequestID>")
 
-			// Verify root element
-			assert.Contains(t, xmlStr, "<Response>")
-			assert.Contains(t, xmlStr, "</Response>")
+			// Verify root element with EC2 xmlns (AWS SDK clients expect this)
+			assert.Contains(t, xmlStr, `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+			assert.Contains(t, xmlStr, "</ErrorResponse>")
 
 			// Verify Errors wrapper
 			assert.Contains(t, xmlStr, "<Errors>")
@@ -137,10 +137,10 @@ func TestGenerateIAMErrorResponse_Structure(t *testing.T) {
 			// Verify XML header
 			assert.True(t, strings.HasPrefix(xmlStr, xml.Header))
 
-			// IAM uses <ErrorResponse> root, not <Response>
+			// IAM and EC2 both use <ErrorResponse> root; IAM has <Type>Sender</Type>
+			// while EC2 has <Errors><Error>… — distinguish by structure, not root tag.
 			assert.Contains(t, xmlStr, "<ErrorResponse>")
 			assert.Contains(t, xmlStr, "</ErrorResponse>")
-			assert.NotContains(t, xmlStr, "<Response>")
 
 			// Verify IAM-specific structure
 			assert.Contains(t, xmlStr, "<Type>Sender</Type>")
@@ -205,8 +205,9 @@ func TestErrorHandler_UnknownError(t *testing.T) {
 	xmlStr := string(body)
 	// Unknown errors should be remapped to InternalError
 	assert.Contains(t, xmlStr, "<Code>InternalError</Code>")
-	// EC2 format
-	assert.Contains(t, xmlStr, "<Response>")
+	// EC2 format: <ErrorResponse xmlns="…"><Errors><Error>…
+	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+	assert.Contains(t, xmlStr, "<Errors>")
 }
 
 func TestErrorHandler_EC2Service(t *testing.T) {
@@ -224,11 +225,10 @@ func TestErrorHandler_EC2Service(t *testing.T) {
 
 	body, _ := io.ReadAll(resp.Body)
 	xmlStr := string(body)
-	// EC2 uses <Response> root, not <ErrorResponse>
-	assert.Contains(t, xmlStr, "<Response>")
+	// EC2 uses <ErrorResponse xmlns="…"><Errors><Error>… (matches AWS SDK expectation)
+	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
 	assert.Contains(t, xmlStr, "<Errors>")
 	assert.Contains(t, xmlStr, "<Code>InvalidParameterValue</Code>")
-	assert.NotContains(t, xmlStr, "<ErrorResponse>")
 }
 
 func TestErrorHandler_IgnoresClientRequestID(t *testing.T) {
@@ -428,8 +428,28 @@ func TestParseAWSQueryArgs(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := ParseAWSQueryArgs(tc.query)
+			result, err := ParseAWSQueryArgs(tc.query)
+			assert.NoError(t, err)
 			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestParseAWSQueryArgs_MalformedURLEncoding(t *testing.T) {
+	// AWS returns MalformedQueryString for invalid percent-encoding; the parser
+	// must surface an error instead of silently dropping the bad pair.
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"bad value encoding", "Action=DescribeInstances&Name=%ZZ"},
+		{"bad key encoding", "Bad%ZZKey=value"},
+		{"bad lone key encoding", "Lone%ZZ"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseAWSQueryArgs(tc.query)
+			require.Error(t, err)
 		})
 	}
 }
@@ -537,7 +557,9 @@ func TestRequest_EC2MissingAction(t *testing.T) {
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, 400, resp.StatusCode)
-	assert.Contains(t, string(body), "InvalidAction")
+	// AWS-correct: empty body has no Action parameter → MissingAction.
+	// Action present but unknown is the InvalidAction case (covered separately).
+	assert.Contains(t, string(body), "MissingAction")
 }
 
 func TestRequest_IAMNilService(t *testing.T) {
@@ -587,7 +609,7 @@ func TestEC2Request_MissingAction(t *testing.T) {
 
 	err := gw.EC2_Request(w, req)
 	require.Error(t, err)
-	assert.Equal(t, awserrors.ErrorInvalidAction, err.Error())
+	assert.Equal(t, awserrors.ErrorMissingAction, err.Error())
 }
 
 func TestEC2Request_UnknownAction(t *testing.T) {
@@ -598,6 +620,17 @@ func TestEC2Request_UnknownAction(t *testing.T) {
 	err := gw.EC2_Request(w, req)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAction, err.Error())
+}
+
+func TestEC2Request_MalformedQueryString(t *testing.T) {
+	// AWS returns MalformedQueryString (400) when percent-encoding is invalid.
+	gw := &GatewayConfig{DisableLogging: true}
+	req := setupEC2Request("Action=DescribeInstances&Bad=%ZZ", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMalformedQueryString, err.Error())
 }
 
 func TestEC2Request_NilNATSNonLocalAction(t *testing.T) {
@@ -1097,7 +1130,7 @@ func TestWriteThrottleError_EC2(t *testing.T) {
 	assert.Equal(t, 503, resp.StatusCode)
 	assert.Equal(t, "application/xml", resp.Header.Get("Content-Type"))
 	assert.Contains(t, string(body), "<Code>RequestLimitExceeded</Code>")
-	assert.Contains(t, string(body), "<Response>")
+	assert.Contains(t, string(body), `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
 }
 
 func TestWriteThrottleError_IAM(t *testing.T) {
@@ -1112,7 +1145,9 @@ func TestWriteThrottleError_IAM(t *testing.T) {
 
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
-	assert.Equal(t, 400, resp.StatusCode)
+	// AWS returns 503 for Throttling on every service (including IAM); this
+	// matters because TF respects 503-with-Retry-After and gives up on 400.
+	assert.Equal(t, 503, resp.StatusCode)
 	assert.Contains(t, string(body), "<Code>Throttling</Code>")
 	assert.Contains(t, string(body), "<ErrorResponse>")
 }

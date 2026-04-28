@@ -238,7 +238,6 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 
 	// Process each index
 	for idx := 1; idx <= denseLen; idx++ {
-
 		elem := slice.Index(idx - 1)
 		var indexPrefix string
 		if useMember {

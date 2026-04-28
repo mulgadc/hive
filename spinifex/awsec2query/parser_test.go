@@ -1,12 +1,14 @@
 package awsec2query
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestQueryParamsToStruct_RunInstances(t *testing.T) {
@@ -587,4 +589,76 @@ func TestQueryParamsToStruct_ELBv2CreateListenerWithActions(t *testing.T) {
 	assert.Len(t, input.DefaultActions, 1)
 	assert.Equal(t, "forward", aws.StringValue(input.DefaultActions[0].Type))
 	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123", aws.StringValue(input.DefaultActions[0].TargetGroupArn))
+}
+
+// --- AWS-parity gap-stop and slice-cap tests ---
+
+func TestQueryParamsToStruct_StopsAtFirstGap(t *testing.T) {
+	// AWS stops list parsing at the first missing index. Filter.1 + Filter.3
+	// must yield a single Filter (the .3 entry is dropped, no phantom nil at
+	// slot 2). Catches the prior bug where a maxIdx-sized slice was allocated
+	// with zero-value gaps.
+	args := map[string]string{
+		"Action":           "DescribeInstances",
+		"Filter.1.Name":    "instance-type",
+		"Filter.1.Value.1": "t2.micro",
+		// Note: Filter.2 deliberately absent.
+		"Filter.3.Name":    "instance-state-name",
+		"Filter.3.Value.1": "running",
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Len(t, input.Filters, 1)
+	assert.Equal(t, "instance-type", aws.StringValue(input.Filters[0].Name))
+}
+
+func TestQueryParamsToStruct_GapAtIndexOne(t *testing.T) {
+	// If index 1 is missing entirely, no entries should be parsed.
+	args := map[string]string{
+		"Action":           "DescribeInstances",
+		"Filter.2.Name":    "skipped",
+		"Filter.2.Value.1": "x",
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Empty(t, input.Filters)
+}
+
+func TestQueryParamsToStruct_RejectsOversizedDenseList(t *testing.T) {
+	// Dense Filter.1..Filter.maxSliceLen+1 must error out instead of
+	// allocating an unbounded slice.
+	args := map[string]string{"Action": "DescribeInstances"}
+	for i := 1; i <= maxSliceLen+1; i++ {
+		args[fmt.Sprintf("Filter.%d.Name", i)] = "x"
+		args[fmt.Sprintf("Filter.%d.Value.1", i)] = "y"
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestQueryParamsToStruct_SparseHugeIndexNoOp(t *testing.T) {
+	// Filter.999999 alone (no Filter.1) should be parsed as zero entries —
+	// the gap-stop walks from 1 and exits immediately, never allocating a
+	// 999999-element slice (the prior parser bug's worst case).
+	args := map[string]string{
+		"Action":                "DescribeInstances",
+		"Filter.999999.Name":    "ignored",
+		"Filter.999999.Value.1": "y",
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Empty(t, input.Filters)
 }

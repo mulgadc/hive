@@ -152,23 +152,27 @@ func (gw *GatewayConfig) throttleKeyFuncs() []ratelimit.KeyFunc {
 }
 
 // writeThrottleError writes the service-appropriate throttle rejection response.
+// HTTPCode comes from awserrors.ErrorLookup so any change there (e.g. Throttling
+// 400→503 to match AWS) is reflected here without further edits.
 func (gw *GatewayConfig) writeThrottleError(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.NewString()
 	svc, _ := r.Context().Value(ctxService).(string)
 
+	errorCode := awserrors.ErrorRequestLimitExceeded
+	if svc == "iam" {
+		errorCode = awserrors.ErrorThrottling
+	}
+	errorMsg := awserrors.ErrorLookup[errorCode]
+
 	var xmlErr []byte
-	var statusCode int
-	switch svc {
-	case "iam":
-		xmlErr = GenerateIAMErrorResponse(awserrors.ErrorThrottling, "Rate exceeded", requestID)
-		statusCode = 400
-	default: // ec2, elasticloadbalancing, account, spinifex
-		xmlErr = GenerateEC2ErrorResponse(awserrors.ErrorRequestLimitExceeded, "Request limit exceeded.", requestID)
-		statusCode = 503
+	if svc == "iam" {
+		xmlErr = GenerateIAMErrorResponse(errorCode, errorMsg.Message, requestID)
+	} else { // ec2, elasticloadbalancing, account, spinifex
+		xmlErr = GenerateEC2ErrorResponse(errorCode, errorMsg.Message, requestID)
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(statusCode)
+	w.WriteHeader(errorMsg.HTTPCode)
 	if _, err := w.Write(xmlErr); err != nil {
 		slog.Error("Failed to write throttle error response", "err", err)
 	}

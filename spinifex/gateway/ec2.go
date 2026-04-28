@@ -373,6 +373,10 @@ func (gw *GatewayConfig) EC2_Request(w http.ResponseWriter, r *http.Request) err
 	if action == "" {
 		return errors.New(awserrors.ErrorMissingAction)
 	}
+	// InvalidAction here covers both "not a real AWS action" and "real AWS
+	// action but Spinifex doesn't implement it". Distinguishing the two would
+	// require maintaining the full per-service AWS action catalogue; the cost
+	// outweighs the benefit since SDKs/TF only emit known-AWS actions.
 	handler, ok := ec2Actions[action]
 	if !ok {
 		return errors.New(awserrors.ErrorInvalidAction)
