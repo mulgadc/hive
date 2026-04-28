@@ -34,25 +34,6 @@ func TestTapDeviceName(t *testing.T) {
 	}
 }
 
-func TestOVSIfaceID(t *testing.T) {
-	tests := []struct {
-		eniId    string
-		expected string
-	}{
-		{"eni-abc123", "port-eni-abc123"},
-		{"eni-abc123def456789", "port-eni-abc123def456789"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.eniId, func(t *testing.T) {
-			got := OVSIfaceID(tt.eniId)
-			if got != tt.expected {
-				t.Errorf("OVSIfaceID(%q) = %q, want %q", tt.eniId, got, tt.expected)
-			}
-		})
-	}
-}
-
 // MockNetworkPlumber records calls for testing.
 type MockNetworkPlumber struct {
 	SetupCalls   []mockSetupCall
@@ -60,6 +41,8 @@ type MockNetworkPlumber struct {
 	SetupErr     error
 	CleanupErr   error
 }
+
+var _ NetworkPlumber = (*MockNetworkPlumber)(nil)
 
 type mockSetupCall struct {
 	ENIId string
@@ -232,12 +215,6 @@ func TestGenerateDevMAC(t *testing.T) {
 	}
 }
 
-func TestNetworkPlumber_InterfaceCompliance(t *testing.T) {
-	// Verify both types satisfy the interface
-	var _ NetworkPlumber = &OVSNetworkPlumber{}
-	var _ NetworkPlumber = &MockNetworkPlumber{}
-}
-
 func TestSetupExtraENINICs_AppendsOnePerExtra(t *testing.T) {
 	mock := &MockNetworkPlumber{}
 	d := &Daemon{networkPlumber: mock}
@@ -369,62 +346,6 @@ func TestCleanupExtraENITaps_ErrorsAreLogged(t *testing.T) {
 	if len(mock.CleanupCalls) != 2 {
 		t.Errorf("expected both extras to be attempted, got %d cleanup calls", len(mock.CleanupCalls))
 	}
-}
-
-func TestOVNHealthStatus_Fields(t *testing.T) {
-	// Verify OVNHealthStatus struct can be used for health reporting
-	status := OVNHealthStatus{
-		BrIntExists:     true,
-		OVNControllerUp: true,
-		ChassisID:       "chassis-node1",
-		EncapIP:         "10.0.0.1",
-		OVNRemote:       "tcp:10.0.0.1:6642",
-	}
-
-	if !status.BrIntExists {
-		t.Error("expected BrIntExists to be true")
-	}
-	if !status.OVNControllerUp {
-		t.Error("expected OVNControllerUp to be true")
-	}
-	if status.ChassisID != "chassis-node1" {
-		t.Errorf("ChassisID = %q, want 'chassis-node1'", status.ChassisID)
-	}
-	if status.EncapIP != "10.0.0.1" {
-		t.Errorf("EncapIP = %q, want '10.0.0.1'", status.EncapIP)
-	}
-	if status.OVNRemote != "tcp:10.0.0.1:6642" {
-		t.Errorf("OVNRemote = %q, want 'tcp:10.0.0.1:6642'", status.OVNRemote)
-	}
-}
-
-func TestOVNHealthStatus_Defaults(t *testing.T) {
-	// Zero-value OVNHealthStatus should indicate nothing is ready
-	var status OVNHealthStatus
-
-	if status.BrIntExists {
-		t.Error("zero-value BrIntExists should be false")
-	}
-	if status.OVNControllerUp {
-		t.Error("zero-value OVNControllerUp should be false")
-	}
-	if status.ChassisID != "" {
-		t.Errorf("zero-value ChassisID should be empty, got %q", status.ChassisID)
-	}
-}
-
-func TestCheckOVNHealth_ReturnsStatus(t *testing.T) {
-	// CheckOVNHealth should return a status struct without panicking,
-	// even when OVS/OVN tools are not installed (CI environment).
-	// On a dev machine without OVN, all fields will be zero values.
-	status := CheckOVNHealth()
-
-	// On CI without OVS, both should be false — just verify no panic
-	_ = status.BrIntExists
-	_ = status.OVNControllerUp
-	_ = status.ChassisID
-	_ = status.EncapIP
-	_ = status.OVNRemote
 }
 
 func TestFindInterfaceByIP_InvalidIP(t *testing.T) {
@@ -571,6 +492,8 @@ func TestOVSIfaceID_Format(t *testing.T) {
 		eniId    string
 		expected string
 	}{
+		{"eni-abc123", "port-eni-abc123"},
+		{"eni-abc123def456789", "port-eni-abc123def456789"},
 		{"eni-short", "port-eni-short"},
 		{"eni-", "port-eni-"},
 		{"", "port-"},

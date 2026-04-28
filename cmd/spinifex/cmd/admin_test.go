@@ -146,27 +146,43 @@ func TestSpinifexTomlTemplate_AdvertiseOmittedWhenEmpty(t *testing.T) {
 // when it's a bridge (Linux or OVS, br-* prefix). The old detectedWanBridge()
 // returned hardcoded "br-ext" for Linux bridges — that value broke DHCP on
 // consumer-router LANs because br-ext never sees LAN DHCP traffic (mulga-998).
-func TestDetectedDhcpBindBridge_LinuxBridgeDefaultRoute(t *testing.T) {
-	detected := &admin.DetectedNetwork{WAN: &admin.DetectedInterface{Name: "br-wan"}}
-	assert.Equal(t, "br-wan", detectedDhcpBindBridge(detected),
-		"Linux bridge (WAN NIC enslaved) must return the bridge name, not 'br-ext'")
-}
-
-func TestDetectedDhcpBindBridge_OVSBridgeDefaultRoute(t *testing.T) {
-	detected := &admin.DetectedNetwork{WAN: &admin.DetectedInterface{Name: "br-ext"}}
-	assert.Equal(t, "br-ext", detectedDhcpBindBridge(detected),
-		"OVS bridge (WAN NIC on br-*) returned verbatim")
-}
-
-func TestDetectedDhcpBindBridge_PhysicalNIC(t *testing.T) {
-	detected := &admin.DetectedNetwork{WAN: &admin.DetectedInterface{Name: "enp0s3"}}
-	assert.Equal(t, "br-wan", detectedDhcpBindBridge(detected),
-		"bare NIC defaults to 'br-wan' (the bridge the installer will create)")
-}
-
-func TestDetectedDhcpBindBridge_NilWAN(t *testing.T) {
-	assert.Empty(t, detectedDhcpBindBridge(nil))
-	assert.Empty(t, detectedDhcpBindBridge(&admin.DetectedNetwork{}))
+func TestDetectedDhcpBindBridge(t *testing.T) {
+	tests := []struct {
+		name     string
+		detected *admin.DetectedNetwork
+		want     string
+	}{
+		{
+			name:     "Linux bridge default route returns bridge name (not 'br-ext')",
+			detected: &admin.DetectedNetwork{WAN: &admin.DetectedInterface{Name: "br-wan"}},
+			want:     "br-wan",
+		},
+		{
+			name:     "OVS bridge default route returned verbatim",
+			detected: &admin.DetectedNetwork{WAN: &admin.DetectedInterface{Name: "br-ext"}},
+			want:     "br-ext",
+		},
+		{
+			name:     "physical NIC defaults to 'br-wan' (bridge the installer creates)",
+			detected: &admin.DetectedNetwork{WAN: &admin.DetectedInterface{Name: "enp0s3"}},
+			want:     "br-wan",
+		},
+		{
+			name:     "nil DetectedNetwork",
+			detected: nil,
+			want:     "",
+		},
+		{
+			name:     "DetectedNetwork with nil WAN",
+			detected: &admin.DetectedNetwork{},
+			want:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detectedDhcpBindBridge(tt.detected))
+		})
+	}
 }
 
 // Legacy `wan_bridge` TOML key must fail-start vpcd with guidance, not silently

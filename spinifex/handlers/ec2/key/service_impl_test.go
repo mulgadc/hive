@@ -52,27 +52,6 @@ func importTestKey(t *testing.T, svc *KeyServiceImpl, keyName string) *ec2.Impor
 	return out
 }
 
-// --- TestKeyPairMetadataMarshaling (kept — validates JSON roundtrip independently) ---
-
-func TestKeyPairMetadataMarshaling(t *testing.T) {
-	metadata := ec2.CreateKeyPairOutput{
-		KeyPairId:      aws.String("key-12345"),
-		KeyFingerprint: aws.String("SHA256:abcdef1234567890"),
-		KeyName:        aws.String("test-key"),
-	}
-
-	data, err := json.Marshal(metadata)
-	require.NoError(t, err)
-
-	var unmarshaled ec2.CreateKeyPairOutput
-	err = json.Unmarshal(data, &unmarshaled)
-	require.NoError(t, err)
-
-	assert.Equal(t, *metadata.KeyPairId, *unmarshaled.KeyPairId)
-	assert.Equal(t, *metadata.KeyFingerprint, *unmarshaled.KeyFingerprint)
-	assert.Equal(t, *metadata.KeyName, *unmarshaled.KeyName)
-}
-
 // ============================================================
 // CreateKeyPair Tests
 // ============================================================

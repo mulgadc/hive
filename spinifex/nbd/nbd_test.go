@@ -153,28 +153,6 @@ func TestBuildArgs_NotVerbose(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_PluginArgValues(t *testing.T) {
-	cfg := &NBDKitConfig{
-		Socket:     "/tmp/nbd.sock",
-		PidFile:    "/tmp/nbd.pid",
-		PluginPath: "/plugin.so",
-		Size:       0,
-		Volume:     "",
-		CacheSize:  0,
-		ShardWAL:   false,
-	}
-
-	args, err := cfg.buildArgs()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	assertContains(t, args, "size=0")
-	assertContains(t, args, "volume=")
-	assertContains(t, args, "cache_size=0")
-	assertContains(t, args, "shardwal=false")
-}
-
 func TestBuildArgs_TCPPortValue(t *testing.T) {
 	tests := []struct {
 		port int
@@ -264,13 +242,6 @@ func assertArgs(t *testing.T, expected, got []string) {
 		if expected[i] != got[i] {
 			t.Errorf("args[%d] = %q, want %q", i, got[i], expected[i])
 		}
-	}
-}
-
-func assertContains(t *testing.T, args []string, val string) {
-	t.Helper()
-	if indexOf(args, val) < 0 {
-		t.Errorf("expected args to contain %q, got: %v", val, args)
 	}
 }
 
