@@ -191,7 +191,14 @@ jobs:
 
           REBOOT_DIR="${RUNNER_TEMP}/reboot-e2e"
           mkdir -p "$REBOOT_DIR"
-          tar xf "${RUNNER_TEMP}/spinifex-tests.tar" -C "$REBOOT_DIR" run-reboot-e2e.sh
+
+          echo "spinifex-tests.tar contents:"
+          tar tf "${RUNNER_TEMP}/spinifex-tests.tar" | head -20
+
+          # Extract everything; build-install-artifacts.sh archives with
+          # `tar cf ... -C <dir> .` which prefixes entries with `./`, so an
+          # exact-name match like `tar xf ... run-reboot-e2e.sh` would miss it.
+          tar xf "${RUNNER_TEMP}/spinifex-tests.tar" -C "$REBOOT_DIR"
           chmod +x "$REBOOT_DIR/run-reboot-e2e.sh"
 
           WAN_IP="$WAN_IP" SSH_KEY="$SSH_KEY" "$REBOOT_DIR/run-reboot-e2e.sh"
