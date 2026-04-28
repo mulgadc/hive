@@ -441,13 +441,6 @@ func TestMockOVNClient_FullVPCTopology(t *testing.T) {
 	}
 }
 
-func TestMockOVNClient_InterfaceCompliance(t *testing.T) {
-	// Verify MockOVNClient implements OVNClient
-	var _ OVNClient = (*MockOVNClient)(nil)
-	// Verify LiveOVNClient implements OVNClient
-	var _ OVNClient = (*LiveOVNClient)(nil)
-}
-
 func TestMockOVNClient_DeleteAllNATsByExternalIP(t *testing.T) {
 	mock := NewMockOVNClient()
 	_ = mock.Connect(context.Background())

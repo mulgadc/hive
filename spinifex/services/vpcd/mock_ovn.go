@@ -39,6 +39,8 @@ type MockOVNClient struct {
 	UpdateGatewayChassisPriorityCalls int
 }
 
+var _ OVNClient = (*MockOVNClient)(nil)
+
 // NewMockOVNClient creates a new MockOVNClient for testing.
 func NewMockOVNClient() *MockOVNClient {
 	return &MockOVNClient{

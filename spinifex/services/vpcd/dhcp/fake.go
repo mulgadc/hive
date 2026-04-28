@@ -32,6 +32,8 @@ type Fake struct {
 	releaseCount int
 }
 
+var _ Client = (*Fake)(nil)
+
 // LeaseTemplate configures the synthetic lease Fake returns from Acquire
 // when no AcquireHook is set.
 type LeaseTemplate struct {
