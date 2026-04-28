@@ -15,7 +15,11 @@ import (
 // sudoCommand wraps exec.Command with sudo when running as non-root.
 // OVS/OVN and ip commands require elevated privileges; in Docker and
 // production the daemon runs as root, but in dev environments it may not.
-func sudoCommand(name string, args ...string) *exec.Cmd {
+//
+// Bound to a var (not a plain func) so tests can swap in a stub — running
+// the live binary against the dev host's OVS would mutate `external_ids` on
+// the running cluster (see TestSetupComputeNode_ValidatesArgs).
+var sudoCommand = func(name string, args ...string) *exec.Cmd {
 	if os.Getuid() == 0 {
 		return exec.Command(name, args...)
 	}

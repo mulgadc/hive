@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -415,14 +416,19 @@ func TestEnsureDataRoute_NoOVS(t *testing.T) {
 }
 
 func TestSetupComputeNode_ValidatesArgs(t *testing.T) {
-	// SetupComputeNode requires ovs-vsctl which may not be available in CI.
-	// This test verifies the function signature and that it returns an error
-	// when OVS is not installed (expected on CI).
-	err := SetupComputeNode("chassis-test", "tcp:127.0.0.1:6642", "10.0.0.1")
+	// Stub sudoCommand so the test never shells out to the host's real
+	// ovs-vsctl. Without this stub, on a dev box with OVS installed the call
+	// silently mutated external_ids:system-id (and ovn-remote, ovn-encap-ip)
+	// on the live cluster, breaking vpcd's chassis discovery until reboot.
+	orig := sudoCommand
+	t.Cleanup(func() { sudoCommand = orig })
+	sudoCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("/bin/false")
+	}
 
-	// We expect an error in CI (no OVS), but the function should not panic.
-	// On a dev machine with OVS, it would succeed. Either result is acceptable.
-	_ = err
+	if err := SetupComputeNode("chassis-test", "tcp:127.0.0.1:6642", "10.0.0.1"); err == nil {
+		t.Fatal("expected error from stubbed sudoCommand, got nil")
+	}
 }
 
 func TestMockNetworkPlumber_SetupError(t *testing.T) {
