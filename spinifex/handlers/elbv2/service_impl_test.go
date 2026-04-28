@@ -1635,11 +1635,44 @@ func TestLBVMUserData_MgmtRoute(t *testing.T) {
 	svc.SystemAccessKey = "AK"
 	svc.SystemSecretKey = "SK"
 
-	data, err := svc.lbVMUserData("lb-test1")
+	data, err := svc.lbVMUserData("lb-test1", SchemeInternetFacing)
 	require.NoError(t, err)
 	assert.Contains(t, data, "bootcmd:")
 	assert.Contains(t, data, `"10.15.8.100/32"`)
 	assert.Contains(t, data, `"10.15.8.1"`)
+}
+
+// TestLBVMUserData_InternalSingleNodeFallback covers the single-node case
+// where MgmtRoute{Gateway,Target} are empty (AWSGW reachable on advertiseIP
+// via VPC for internet-facing LBs) but an internal LB has no EIP and so
+// needs a forced mgmt-NIC route to AWSGW. Internet-facing in the same setup
+// must still get no bootcmd (would steal the host's WAN return path).
+func TestLBVMUserData_InternalSingleNodeFallback(t *testing.T) {
+	mkSvc := func() *ELBv2ServiceImpl {
+		svc := setupTestService(t)
+		svc.GatewayURL = "https://192.168.1.33:9999"
+		svc.SystemAccessKey = "AK"
+		svc.SystemSecretKey = "SK"
+		svc.MgmtBridgeIP = "10.15.8.1"
+		svc.AdvertiseIP = "192.168.1.33"
+		return svc
+	}
+
+	internal, err := mkSvc().lbVMUserData("lb-int", SchemeInternal)
+	require.NoError(t, err)
+	assert.Contains(t, internal, "bootcmd:")
+	assert.Contains(t, internal, `"192.168.1.33/32"`)
+	assert.Contains(t, internal, `"10.15.8.1"`)
+
+	inetFacing, err := mkSvc().lbVMUserData("lb-inet", SchemeInternetFacing)
+	require.NoError(t, err)
+	assert.NotContains(t, inetFacing, "bootcmd:", "internet-facing single-node must not get a /32 mgmt route")
+
+	noBridge := mkSvc()
+	noBridge.MgmtBridgeIP = ""
+	out, err := noBridge.lbVMUserData("lb-int", SchemeInternal)
+	require.NoError(t, err)
+	assert.NotContains(t, out, "bootcmd:", "no fallback when br-mgmt is absent")
 }
 
 func TestIsCompatibleProtocol_UnknownListenerProtocol(t *testing.T) {
