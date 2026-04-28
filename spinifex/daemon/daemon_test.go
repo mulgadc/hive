@@ -39,6 +39,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// drainAndClose drains the NATS connection and waits for in-flight subscription
+// callbacks to finish before returning. Plain Close() does not wait, so handler
+// goroutines can race t.TempDir() RemoveAll cleanup and fail with
+// "directory not empty" when they write a final state/WAL file.
+func drainAndClose(t *testing.T, nc *nats.Conn) {
+	t.Helper()
+	done := make(chan struct{})
+	nc.SetClosedHandler(func(*nats.Conn) { close(done) })
+	if err := nc.Drain(); err != nil {
+		nc.Close()
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Logf("drainAndClose: drain did not complete within 5s")
+	}
+}
+
 // createTestDaemon creates a test daemon instance with minimal configuration
 func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	// Create a temporary directory for test data
@@ -87,7 +106,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
-			daemon.natsConn.Close()
+			drainAndClose(t, daemon.natsConn)
 		}
 	})
 
