@@ -34,25 +34,6 @@ func TestTapDeviceName(t *testing.T) {
 	}
 }
 
-func TestOVSIfaceID(t *testing.T) {
-	tests := []struct {
-		eniId    string
-		expected string
-	}{
-		{"eni-abc123", "port-eni-abc123"},
-		{"eni-abc123def456789", "port-eni-abc123def456789"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.eniId, func(t *testing.T) {
-			got := OVSIfaceID(tt.eniId)
-			if got != tt.expected {
-				t.Errorf("OVSIfaceID(%q) = %q, want %q", tt.eniId, got, tt.expected)
-			}
-		})
-	}
-}
-
 // MockNetworkPlumber records calls for testing.
 type MockNetworkPlumber struct {
 	SetupCalls   []mockSetupCall
@@ -511,6 +492,8 @@ func TestOVSIfaceID_Format(t *testing.T) {
 		eniId    string
 		expected string
 	}{
+		{"eni-abc123", "port-eni-abc123"},
+		{"eni-abc123def456789", "port-eni-abc123def456789"},
 		{"eni-short", "port-eni-short"},
 		{"eni-", "port-eni-"},
 		{"", "port-"},

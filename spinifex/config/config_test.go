@@ -217,40 +217,53 @@ expected_nodes = 3
 
 // Tests for HasService / GetServices
 
-func TestHasService_ExplicitList(t *testing.T) {
-	c := Config{Services: []string{"nats", "daemon"}}
+func TestHasService(t *testing.T) {
+	tests := []struct {
+		name     string
+		services []string
+		query    string
+		want     bool
+	}{
+		{"explicit list, member", []string{"nats", "daemon"}, "nats", true},
+		{"explicit list, second member", []string{"nats", "daemon"}, "daemon", true},
+		{"explicit list, non-member", []string{"nats", "daemon"}, "predastore", false},
+		{"explicit list, queried name unknown", []string{"nats"}, "unknown", false},
+		// A typo in the configured list ("natz") must not satisfy a query for
+		// the real service name — Contains is name-exact, no fuzzy match.
+		{"explicit list with typo entry", []string{"natz"}, "nats", false},
+		{"nil list defaults to AllServices", nil, "viperblock", true},
+		{"empty list defaults to AllServices", []string{}, "ui", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{Services: tt.services}
+			assert.Equal(t, tt.want, c.HasService(tt.query))
+		})
+	}
 
-	assert.True(t, c.HasService("nats"))
-	assert.True(t, c.HasService("daemon"))
-	assert.False(t, c.HasService("predastore"))
-	assert.False(t, c.HasService("viperblock"))
-	assert.False(t, c.HasService("ui"))
-}
-
-func TestHasService_EmptyListBackwardCompat(t *testing.T) {
-	c := Config{} // no Services set
-
-	// Empty list means all services
+	// Sanity: empty list grants every documented service.
+	empty := Config{}
 	for _, svc := range AllServices {
-		assert.True(t, c.HasService(svc), "expected %s to be available with empty list", svc)
+		assert.True(t, empty.HasService(svc), "empty list must include %q", svc)
 	}
 }
 
-func TestHasService_UnknownService(t *testing.T) {
-	c := Config{Services: []string{"nats"}}
-	assert.False(t, c.HasService("unknown"))
-}
-
-func TestGetServices_DefaultsToAll(t *testing.T) {
-	c := Config{}
-	services := c.GetServices()
-	assert.Equal(t, AllServices, services)
-}
-
-func TestGetServices_ExplicitList(t *testing.T) {
-	c := Config{Services: []string{"nats", "predastore"}}
-	services := c.GetServices()
-	assert.Equal(t, []string{"nats", "predastore"}, services)
+func TestGetServices(t *testing.T) {
+	tests := []struct {
+		name     string
+		services []string
+		want     []string
+	}{
+		{"nil defaults to AllServices", nil, AllServices},
+		{"empty defaults to AllServices", []string{}, AllServices},
+		{"explicit list returned as-is", []string{"nats", "predastore"}, []string{"nats", "predastore"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{Services: tt.services}
+			assert.Equal(t, tt.want, c.GetServices())
+		})
+	}
 }
 
 // Tests for NodeBaseDir
