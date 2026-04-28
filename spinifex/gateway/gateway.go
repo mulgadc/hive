@@ -59,8 +59,14 @@ var supportedServices = map[string]bool{
 	"spinifex":             true,
 }
 
+// xmlnsEC2 is the XML namespace AWS SDK clients expect on EC2 query-protocol
+// error responses. ELBv2 / Account / Spinifex share the EC2 query envelope
+// here for now; per-service namespaces can be added as a follow-up.
+const xmlnsEC2 = "http://ec2.amazonaws.com/doc/2016-11-15/"
+
 type ErrorResponse struct {
-	XMLName   xml.Name `xml:"Response"`
+	XMLName   xml.Name `xml:"ErrorResponse"`
+	XMLNS     string   `xml:"xmlns,attr"`
 	Errors    Errors   `xml:"Errors"`
 	RequestID string   `xml:"RequestID"`
 }
@@ -327,27 +333,34 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 	}
 }
 
-// Parse AWS query arguments (used by some services like EC2/S3)
-// Properly URL-decodes both keys and values
-func ParseAWSQueryArgs(query string) map[string]string {
+// ParseAWSQueryArgs parses an AWS query-protocol body (application/x-www-form-urlencoded
+// key=value pairs joined by '&'). Returns MalformedQueryString-style errors when keys
+// or values contain invalid percent-encoding so callers can surface AWS-correct error codes.
+func ParseAWSQueryArgs(query string) (map[string]string, error) {
 	params := make(map[string]string)
 	pairs := strings.SplitSeq(query, "&")
 	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
+		key, err := url.QueryUnescape(kv[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid URL encoding in parameter name: %w", err)
+		}
 		if len(kv) == 2 {
-			key, _ := url.QueryUnescape(kv[0])
-			value, _ := url.QueryUnescape(kv[1])
+			value, err := url.QueryUnescape(kv[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid URL encoding in value for %q: %w", key, err)
+			}
 			params[key] = value
-		} else if len(kv) == 1 {
-			key, _ := url.QueryUnescape(kv[0])
+		} else {
 			params[key] = ""
 		}
 	}
-	return params
+	return params, nil
 }
 
 func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 	errorXml := ErrorResponse{
+		XMLNS: xmlnsEC2,
 		Errors: Errors{
 			Error: ErrorDetail{
 				Code:    code,
@@ -361,7 +374,7 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 
 	if err != nil {
 		slog.Error("Failed to build XML", "error", err)
-		return []byte(xml.Header + "<Response><Errors><Error><Code>InternalError</Code><Message>Internal error</Message></Error></Errors><RequestID>" + requestID + "</RequestID></Response>")
+		return []byte(xml.Header + `<ErrorResponse xmlns="` + xmlnsEC2 + `"><Errors><Error><Code>InternalError</Code><Message>Internal error</Message></Error></Errors><RequestID>` + requestID + `</RequestID></ErrorResponse>`)
 	}
 
 	// Add XML header

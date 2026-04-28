@@ -26,12 +26,19 @@ func (gw *GatewayConfig) Spinifex_Request(w http.ResponseWriter, r *http.Request
 		slog.Error("Failed to read spinifex request body", "error", err)
 		return errors.New(awserrors.ErrorInternalError)
 	}
-	queryArgs := ParseAWSQueryArgs(string(body))
+	queryArgs, err := ParseAWSQueryArgs(string(body))
+	if err != nil {
+		slog.Debug("Spinifex: malformed query string", "err", err)
+		return errors.New(awserrors.ErrorMalformedQueryString)
+	}
 
 	action := queryArgs["Action"]
 	if action == "" {
 		// Also check query string for GET-style requests
 		action = r.URL.Query().Get("Action")
+	}
+	if action == "" {
+		return errors.New(awserrors.ErrorMissingAction)
 	}
 
 	if err := gw.checkPolicy(r, "spinifex", action); err != nil {

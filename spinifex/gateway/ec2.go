@@ -363,9 +363,16 @@ func (gw *GatewayConfig) EC2_Request(w http.ResponseWriter, r *http.Request) err
 		slog.Error("Failed to read EC2 request body", "error", err)
 		return errors.New(awserrors.ErrorInternalError)
 	}
-	queryArgs := ParseAWSQueryArgs(string(body))
+	queryArgs, err := ParseAWSQueryArgs(string(body))
+	if err != nil {
+		slog.Debug("EC2: malformed query string", "err", err)
+		return errors.New(awserrors.ErrorMalformedQueryString)
+	}
 
 	action := queryArgs["Action"]
+	if action == "" {
+		return errors.New(awserrors.ErrorMissingAction)
+	}
 	handler, ok := ec2Actions[action]
 	if !ok {
 		return errors.New(awserrors.ErrorInvalidAction)

@@ -105,9 +105,16 @@ func (gw *GatewayConfig) ELBv2_Request(w http.ResponseWriter, r *http.Request) e
 		slog.Error("Failed to read ELBv2 request body", "error", err)
 		return errors.New(awserrors.ErrorInternalError)
 	}
-	queryArgs := ParseAWSQueryArgs(string(body))
+	queryArgs, err := ParseAWSQueryArgs(string(body))
+	if err != nil {
+		slog.Debug("ELBv2: malformed query string", "err", err)
+		return errors.New(awserrors.ErrorMalformedQueryString)
+	}
 
 	action := queryArgs["Action"]
+	if action == "" {
+		return errors.New(awserrors.ErrorMissingAction)
+	}
 	handler, ok := elbv2Actions[action]
 	if !ok {
 		return errors.New(awserrors.ErrorInvalidAction)

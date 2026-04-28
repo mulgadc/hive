@@ -99,9 +99,16 @@ func (gw *GatewayConfig) IAM_Request(w http.ResponseWriter, r *http.Request) err
 		slog.Error("Failed to read IAM request body", "error", err)
 		return errors.New(awserrors.ErrorInternalError)
 	}
-	queryArgs := ParseAWSQueryArgs(string(body))
+	queryArgs, err := ParseAWSQueryArgs(string(body))
+	if err != nil {
+		slog.Debug("IAM: malformed query string", "err", err)
+		return errors.New(awserrors.ErrorMalformedQueryString)
+	}
 
 	action := queryArgs["Action"]
+	if action == "" {
+		return errors.New(awserrors.ErrorMissingAction)
+	}
 	handler, ok := iamActions[action]
 	if !ok {
 		slog.Debug("IAM: unknown action", "action", action)

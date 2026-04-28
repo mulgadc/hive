@@ -185,6 +185,12 @@ func setFieldValue(field reflect.Value, value string) error {
 	return nil
 }
 
+// maxSliceLen bounds the size of any single Prefix.N / Prefix.member.N list
+// we will materialise. Without this an adversarial caller could submit
+// `Filter.1`…`Filter.999999` and force a huge allocation; AWS rejects oversized
+// lists, so erroring here matches AWS-parity intent and provides DoS protection.
+const maxSliceLen = 1024
+
 func setSliceField(field reflect.Value, params map[string]string, prefix string) error {
 	// Find all indexed items for this slice.
 	// Supports both EC2-style (Prefix.N) and IAM/ELBv2-style (Prefix.member.N) formats.
@@ -213,22 +219,25 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 		return nil
 	}
 
-	// Create slice with appropriate size
-	maxIdx := 0
-	for idx := range indices {
-		if idx > maxIdx {
-			maxIdx = idx
+	// AWS stops list parsing at the first gap: Filter.1, Filter.3 yields one
+	// entry, not three with a phantom zero-value slot at index 2. Walk
+	// contiguous indices from 1; reject runs that exceed maxSliceLen.
+	denseLen := 0
+	for indices[denseLen+1] {
+		denseLen++
+		if denseLen > maxSliceLen {
+			return fmt.Errorf("list parameter %q exceeds maximum of %d entries", prefix, maxSliceLen)
 		}
+	}
+	if denseLen == 0 {
+		return nil
 	}
 
 	elemType := field.Type().Elem()
-	slice := reflect.MakeSlice(field.Type(), maxIdx, maxIdx)
+	slice := reflect.MakeSlice(field.Type(), denseLen, denseLen)
 
 	// Process each index
-	for idx := 1; idx <= maxIdx; idx++ {
-		if !indices[idx] {
-			continue
-		}
+	for idx := 1; idx <= denseLen; idx++ {
 
 		elem := slice.Index(idx - 1)
 		var indexPrefix string
