@@ -192,6 +192,7 @@ spinifex-vpcd ALL=(root) NOPASSWD: /usr/sbin/dhcpcd
 spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
 spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
 spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/systemctl is-active --quiet ovn-controller
+spinifex-vpcd ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
 SUDOERS
     $SUDO chmod 0440 /etc/sudoers.d/spinifex-network
     $SUDO visudo -cf /etc/sudoers.d/spinifex-network || fatal "Invalid sudoers syntax in spinifex-network"
