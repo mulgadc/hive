@@ -9,11 +9,42 @@ import (
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAcquireReconcileLeader_OnlyOneWinner(t *testing.T) {
+	_, nc, _ := testutil.StartTestJetStream(t)
+
+	releaseA, electedA := AcquireReconcileLeader(nc, "node-a")
+	require.True(t, electedA, "first caller must win")
+	require.NotNil(t, releaseA)
+
+	releaseB, electedB := AcquireReconcileLeader(nc, "node-b")
+	assert.False(t, electedB, "second caller must lose while A holds the lock")
+	assert.Nil(t, releaseB)
+
+	releaseA()
+
+	// After release the next caller can claim it.
+	releaseC, electedC := AcquireReconcileLeader(nc, "node-c")
+	require.True(t, electedC, "next caller wins after release")
+	releaseC()
+}
+
+func TestAcquireReconcileLeader_NoJetStreamFallsThrough(t *testing.T) {
+	// No JetStream on this server — caller must fall through (elected=true)
+	// rather than deadlock the cluster on first boot.
+	_, nc := testutil.StartTestNATS(t)
+
+	release, elected := AcquireReconcileLeader(nc, "node-a")
+	assert.True(t, elected, "must fall through when KV unavailable")
+	assert.NotNil(t, release)
+	release() // no-op release on fallthrough path must not panic
+}
 
 func TestReconcile_NoBootstrap(t *testing.T) {
 	ovn := NewMockOVNClient()
