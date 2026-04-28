@@ -1,6 +1,7 @@
 package vpcd
 
 import (
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,13 @@ func TestSubnetGateway_IPv6(t *testing.T) {
 
 func TestGenerateMAC_EmptyString(t *testing.T) {
 	mac := generateMAC("")
-	assert.Equal(t, "02:00:00:00:00:00", mac)
+	hw, err := net.ParseMAC(mac)
+	require.NoError(t, err)
+	// LAA + unicast bits enforced even for empty input.
+	assert.Equal(t, byte(0x02), hw[0]&0x03)
+	// Old 24-bit impl produced 02:00:00:00:00:00 (all-zero hash region) for
+	// empty input. New impl hashes the prefix-and-id, so output must differ.
+	assert.NotEqual(t, "02:00:00:00:00:00", hw.String())
 }
 
 // --- dnsServer ---

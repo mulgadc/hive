@@ -126,8 +126,9 @@ func TestDHCPManager_HWAddrDerivedFromClientID(t *testing.T) {
 	require.Empty(t, reply.Error)
 	lease, ok := fake.HeldLease("eni-mac")
 	require.True(t, ok)
-	// generateMAC uses the 02:00:00 locally-administered unicast prefix.
-	require.Equal(t, "02:00:00", lease.HWAddr.String()[:8])
+	// generateMAC produces a locally-administered unicast MAC. First octet
+	// is hash-derived; assert the IEEE 802 reserved bits.
+	require.Equal(t, byte(0x02), lease.HWAddr[0]&0x03)
 }
 
 func TestDHCPManager_HWAddrExplicitlySuppliedIsUsed(t *testing.T) {

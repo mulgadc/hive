@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -302,15 +304,22 @@ func humanBytes(b uint64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPEZY"[exp])
 }
 
-// HashMAC generates a deterministic locally-administered unicast MAC address.
-// prefix is the first 3 octets (e.g. "02:00:00"), id is hashed to produce the
-// remaining 3 octets.
-func HashMAC(prefix, id string) string {
-	h := uint32(0)
-	for _, c := range id {
-		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
-	}
-	return fmt.Sprintf("%s:%02x:%02x:%02x", prefix, (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+// HashMAC returns a deterministic locally-administered unicast MAC derived
+// from id. Output is "02:xx:xx:xx:xx:xx" with 46 bits of SHA-256-derived
+// entropy in the low bits of the first octet plus the next 5 octets, and
+// the IEEE 802 reserved bits forced (bit0=0 unicast, bit1=1 LAA).
+//
+// id must be globally unique across all MACs the deployment produces. No
+// per-deployment salt is mixed in. Callers that share a base id between
+// resource classes (e.g. an instance's dev vs mgmt NIC) must compose a
+// class tag into id ("dev:"+instanceID, "mgmt:"+instanceID). Hardcoded or
+// low-entropy ids will collide.
+func HashMAC(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	b := make([]byte, 6)
+	copy(b, sum[:6])
+	b[0] = (b[0] & 0xFC) | 0x02 // bit0=0 unicast, bit1=1 locally-administered
+	return net.HardwareAddr(b).String()
 }
 
 func dirExists(path string) bool {

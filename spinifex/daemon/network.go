@@ -160,16 +160,18 @@ func OVSIfaceID(eniId string) string {
 	return "port-" + eniId
 }
 
-// generateDevMAC creates a locally-administered unicast MAC for the dev/hostfwd NIC.
-// Uses prefix 02:de:00 to distinguish from ENI MACs (02:00:00).
+// generateDevMAC creates a locally-administered unicast MAC for the
+// dev/hostfwd NIC. The "dev:" tag disambiguates from the mgmt NIC of the
+// same instance (which shares instanceId).
 func generateDevMAC(instanceId string) string {
-	return utils.HashMAC("02:de:00", instanceId)
+	return utils.HashMAC("dev:" + instanceId)
 }
 
-// generateMgmtMAC creates a locally-administered unicast MAC for the management NIC.
-// Uses prefix 02:a0:00 to distinguish from ENI MACs (02:00:00) and dev MACs (02:de:00).
+// generateMgmtMAC creates a locally-administered unicast MAC for the
+// management NIC. The "mgmt:" tag disambiguates from the dev NIC of the
+// same instance (which shares instanceId).
 func generateMgmtMAC(instanceId string) string {
-	return utils.HashMAC("02:a0:00", instanceId)
+	return utils.HashMAC("mgmt:" + instanceId)
 }
 
 // MgmtTapName returns the Linux TAP device name for a management NIC.

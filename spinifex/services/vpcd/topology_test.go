@@ -3,6 +3,8 @@ package vpcd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -409,9 +411,14 @@ func TestGenerateMAC(t *testing.T) {
 	mac1 := generateMAC("subnet-aaa")
 	mac2 := generateMAC("subnet-bbb")
 
-	// Must start with locally-administered unicast prefix
-	if mac1[:8] != "02:00:00" {
-		t.Errorf("expected prefix 02:00:00, got %s", mac1[:8])
+	// Must be a valid locally-administered unicast MAC. First octet is
+	// hash-derived, not the literal "02:00:00" of the old 24-bit impl.
+	hw, err := net.ParseMAC(mac1)
+	if err != nil {
+		t.Fatalf("invalid MAC %q: %v", mac1, err)
+	}
+	if hw[0]&0x03 != 0x02 {
+		t.Errorf("expected unicast+LAA bits on first octet, got %#x", hw[0])
 	}
 
 	// Different inputs produce different MACs
@@ -423,6 +430,21 @@ func TestGenerateMAC(t *testing.T) {
 	mac1b := generateMAC("subnet-aaa")
 	if mac1 != mac1b {
 		t.Error("expected deterministic MAC")
+	}
+
+	// Output must use full 46-bit hash space, not the old 24-bit space that
+	// pinned the top 3 octets to "02:00:00". Sweep many inputs and assert
+	// the second octet varies — old impl always emitted 0x00 there.
+	seen := map[byte]struct{}{}
+	for i := range 1000 {
+		hw, err := net.ParseMAC(generateMAC(fmt.Sprintf("subnet-%d", i)))
+		if err != nil {
+			t.Fatalf("invalid MAC: %v", err)
+		}
+		seen[hw[1]] = struct{}{}
+	}
+	if len(seen) <= 1 {
+		t.Errorf("expected second octet to vary across inputs, got %d distinct values", len(seen))
 	}
 }
 

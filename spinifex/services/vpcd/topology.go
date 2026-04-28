@@ -11,6 +11,7 @@ import (
 
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
 	"github.com/mulgadc/spinifex/spinifex/types"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -1407,15 +1408,11 @@ func subnetGateway(cidr string) (string, int, error) {
 	return gw.String(), ones, nil
 }
 
-// generateMAC creates a deterministic MAC address from a resource ID.
-// Uses the locally-administered unicast prefix 02:00:00.
+// generateMAC creates a deterministic locally-administered unicast MAC
+// from a resource ID via utils.HashMAC. Inputs are vpcd-owned ids
+// (subnet-..., gw-vpc-..., eni-...) which are unique on their own.
 func generateMAC(resourceID string) string {
-	// Simple hash: use first 6 hex chars of resource ID after the prefix
-	h := uint32(0)
-	for _, c := range resourceID {
-		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
-	}
-	return fmt.Sprintf("02:00:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+	return utils.HashMAC(resourceID)
 }
 
 // respond sends a simple JSON response to a NATS request.
