@@ -176,6 +176,34 @@ func TestParseRunInstances(t *testing.T) {
 			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 
+		{
+			name: "NilMaxCount",
+			input: &ec2.RunInstancesInput{
+				ImageId:          defaults.ImageId,
+				InstanceType:     defaults.InstanceType,
+				MinCount:         aws.Int64(1),
+				MaxCount:         nil,
+				KeyName:          defaults.KeyName,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorMissingParameter),
+		},
+
+		{
+			name: "MissingKeyName",
+			input: &ec2.RunInstancesInput{
+				ImageId:          defaults.ImageId,
+				InstanceType:     defaults.InstanceType,
+				MinCount:         aws.Int64(1),
+				MaxCount:         aws.Int64(1),
+				KeyName:          nil,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorMissingParameter),
+		},
+
 		// Successful test
 		{
 			name: "ValidTest",
