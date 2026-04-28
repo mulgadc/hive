@@ -167,7 +167,7 @@ jobs:
             "cd ~/e2e-tests && ./run-multinode-e2e.sh ${NODE_IPS} && ./run-cert-e2e.sh --multinode ${NODE_IPS} && ENDPOINT=https://${NODE1_IP}:9999 ./run-lb-e2e.sh --nodes ${NODE_IPS}"
 
       - name: Run Tofu Workbooks
-        if: matrix.extra == 'tofu-examples'
+        if: steps.gate.outputs.selected == 'true' && matrix.extra == 'tofu-examples'
         working-directory: mulga/scripts/tofu-cluster
         run: |
           INVENTORY=$(tofu output -json inventory)
