@@ -2,7 +2,7 @@ name: E2E Nightly
 
 on:
   schedule:
-    - cron: "0 14 * * *" # 00:00 AEST = 14:00 UTC
+    - cron: "0 14 * * 0-4" # 00:00 Mon-Fri AEST = 14:00 Sun-Thu UTC
   workflow_dispatch:
     inputs:
       cells:
@@ -25,8 +25,12 @@ jobs:
       max-parallel: 3
       matrix:
         include:
+          - { cell: 1,  install: binary, topo: single,     net: dhcp,   host: debian-13,    arch: x86_64, runner: ci-single, extra: "" }
           - { cell: 2,  install: binary, topo: single,     net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-single, extra: "" }
+          - { cell: 3,  install: binary, topo: single,     net: dhcp,   host: ubuntu-24.04, arch: x86_64, runner: ci-single, extra: "" }
+          - { cell: 8,  install: binary, topo: real-multi, net: dhcp,   host: debian-13,    arch: x86_64, runner: ci-multi,  extra: "" }
           - { cell: 9,  install: binary, topo: real-multi, net: static, host: ubuntu-24.04, arch: x86_64, runner: ci-multi,  extra: "" }
+          - { cell: 10, install: binary, topo: real-multi, net: dhcp,   host: ubuntu-24.04, arch: x86_64, runner: ci-multi,  extra: "" }
           - { cell: 17, install: binary, topo: single,     net: static, host: debian-13,    arch: x86_64, runner: ci-pseudo, extra: "tofu-examples" }
 
     runs-on: [ self-hosted, "${{ matrix.runner }}" ]
@@ -163,7 +167,7 @@ jobs:
             "cd ~/e2e-tests && ./run-multinode-e2e.sh ${NODE_IPS} && ./run-cert-e2e.sh --multinode ${NODE_IPS} && ENDPOINT=https://${NODE1_IP}:9999 ./run-lb-e2e.sh --nodes ${NODE_IPS}"
 
       - name: Run Tofu Workbooks
-        if: matrix.extra == 'tofu-examples'
+        if: steps.gate.outputs.selected == 'true' && matrix.extra == 'tofu-examples'
         working-directory: mulga/scripts/tofu-cluster
         run: |
           INVENTORY=$(tofu output -json inventory)
