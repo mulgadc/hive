@@ -68,105 +68,160 @@ func newTestListener(id, lbArn string) *ListenerRecord {
 	}
 }
 
-// recordOps describes the Put/Get/Delete/List interface for one record type
-// so the lifecycle tests can exercise LB / TG / Listener with the same logic.
-type recordOps[R any] struct {
-	put       func(*Store, *R) error
-	getByID   func(*Store, string) (*R, error)
-	delete    func(*Store, string) error
-	list      func(*Store) ([]*R, error)
-	idOf      func(*R) string
-	new       func(id string) *R
-	zeroValue *R
-}
-
-var lbOps = recordOps[LoadBalancerRecord]{
-	put:     (*Store).PutLoadBalancer,
-	getByID: (*Store).GetLoadBalancer,
-	delete:  (*Store).DeleteLoadBalancer,
-	list:    func(s *Store) ([]*LoadBalancerRecord, error) { return s.ListLoadBalancers() },
-	idOf:    func(r *LoadBalancerRecord) string { return r.LoadBalancerID },
-	new:     func(id string) *LoadBalancerRecord { return newTestLB(id, "lb-"+id) },
-}
-
-var tgOps = recordOps[TargetGroupRecord]{
-	put:     (*Store).PutTargetGroup,
-	getByID: (*Store).GetTargetGroup,
-	delete:  (*Store).DeleteTargetGroup,
-	list:    func(s *Store) ([]*TargetGroupRecord, error) { return s.ListTargetGroups() },
-	idOf:    func(r *TargetGroupRecord) string { return r.TargetGroupID },
-	new:     func(id string) *TargetGroupRecord { return newTestTG(id, "tg-"+id) },
-}
-
-var listenerOps = recordOps[ListenerRecord]{
-	put:     (*Store).PutListener,
-	getByID: (*Store).GetListener,
-	delete:  (*Store).DeleteListener,
-	list:    func(s *Store) ([]*ListenerRecord, error) { return s.ListListeners() },
-	idOf:    func(r *ListenerRecord) string { return r.ListenerID },
-	new: func(id string) *ListenerRecord {
-		lbArn := "arn:aws:elasticloadbalancing:us-east-1:" + testAccountID + ":loadbalancer/app/test/lb1"
-		return newTestListener(id, lbArn)
-	},
-}
-
-func runLifecycleTest[R any](t *testing.T, ops recordOps[R]) {
+func TestLoadBalancerStoreLifecycle(t *testing.T) {
 	t.Run("put and get", func(t *testing.T) {
 		store := setupTestStore(t)
-		rec := ops.new("getput1")
+		require.NoError(t, store.PutLoadBalancer(newTestLB("getput1", "lb-getput1")))
 
-		require.NoError(t, ops.put(store, rec))
-
-		got, err := ops.getByID(store, "getput1")
+		got, err := store.GetLoadBalancer("getput1")
 		require.NoError(t, err)
 		require.NotNil(t, got)
-		assert.Equal(t, "getput1", ops.idOf(got))
+		assert.Equal(t, "getput1", got.LoadBalancerID)
 	})
 
 	t.Run("get not found", func(t *testing.T) {
 		store := setupTestStore(t)
-		got, err := ops.getByID(store, "nonexistent")
+		got, err := store.GetLoadBalancer("nonexistent")
 		require.NoError(t, err)
-		assert.Equal(t, ops.zeroValue, got)
+		assert.Nil(t, got)
 	})
 
 	t.Run("delete removes record", func(t *testing.T) {
 		store := setupTestStore(t)
-		rec := ops.new("del1")
-		require.NoError(t, ops.put(store, rec))
-		require.NoError(t, ops.delete(store, "del1"))
+		require.NoError(t, store.PutLoadBalancer(newTestLB("del1", "lb-del1")))
+		require.NoError(t, store.DeleteLoadBalancer("del1"))
 
-		got, err := ops.getByID(store, "del1")
+		got, err := store.GetLoadBalancer("del1")
 		require.NoError(t, err)
-		assert.Equal(t, ops.zeroValue, got)
+		assert.Nil(t, got)
 	})
 
 	t.Run("delete idempotent", func(t *testing.T) {
 		store := setupTestStore(t)
-		require.NoError(t, ops.delete(store, "doesnt-exist"))
+		require.NoError(t, store.DeleteLoadBalancer("doesnt-exist"))
 	})
 
 	t.Run("list returns all", func(t *testing.T) {
 		store := setupTestStore(t)
-		require.NoError(t, ops.put(store, ops.new("a")))
-		require.NoError(t, ops.put(store, ops.new("b")))
+		require.NoError(t, store.PutLoadBalancer(newTestLB("a", "lb-a")))
+		require.NoError(t, store.PutLoadBalancer(newTestLB("b", "lb-b")))
 
-		records, err := ops.list(store)
+		records, err := store.ListLoadBalancers()
 		require.NoError(t, err)
 		assert.Len(t, records, 2)
 	})
 
 	t.Run("list empty", func(t *testing.T) {
 		store := setupTestStore(t)
-		records, err := ops.list(store)
+		records, err := store.ListLoadBalancers()
 		require.NoError(t, err)
 		assert.Empty(t, records)
 	})
 }
 
-func TestLoadBalancerStoreLifecycle(t *testing.T) { runLifecycleTest(t, lbOps) }
-func TestTargetGroupStoreLifecycle(t *testing.T)  { runLifecycleTest(t, tgOps) }
-func TestListenerStoreLifecycle(t *testing.T)     { runLifecycleTest(t, listenerOps) }
+func TestTargetGroupStoreLifecycle(t *testing.T) {
+	t.Run("put and get", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.PutTargetGroup(newTestTG("getput1", "tg-getput1")))
+
+		got, err := store.GetTargetGroup("getput1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "getput1", got.TargetGroupID)
+	})
+
+	t.Run("get not found", func(t *testing.T) {
+		store := setupTestStore(t)
+		got, err := store.GetTargetGroup("nonexistent")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("delete removes record", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.PutTargetGroup(newTestTG("del1", "tg-del1")))
+		require.NoError(t, store.DeleteTargetGroup("del1"))
+
+		got, err := store.GetTargetGroup("del1")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("delete idempotent", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.DeleteTargetGroup("doesnt-exist"))
+	})
+
+	t.Run("list returns all", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.PutTargetGroup(newTestTG("a", "tg-a")))
+		require.NoError(t, store.PutTargetGroup(newTestTG("b", "tg-b")))
+
+		records, err := store.ListTargetGroups()
+		require.NoError(t, err)
+		assert.Len(t, records, 2)
+	})
+
+	t.Run("list empty", func(t *testing.T) {
+		store := setupTestStore(t)
+		records, err := store.ListTargetGroups()
+		require.NoError(t, err)
+		assert.Empty(t, records)
+	})
+}
+
+func TestListenerStoreLifecycle(t *testing.T) {
+	lbArn := "arn:aws:elasticloadbalancing:us-east-1:" + testAccountID + ":loadbalancer/app/test/lb1"
+
+	t.Run("put and get", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.PutListener(newTestListener("getput1", lbArn)))
+
+		got, err := store.GetListener("getput1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "getput1", got.ListenerID)
+	})
+
+	t.Run("get not found", func(t *testing.T) {
+		store := setupTestStore(t)
+		got, err := store.GetListener("nonexistent")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("delete removes record", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.PutListener(newTestListener("del1", lbArn)))
+		require.NoError(t, store.DeleteListener("del1"))
+
+		got, err := store.GetListener("del1")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("delete idempotent", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.DeleteListener("doesnt-exist"))
+	})
+
+	t.Run("list returns all", func(t *testing.T) {
+		store := setupTestStore(t)
+		require.NoError(t, store.PutListener(newTestListener("a", lbArn)))
+		require.NoError(t, store.PutListener(newTestListener("b", lbArn)))
+
+		records, err := store.ListListeners()
+		require.NoError(t, err)
+		assert.Len(t, records, 2)
+	})
+
+	t.Run("list empty", func(t *testing.T) {
+		store := setupTestStore(t)
+		records, err := store.ListListeners()
+		require.NoError(t, err)
+		assert.Empty(t, records)
+	})
+}
 
 // --- LB-specific lookups (no equivalent on TG/Listener) ---
 

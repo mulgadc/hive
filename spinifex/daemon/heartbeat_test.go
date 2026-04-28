@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/vm"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,4 +89,55 @@ func TestHeartbeatReflectsAllocation(t *testing.T) {
 	assert.Equal(t, 1, after.VMCount, "Should reflect 1 VM")
 	assert.Greater(t, after.AllocatedVCPU, before.AllocatedVCPU, "AllocatedVCPU should increase")
 	assert.Less(t, after.AvailableVCPU, before.AvailableVCPU, "AvailableVCPU should decrease")
+}
+
+// TestHeartbeatKVContract pins the on-wire JSON shape and the KV key layout
+// for WriteHeartbeat/ReadHeartbeat. A renamed struct tag or changed key
+// prefix would break cross-version cluster reads — a pure round-trip would
+// not catch either, so we assert against the raw KV bytes.
+func TestHeartbeatKVContract(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitClusterStateBucket())
+
+	h := &Heartbeat{
+		Node:          "kv-contract-node",
+		Epoch:         3,
+		Timestamp:     "2025-01-01T00:00:00Z",
+		Services:      []string{"daemon", "nats"},
+		VMCount:       2,
+		AllocatedVCPU: 4,
+		AvailableVCPU: 12,
+		AllocatedMem:  8.0,
+		AvailableMem:  24.0,
+	}
+
+	require.NoError(t, jsm.WriteHeartbeat(h))
+
+	// Verify the KV key prefix and the JSON tag names directly. Reading back
+	// via ReadHeartbeat alone would also pass against a typo'd tag.
+	entry, err := jsm.clusterKV.Get("heartbeat." + h.Node)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(entry.Value(), &raw))
+	assert.Equal(t, "kv-contract-node", raw["node"])
+	assert.Equal(t, float64(3), raw["epoch"])
+	assert.Equal(t, "2025-01-01T00:00:00Z", raw["timestamp"])
+	assert.Equal(t, []any{"daemon", "nats"}, raw["services"])
+	assert.Equal(t, float64(2), raw["vm_count"])
+	assert.Equal(t, float64(4), raw["allocated_vcpu"])
+	assert.Equal(t, float64(12), raw["available_vcpu"])
+	assert.Equal(t, 8.0, raw["allocated_mem_gb"])
+	assert.Equal(t, 24.0, raw["available_mem_gb"])
+
+	// And ReadHeartbeat decodes the same value.
+	loaded, err := jsm.ReadHeartbeat(h.Node)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, h, loaded)
 }
