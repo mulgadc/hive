@@ -2484,6 +2484,10 @@ func TestHandleNodeStatus(t *testing.T) {
 	assert.Equal(t, 2, resp.VMCount)
 	assert.Greater(t, resp.TotalVCPU, 0)
 	assert.Greater(t, resp.TotalMemGB, 0.0)
+	assert.Equal(t, daemon.resourceMgr.reservedVCPU, resp.ReservedVCPU, "ReservedVCPU must be populated on wire")
+	assert.InDelta(t, daemon.resourceMgr.reservedMem, resp.ReservedMemGB, 0.001, "ReservedMemGB must be populated on wire")
+	assert.Greater(t, resp.ReservedVCPU, 0, "default reserve is non-zero")
+	assert.Greater(t, resp.ReservedMemGB, 0.0, "default reserve is non-zero")
 }
 
 func TestHandleNodeStatus_NoVMs(t *testing.T) {
@@ -2503,6 +2507,8 @@ func TestHandleNodeStatus_NoVMs(t *testing.T) {
 
 	assert.Equal(t, 0, resp.VMCount)
 	assert.Equal(t, "Ready", resp.Status)
+	assert.Greater(t, resp.ReservedVCPU, 0, "default reserve is exposed even when no VMs")
+	assert.Greater(t, resp.ReservedMemGB, 0.0, "default reserve is exposed even when no VMs")
 }
 
 // --- handleNodeVMs tests ---

@@ -156,7 +156,7 @@ func (d *Daemon) daemonIP() string {
 // handleNodeStatus responds with this node's status and resource stats.
 // Used by the CLI: spx get nodes, spx top nodes.
 func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
-	totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps := d.resourceMgr.GetResourceStats()
+	totalVCPU, totalMemGB, reservedVCPU, reservedMemGB, allocVCPU, allocMemGB, caps := d.resourceMgr.GetResourceStats()
 
 	d.Instances.Mu.Lock()
 	vmCount := 0
@@ -177,6 +177,8 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 		Services:      d.config.GetServices(),
 		TotalVCPU:     totalVCPU,
 		TotalMemGB:    totalMemGB,
+		ReservedVCPU:  reservedVCPU,
+		ReservedMemGB: reservedMemGB,
 		AllocVCPU:     allocVCPU,
 		AllocMemGB:    allocMemGB,
 		VMCount:       vmCount,

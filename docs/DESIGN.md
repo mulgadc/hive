@@ -158,11 +158,13 @@ Tracks available and allocated CPU/memory to prevent overcommit, and drives the 
 ```go
 type ResourceManager struct {
     mu            sync.RWMutex
-    availableVCPU int
-    availableMem  float64
+    hostVCPU      int                                // raw runtime.NumCPU
+    hostMemGB     float64                            // raw /proc/meminfo MemTotal
+    reservedVCPU  int                                // held back for spinifex services
+    reservedMem   float64                            // held back for spinifex services
     allocatedVCPU int
     allocatedMem  float64
-    instanceTypes map[string]*ec2.InstanceTypeInfo  // t3.micro, t3.small, etc.
+    instanceTypes map[string]*ec2.InstanceTypeInfo   // t3.micro, t3.small, etc.
 }
 ```
 
