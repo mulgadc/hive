@@ -2,7 +2,7 @@ name: E2E Nightly
 
 on:
   schedule:
-    - cron: "0 14 * * *" # 00:00 AEST = 14:00 UTC
+    - cron: "0 14 * * 0-4" # 00:00 Mon-Fri AEST = 14:00 Sun-Thu UTC
   workflow_dispatch:
     inputs:
       cells:
