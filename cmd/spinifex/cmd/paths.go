@@ -54,12 +54,15 @@ func DefaultConfigFile() string {
 	return filepath.Join(DefaultConfigDir(), "spinifex.toml")
 }
 
+// productionMarkerPath identifies a production install by directory presence.
+// Created by setup.sh during binary install. Overridable in tests.
+var productionMarkerPath = "/etc/spinifex"
+
 // isProductionLayout returns true when running in a production install.
-// Detected by: /etc/spinifex directory exists (created by setup.sh during
-// binary install). No root check — allows non-root users (e.g. tf-user) to
-// run CLI commands like `spx get nodes` without sudo or --config flags.
+// No root check — allows non-root users (e.g. tf-user) to run CLI commands
+// like `spx get nodes` without sudo or --config flags.
 func isProductionLayout() bool {
-	if info, err := os.Stat("/etc/spinifex"); err == nil && info.IsDir() {
+	if info, err := os.Stat(productionMarkerPath); err == nil && info.IsDir() {
 		return true
 	}
 	return false

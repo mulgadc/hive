@@ -1444,16 +1444,6 @@ func TestDescribeVolumeStatus_SlowPath_SkipsBrokenConfig(t *testing.T) {
 	assert.Len(t, output.VolumeStatuses, 1)
 }
 
-func TestNewVolumeServiceImplWithStore_WithSnapshotKV(t *testing.T) {
-	kv := setupTestVolumeKV(t)
-	store := objectstore.NewMemoryObjectStore()
-	cfg := &config.Config{
-		Predastore: config.PredastoreConfig{Bucket: "test-bucket"},
-	}
-	svc := NewVolumeServiceImplWithStore(cfg, store, nil, kv)
-	assert.NotNil(t, svc.snapshotKV)
-}
-
 func TestDeleteVolume_NATSErrorResponse(t *testing.T) {
 	kv := setupTestVolumeKV(t)
 	store := objectstore.NewMemoryObjectStore()

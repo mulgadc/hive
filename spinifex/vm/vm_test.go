@@ -285,60 +285,62 @@ func TestExecute_NoGraphic(t *testing.T) {
 }
 
 func TestExecute_SerialSocketAndConsoleLog(t *testing.T) {
-	cfg := Config{
-		CPUCount:       1,
-		Memory:         512,
-		Architecture:   "x86_64",
-		SerialSocket:   "/run/serial.sock",
-		ConsoleLogPath: "/var/log/console.log",
-		Drives:         []Drive{{File: "disk.img", Format: "raw"}},
-	}
+	t.Run("both set emits chardev and serial", func(t *testing.T) {
+		cfg := Config{
+			CPUCount:       1,
+			Memory:         512,
+			Architecture:   "x86_64",
+			SerialSocket:   "/run/serial.sock",
+			ConsoleLogPath: "/var/log/console.log",
+			Drives:         []Drive{{File: "disk.img", Format: "raw"}},
+		}
 
-	cmd, err := cfg.Execute()
-	assert.NoError(t, err)
+		cmd, err := cfg.Execute()
+		assert.NoError(t, err)
 
-	args := cmd.Args[1:]
-	chardev := argValue(args, "-chardev")
-	assert.Contains(t, chardev, "socket,id=console0")
-	assert.Contains(t, chardev, "path=/run/serial.sock")
-	assert.Contains(t, chardev, "logfile=/var/log/console.log")
-	assert.Equal(t, "chardev:console0", argValue(args, "-serial"))
-}
+		args := cmd.Args[1:]
+		chardev := argValue(args, "-chardev")
+		assert.Contains(t, chardev, "socket,id=console0")
+		assert.Contains(t, chardev, "path=/run/serial.sock")
+		assert.Contains(t, chardev, "logfile=/var/log/console.log")
+		assert.Equal(t, "chardev:console0", argValue(args, "-serial"))
+	})
 
-func TestExecute_SerialSocketOnly(t *testing.T) {
-	cfg := Config{
-		CPUCount:     1,
-		Memory:       512,
-		Architecture: "x86_64",
-		SerialSocket: "/run/serial.sock",
-		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
-	}
+	// Boundary: the production guard requires BOTH fields. Flipping && to ||
+	// would silently emit invalid -chardev args; these subtests catch that.
+	t.Run("serial socket alone emits nothing", func(t *testing.T) {
+		cfg := Config{
+			CPUCount:     1,
+			Memory:       512,
+			Architecture: "x86_64",
+			SerialSocket: "/run/serial.sock",
+			Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+		}
 
-	cmd, err := cfg.Execute()
-	assert.NoError(t, err)
+		cmd, err := cfg.Execute()
+		assert.NoError(t, err)
 
-	args := cmd.Args[1:]
-	// When ConsoleLogPath is empty, -chardev and -serial should not appear
-	assert.Empty(t, argValue(args, "-chardev"))
-	assert.Empty(t, argValue(args, "-serial"))
-}
+		args := cmd.Args[1:]
+		assert.Empty(t, argValue(args, "-chardev"))
+		assert.Empty(t, argValue(args, "-serial"))
+	})
 
-func TestExecute_ConsoleLogPathOnly(t *testing.T) {
-	cfg := Config{
-		CPUCount:       1,
-		Memory:         512,
-		Architecture:   "x86_64",
-		ConsoleLogPath: "/var/log/console.log",
-		Drives:         []Drive{{File: "disk.img", Format: "raw"}},
-	}
+	t.Run("console log alone emits nothing", func(t *testing.T) {
+		cfg := Config{
+			CPUCount:       1,
+			Memory:         512,
+			Architecture:   "x86_64",
+			ConsoleLogPath: "/var/log/console.log",
+			Drives:         []Drive{{File: "disk.img", Format: "raw"}},
+		}
 
-	cmd, err := cfg.Execute()
-	assert.NoError(t, err)
+		cmd, err := cfg.Execute()
+		assert.NoError(t, err)
 
-	args := cmd.Args[1:]
-	// When SerialSocket is empty, -chardev and -serial should not appear
-	assert.Empty(t, argValue(args, "-chardev"))
-	assert.Empty(t, argValue(args, "-serial"))
+		args := cmd.Args[1:]
+		assert.Empty(t, argValue(args, "-chardev"))
+		assert.Empty(t, argValue(args, "-serial"))
+	})
 }
 
 func TestExecute_NetDevs(t *testing.T) {

@@ -36,6 +36,8 @@ type NetworkPlumber interface {
 // OVSNetworkPlumber implements NetworkPlumber using system commands.
 type OVSNetworkPlumber struct{}
 
+var _ NetworkPlumber = (*OVSNetworkPlumber)(nil)
+
 func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	tapName := TapDeviceName(eniId)
 	ifaceID := OVSIfaceID(eniId)

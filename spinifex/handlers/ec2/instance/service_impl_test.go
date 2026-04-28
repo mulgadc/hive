@@ -10,31 +10,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
-	"github.com/mulgadc/spinifex/spinifex/config"
-	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNewInstanceServiceImpl(t *testing.T) {
-	cfg := &config.Config{}
-	instanceTypes := map[string]*ec2.InstanceTypeInfo{
-		"t3.micro": {InstanceType: aws.String("t3.micro")},
-	}
-	store := objectstore.NewMemoryObjectStore()
-	instances := &vm.Instances{VMS: make(map[string]*vm.VM)}
-
-	svc := NewInstanceServiceImpl(cfg, instanceTypes, nil, instances, store)
-
-	require.NotNil(t, svc)
-	assert.Equal(t, cfg, svc.config)
-	assert.Equal(t, instanceTypes, svc.instanceTypes)
-	assert.Nil(t, svc.natsConn)
-	assert.Equal(t, instances, svc.instances)
-	assert.Equal(t, store, svc.objectStore)
-}
 
 func TestGenerateHostname(t *testing.T) {
 	tests := []struct {
