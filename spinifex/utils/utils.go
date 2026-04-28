@@ -305,9 +305,11 @@ func humanBytes(b uint64) string {
 }
 
 // HashMAC returns a deterministic locally-administered unicast MAC derived
-// from id. Output is "02:xx:xx:xx:xx:xx" with 46 bits of SHA-256-derived
-// entropy in the low bits of the first octet plus the next 5 octets, and
-// the IEEE 802 reserved bits forced (bit0=0 unicast, bit1=1 LAA).
+// from id. Output is always "02:xx:xx:xx:xx:xx" — first octet is pinned to
+// 0x02 (bit0=0 unicast, bit1=1 LAA, all other bits zero) so generated MACs
+// are immediately recognisable as ours and cannot collide with registered
+// vendor OUI space. The remaining 40 bits are SHA-256-derived. Birthday-
+// paradox 1% collision at ~150k ids, 50% at ~1.2M.
 //
 // id must be globally unique across all MACs the deployment produces. No
 // per-deployment salt is mixed in. Callers that share a base id between
@@ -317,8 +319,8 @@ func humanBytes(b uint64) string {
 func HashMAC(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	b := make([]byte, 6)
-	copy(b, sum[:6])
-	b[0] = (b[0] & 0xFC) | 0x02 // bit0=0 unicast, bit1=1 locally-administered
+	b[0] = 0x02
+	copy(b[1:], sum[:5])
 	return net.HardwareAddr(b).String()
 }
 

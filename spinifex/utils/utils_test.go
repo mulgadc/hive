@@ -1004,27 +1004,15 @@ func TestReadPidFileFrom_EmptyDir(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestHashMAC_FirstOctetVariesByInput(t *testing.T) {
-	// Old 24-bit impl pinned first octet to literal prefix byte (always
-	// 0x02). New 46-bit impl derives first octet from the hash, so it
-	// spans many values across distinct inputs.
-	seen := map[byte]struct{}{}
+func TestHashMAC_FirstOctetPinnedTo02(t *testing.T) {
+	// First octet must be literal 0x02 across all inputs. Anything else
+	// (e.g. 0x4a, 0xfe — technically valid LAA) visually encroaches on
+	// vendor OUI space and is rejected by ops/CI. Second-octet entropy is
+	// covered by the distribution test.
 	for i := range 1000 {
 		hw, err := net.ParseMAC(HashMAC(fmt.Sprintf("id-%d", i)))
 		require.NoError(t, err)
-		seen[hw[0]] = struct{}{}
-	}
-	assert.Greater(t, len(seen), 10, "first octet should vary across inputs")
-}
-
-func TestHashMAC_LocallyAdministered(t *testing.T) {
-	// First octet must always have bit0=0 (unicast) and bit1=1 (LAA) per
-	// IEEE 802 reserved bits, regardless of hash output.
-	for i := range 1000 {
-		hw, err := net.ParseMAC(HashMAC(fmt.Sprintf("id-%d", i)))
-		require.NoError(t, err)
-		assert.Equal(t, byte(0x02), hw[0]&0x03,
-			"first octet %#x must be unicast+LAA", hw[0])
+		assert.Equal(t, byte(0x02), hw[0], "first octet must be 0x02, got %#x", hw[0])
 	}
 }
 
