@@ -81,9 +81,17 @@ type EBS struct {
 // is available for a type, the node subscribes to ec2.RunInstances.{type};
 // when full, it unsubscribes so NATS routes requests to other nodes.
 type ResourceManager struct {
-	mu            sync.RWMutex
-	availableVCPU int
-	availableMem  float64
+	mu sync.RWMutex
+	// hostVCPU / hostMemGB are the raw figures reported by the host
+	// (runtime.NumCPU, /proc/meminfo). Schedulable capacity for guest VMs
+	// is host - reserved - allocated.
+	hostVCPU  int
+	hostMemGB float64
+	// reservedVCPU / reservedMem are held back from guest scheduling for
+	// the spinifex daemon and co-located services (NATS, predastore,
+	// viperblock, vpcd, awsgw, ui). See hostReserve / defaultHostReserve.
+	reservedVCPU  int
+	reservedMem   float64
 	allocatedVCPU int
 	allocatedMem  float64
 	instanceTypes map[string]*ec2.InstanceTypeInfo
@@ -216,6 +224,9 @@ func getSystemMemory() (float64, error) {
 // NewResourceManager creates a new resource manager with system capabilities.
 // Returns an error if system memory cannot be detected, since an incorrect
 // default would either under-provision (large servers) or over-commit (small devices).
+// Also returns an error if the host is too small to satisfy the daemon's
+// reserve — clamping silently would defeat the reserve and look like a
+// runtime bug.
 func NewResourceManager() (*ResourceManager, error) {
 	// Get system CPU cores
 	numCPU := runtime.NumCPU()
@@ -224,6 +235,11 @@ func NewResourceManager() (*ResourceManager, error) {
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
 		return nil, fmt.Errorf("detect system memory: %w", err)
+	}
+
+	reservedVCPU, reservedMem, err := applyHostReserve(defaultHostReserve, numCPU, totalMemGB)
+	if err != nil {
+		return nil, err
 	}
 
 	// Determine architecture
@@ -236,12 +252,16 @@ func NewResourceManager() (*ResourceManager, error) {
 	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch)
 
 	slog.Info("System resources detected",
-		"vCPUs", numCPU, "memGB", totalMemGB,
+		"hostVCPU", numCPU, "hostMemGB", totalMemGB,
+		"reservedVCPU", reservedVCPU, "reservedMemGB", reservedMem,
+		"schedulableVCPU", numCPU-reservedVCPU, "schedulableMemGB", totalMemGB-reservedMem,
 		"instanceTypes", len(instanceTypes))
 
 	return &ResourceManager{
-		availableVCPU: numCPU,
-		availableMem:  totalMemGB,
+		hostVCPU:      numCPU,
+		hostMemGB:     totalMemGB,
+		reservedVCPU:  reservedVCPU,
+		reservedMem:   reservedMem,
 		instanceTypes: instanceTypes,
 	}, nil
 }
@@ -299,8 +319,8 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 		}
 
 		count := canAllocateCount(
-			rm.availableVCPU, rm.allocatedVCPU,
-			rm.availableMem, rm.allocatedMem,
+			rm.hostVCPU-rm.reservedVCPU, rm.allocatedVCPU,
+			rm.hostMemGB-rm.reservedMem, rm.allocatedMem,
 			vCPUs, memMiB,
 			1<<30, // effectively unlimited — let resources be the constraint
 		)
@@ -315,23 +335,30 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 	}
 
 	slog.Info("GetAvailableInstanceTypeInfos", "total_types", len(rm.instanceTypes), "total_available_slots", len(infos),
-		"hostVCPU", rm.availableVCPU, "hostMem", rm.availableMem, "showCapacity", showCapacity)
+		"hostVCPU", rm.hostVCPU, "hostMem", rm.hostMemGB,
+		"reservedVCPU", rm.reservedVCPU, "reservedMem", rm.reservedMem,
+		"showCapacity", showCapacity)
 
 	return infos
 }
 
 // GetResourceStats returns current resource allocation stats for the node status response.
-func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
+// totalVCPU / totalMemGB are the raw host figures; reservedVCPU / reservedMemGB are
+// held back from guest scheduling. Per-type caps reflect host - reserved - allocated,
+// matching what the admission path will actually permit.
+func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, reservedVCPU int, reservedMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	totalVCPU = rm.availableVCPU
-	totalMemGB = rm.availableMem
+	totalVCPU = rm.hostVCPU
+	totalMemGB = rm.hostMemGB
+	reservedVCPU = rm.reservedVCPU
+	reservedMemGB = rm.reservedMem
 	allocVCPU = rm.allocatedVCPU
 	allocMemGB = rm.allocatedMem
 
-	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-	remainingMem := rm.availableMem - rm.allocatedMem
+	remainingVCPU := rm.hostVCPU - rm.reservedVCPU - rm.allocatedVCPU
+	remainingMem := rm.hostMemGB - rm.reservedMem - rm.allocatedMem
 
 	for name, it := range rm.instanceTypes {
 		if instancetypes.IsSystemType(name) {
@@ -343,7 +370,7 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 		}
 		caps = append(caps, typeCap)
 	}
-	return totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps
+	return totalVCPU, totalMemGB, reservedVCPU, reservedMemGB, allocVCPU, allocMemGB, caps
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -2686,8 +2713,8 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 	defer rm.mu.RUnlock()
 
 	return canAllocateCount(
-		rm.availableVCPU, rm.allocatedVCPU,
-		rm.availableMem, rm.allocatedMem,
+		rm.hostVCPU-rm.reservedVCPU, rm.allocatedVCPU,
+		rm.hostMemGB-rm.reservedMem, rm.allocatedMem,
 		instanceTypeVCPUs(instanceType),
 		instanceTypeMemoryMiB(instanceType),
 		count,

@@ -114,6 +114,8 @@ func TestHeartbeatKVContract(t *testing.T) {
 		AvailableVCPU: 12,
 		AllocatedMem:  8.0,
 		AvailableMem:  24.0,
+		ReservedVCPU:  2,
+		ReservedMem:   4.0,
 	}
 
 	require.NoError(t, jsm.WriteHeartbeat(h))
@@ -134,6 +136,8 @@ func TestHeartbeatKVContract(t *testing.T) {
 	assert.Equal(t, float64(12), raw["available_vcpu"])
 	assert.Equal(t, 8.0, raw["allocated_mem_gb"])
 	assert.Equal(t, 24.0, raw["available_mem_gb"])
+	assert.Equal(t, float64(2), raw["reserved_vcpu"])
+	assert.Equal(t, 4.0, raw["reserved_mem_gb"])
 
 	// And ReadHeartbeat decodes the same value.
 	loaded, err := jsm.ReadHeartbeat(h.Node)

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -10,6 +11,41 @@ import (
 // errInsufficientCapacity is returned by allocateForLaunch when MinCount
 // cannot be satisfied.
 var errInsufficientCapacity = errors.New("insufficient capacity to satisfy MinCount")
+
+// hostReserve is the fixed amount of host CPU and RAM held back from guest
+// scheduling so the spinifex daemon and co-located services (NATS,
+// predastore, viperblock, vpcd, awsgw, ui) cannot be starved by guest VMs
+// at maximum density. A future `capacity` command will lift this into
+// operator-tunable config.
+type hostReserve struct {
+	vCPU  int
+	memGB float64
+}
+
+// defaultHostReserve is sized to cover predastore + viperblock under load;
+// the daemon itself needs little.
+var defaultHostReserve = hostReserve{vCPU: 2, memGB: 4.0}
+
+// minHostMemHeadroomGB is the minimum schedulable memory we require above
+// the reserve, so a host that just meets the reserve still has a small
+// amount left to launch the smallest guest type.
+const minHostMemHeadroomGB = 0.5
+
+// applyHostReserve validates that the host meets the minimum size for the
+// given reserve and returns the reserve to apply. Pure function — no locks
+// or side effects. Exists as a helper for unit-testability of the
+// validation bounds.
+func applyHostReserve(host hostReserve, totalVCPU int, totalMemGB float64) (vcpu int, mem float64, err error) {
+	if totalVCPU <= host.vCPU || totalMemGB < host.memGB+minHostMemHeadroomGB {
+		return 0, 0, fmt.Errorf(
+			"spinifex requires at least %d vCPU and %.1f GB RAM (host has %d vCPU, %.1f GB; reserve is %d vCPU, %.1f GB)",
+			host.vCPU+1, host.memGB+minHostMemHeadroomGB,
+			totalVCPU, totalMemGB,
+			host.vCPU, host.memGB,
+		)
+	}
+	return host.vCPU, host.memGB, nil
+}
 
 // canAllocateCount returns how many instances of the given type can fit
 // in the remaining capacity, capped at maxCount. Pure function — no locks
