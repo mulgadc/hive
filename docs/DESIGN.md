@@ -153,7 +153,7 @@ type Daemon struct {
 
 ### Resource Manager
 
-Tracks host capacity, reserved headroom, and allocated CPU/memory to prevent overcommit and host-service starvation, and drives the dynamic `ec2.RunInstances.{type}` subscriptions. Schedulable capacity for guest VMs is `host - reserved - allocated`; the daemon refuses to start if the host is below the minimum size needed to satisfy the reserve plus a small launch headroom.
+Tracks available and allocated CPU/memory to prevent overcommit, and drives the dynamic `ec2.RunInstances.{type}` subscriptions:
 
 ```go
 type ResourceManager struct {

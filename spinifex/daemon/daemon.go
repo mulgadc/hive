@@ -239,7 +239,10 @@ func NewResourceManager() (*ResourceManager, error) {
 
 	reservedVCPU, reservedMem, err := applyHostReserve(defaultHostReserve, numCPU, totalMemGB)
 	if err != nil {
-		return nil, err
+		slog.Error("host below minimum reserve — daemon refuses to start",
+			"err", err, "hostVCPU", numCPU, "hostMemGB", totalMemGB,
+			"reserveVCPU", defaultHostReserve.vCPU, "reserveMemGB", defaultHostReserve.memGB)
+		return nil, fmt.Errorf("validate host reserve: %w", err)
 	}
 
 	// Determine architecture
@@ -359,6 +362,12 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 
 	remainingVCPU := rm.hostVCPU - rm.reservedVCPU - rm.allocatedVCPU
 	remainingMem := rm.hostMemGB - rm.reservedMem - rm.allocatedMem
+	if remainingVCPU < 0 || remainingMem < 0 {
+		slog.Error("schedulable capacity negative — reserve misconfigured or allocation drift",
+			"hostVCPU", rm.hostVCPU, "reservedVCPU", rm.reservedVCPU, "allocatedVCPU", rm.allocatedVCPU,
+			"hostMemGB", rm.hostMemGB, "reservedMem", rm.reservedMem, "allocatedMem", rm.allocatedMem,
+			"remainingVCPU", remainingVCPU, "remainingMem", remainingMem)
+	}
 
 	for name, it := range rm.instanceTypes {
 		if instancetypes.IsSystemType(name) {

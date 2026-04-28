@@ -227,9 +227,11 @@ func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
 
 // Heartbeat represents a daemon's periodic health status published to cluster KV.
 //
-// ReservedVCPU / ReservedMem are additive: stale entries from older nodes
-// decode to zero and consumers must treat that as "no reserve known", not
-// "no reserve held". Schedulable capacity = Available - Reserved.
+// AvailableVCPU / AvailableMem are observability-only (host - allocated,
+// raw). Scheduling routing happens at the local daemon via admission
+// control, which already accounts for the reserve; ReservedVCPU /
+// ReservedMem are exposed purely for operator dashboards and capacity
+// reporting.
 type Heartbeat struct {
 	Node          string   `json:"node"`
 	Epoch         uint64   `json:"epoch"`

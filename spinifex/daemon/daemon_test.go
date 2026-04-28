@@ -1077,8 +1077,20 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 		}
 		require.NotNil(t, microType)
 
+		// Pin host capacity so the test is independent of the runner's
+		// schedulable headroom (host - reserved). CI runners have only
+		// 4 vCPU, leaving 2 schedulable after the default reserve — not
+		// enough to fit two micro instances (2 vCPU each).
+		rm.mu.Lock()
+		rm.hostVCPU = 16
+		rm.hostMemGB = 32.0
+		rm.reservedVCPU = 0
+		rm.reservedMem = 0
+		rm.mu.Unlock()
+
 		initial := rm.canAllocate(microType, 100)
 		t.Logf("Initial capacity: %d micro instances", initial)
+		require.GreaterOrEqual(t, initial, 2, "test needs at least 2 micro slots")
 
 		// Allocate one
 		err = rm.allocate(microType)
