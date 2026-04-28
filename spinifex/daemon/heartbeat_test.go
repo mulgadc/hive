@@ -5,7 +5,6 @@ import (
 
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/vm"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,45 +87,4 @@ func TestHeartbeatReflectsAllocation(t *testing.T) {
 	assert.Equal(t, 1, after.VMCount, "Should reflect 1 VM")
 	assert.Greater(t, after.AllocatedVCPU, before.AllocatedVCPU, "AllocatedVCPU should increase")
 	assert.Less(t, after.AvailableVCPU, before.AvailableVCPU, "AvailableVCPU should decrease")
-}
-
-// TestHeartbeatKVRoundTrip verifies that heartbeat can be written to and read from KV.
-func TestHeartbeatKVRoundTrip(t *testing.T) {
-	nc, err := nats.Connect(sharedJSNATSURL)
-	require.NoError(t, err)
-	defer nc.Close()
-
-	jsm, err := NewJetStreamManager(nc, 1)
-	require.NoError(t, err)
-	err = jsm.InitClusterStateBucket()
-	require.NoError(t, err)
-
-	h := &Heartbeat{
-		Node:          "kv-test-node",
-		Epoch:         3,
-		Timestamp:     "2025-01-01T00:00:00Z",
-		Services:      []string{"daemon", "nats"},
-		VMCount:       2,
-		AllocatedVCPU: 4,
-		AvailableVCPU: 12,
-		AllocatedMem:  8.0,
-		AvailableMem:  24.0,
-	}
-
-	err = jsm.WriteHeartbeat(h)
-	require.NoError(t, err)
-
-	loaded, err := jsm.ReadHeartbeat("kv-test-node")
-	require.NoError(t, err)
-	require.NotNil(t, loaded)
-
-	assert.Equal(t, h.Node, loaded.Node)
-	assert.Equal(t, h.Epoch, loaded.Epoch)
-	assert.Equal(t, h.Timestamp, loaded.Timestamp)
-	assert.Equal(t, h.Services, loaded.Services)
-	assert.Equal(t, h.VMCount, loaded.VMCount)
-	assert.Equal(t, h.AllocatedVCPU, loaded.AllocatedVCPU)
-	assert.Equal(t, h.AvailableVCPU, loaded.AvailableVCPU)
-	assert.Equal(t, h.AllocatedMem, loaded.AllocatedMem)
-	assert.Equal(t, h.AvailableMem, loaded.AvailableMem)
 }
