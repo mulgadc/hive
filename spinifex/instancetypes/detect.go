@@ -19,6 +19,8 @@ type CPUInfo interface {
 // HostCPU implements CPUInfo by reading the host's cpuid.CPU global.
 type HostCPU struct{}
 
+var _ CPUInfo = (*HostCPU)(nil)
+
 func (HostCPU) VendorID() cpuid.Vendor            { return cpuid.CPU.VendorID }
 func (HostCPU) Family() int                       { return cpuid.CPU.Family }
 func (HostCPU) Model() int                        { return cpuid.CPU.Model }

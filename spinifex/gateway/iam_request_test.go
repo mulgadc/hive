@@ -229,7 +229,7 @@ func TestIAMRequest_EmptyAction(t *testing.T) {
 	assert.Equal(t, 400, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, string(body), "InvalidAction")
+	assert.Contains(t, string(body), "MissingAction")
 }
 
 func TestIAMRequest_NilService(t *testing.T) {

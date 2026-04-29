@@ -8,6 +8,8 @@ import (
 // MockInstanceService provides mock responses for testing
 type MockInstanceService struct{}
 
+var _ InstanceService = (*MockInstanceService)(nil)
+
 // NewMockInstanceService creates a new mock instance service
 func NewMockInstanceService() InstanceService {
 	return &MockInstanceService{}

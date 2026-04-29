@@ -12,127 +12,121 @@ Spinifex is an AWS-compatible infrastructure platform for bare-metal, edge, and 
 
 ### 1. AWS SDK Request
 
-Users interact with Spinifex using standard AWS SDKs or the AWS CLI by pointing to a custom endpoint:
+Users interact with Spinifex using standard AWS SDKs or the AWS CLI by using the spinifex profile.
 
 ```bash
-aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 run-instances \
+AWS_PROFILE=spinifex aws ec2 run-instances \
     --image-id ami-debian12 \
     --instance-type t3.micro \
     --key-name my-keypair
 ```
 
-The AWS SDK formats this as an HTTP POST with:
+The AWS SDK formats this as an HTTPS POST with:
 - AWS SigV4 authentication headers
-- EC2 Query Protocol body (Action=RunInstances&ImageId=ami-debian12...)
+- EC2 Query Protocol body (`Action=RunInstances&ImageId=ami-debian12&...`)
 
 ### 2. AWS Gateway
 
-The gateway (`spinifex/services/awsgw/awsgw.go:57-107`) is the entry point:
+The gateway (`spinifex/services/awsgw/awsgw.go`) is the entry point:
 
 ```go
-// awsgw.go:74 - Connect to NATS
-natsConn, err := nats.Connect(nodeConfig.NATS.Host, opts...)
+// Connect to NATS (retries while the local broker comes up)
+natsConn, err := utils.ConnectNATSWithRetry(...)
 
-// awsgw.go:89-94 - Create gateway with NATS connection
+// Load IAM (master key + JetStream KV) and create the gateway
 gw := gateway.GatewayConfig{
-    NATSConn: natsConn,
-    Config:   nodeConfig.AWSGW.Config,
+    NATSConn:   natsConn,
+    Config:     nodeConfig.AWSGW.Config,
+    IAMService: iamService,
+    // ...
 }
 
-// awsgw.go:103 - Start TLS listener
-log.Fatal(app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey))
+// Serve over TLS
+server.ListenAndServeTLS("", "")
 ```
 
-Request routing (`spinifex/gateway/gateway.go:125-156`):
+Request routing (`spinifex/gateway/gateway.go`):
 
-1. **Authentication**: SigV4 middleware validates AWS credentials (`gateway.go:104`)
-2. **Service Detection**: Extracts service name (ec2, iam, account) from Authorization header (`gateway.go:158-186`)
-3. **Action Dispatch**: Routes to service-specific handler (`gateway.go:136-145`)
+1. **Authentication**: SigV4 middleware validates AWS credentials and resolves the account ID
+2. **Throttling**: Per-account+action token bucket rejects bursts post-auth
+3. **Service Detection**: Extracts service name (ec2, iam, account, elasticloadbalancing, spinifex) from the Authorization header
+4. **Action Dispatch**: Routes to service-specific handler
 
 ```go
-// gateway.go:136-145
 switch svc {
 case "ec2":
-    err = gw.EC2_Request(ctx)
+    err = gw.EC2_Request(w, r)
 case "account":
-    err = gw.Account_Request(ctx)
+    err = gw.Account_Request(w, r)
 case "iam":
-    err = gw.IAM_Request(ctx)
+    err = gw.IAM_Request(w, r)
+case "elasticloadbalancing":
+    err = gw.ELBv2_Request(w, r)
+case "spinifex":
+    err = gw.Spinifex_Request(w, r)
 }
 ```
 
 ### 3. EC2 Handler
 
-The EC2 handler (`spinifex/gateway/ec2.go`) parses the Action parameter and delegates to specific handlers:
+The EC2 handler (`spinifex/gateway/ec2.go`) parses the `Action` parameter and delegates to specific handlers via a generic `ec2Handler` wrapper. The account ID resolved by SigV4 auth is threaded into every handler so requests are scoped per IAM principal:
 
 ```go
-// ec2.go - Action routing
-switch action {
-case "RunInstances":
-    output, err := gateway_ec2_instance.RunInstances(input, gw.NATSConn)
-case "DescribeInstances":
-    output, err := gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, expectedNodes)
-// ... more actions
-}
+"RunInstances": ec2Handler(func(input *ec2.RunInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
+    return gateway_ec2_instance.RunInstances(input, gw.NATSConn, accountID)
+}),
+"DescribeInstances": ec2Handler(func(input *ec2.DescribeInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
+    return gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.DiscoverActiveNodes(), accountID)
+}),
+// ... + volumes, snapshots, VPCs, subnets, route tables, IGWs, NAT gateways,
+// security groups, network interfaces, placement groups, key pairs, images, tags
 ```
 
 ### 4. NATS Messaging
 
-The gateway communicates with daemons via NATS request/response (`spinifex/handlers/ec2/instance/service_nats.go:24-57`):
+The gateway communicates with daemons via NATS request/response. Most calls go through `utils.NATSRequest`, which marshals the input, attaches the account ID as a NATS header, and unmarshals the typed response:
 
 ```go
-// service_nats.go:24-57
-func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
-    // Marshal input to JSON
-    jsonData, err := json.Marshal(input)
-
-    // Send request to daemon via NATS with 5 minute timeout
-    msg, err := s.natsConn.Request("ec2.RunInstances", jsonData, 5*time.Minute)
-
-    // Unmarshal response
-    var reservation ec2.Reservation
-    err = json.Unmarshal(msg.Data, &reservation)
-
-    return &reservation, nil
+func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput, accountID string) (*ec2.Reservation, error) {
+    topic := fmt.Sprintf("ec2.RunInstances.%s", aws.StringValue(input.InstanceType))
+    return utils.NATSRequest[ec2.Reservation](s.natsConn, topic, input, 5*time.Minute, accountID)
 }
 ```
 
+`RunInstances` uses a per-instance-type subject so NATS only delivers the request to a node with spare capacity for that type — no application-level reject-and-retry.
+
 ### 5. Daemon Processing
 
-Daemons (`spinifex/daemon/daemon.go`) subscribe to NATS topics and handle requests:
+Daemons (`spinifex/daemon/daemon.go`) subscribe to NATS topics and handle requests. A table-driven `subscribeAll()` registers the static EC2/ELBv2 surface at startup:
 
 ```go
-// daemon.go:319 - Subscribe with queue group for load balancing
-d.natsSubscriptions["ec2.RunInstances"], err = d.natsConn.QueueSubscribe(
-    "ec2.RunInstances",
-    "spinifex-workers",      // Queue group - only one daemon handles each request
-    d.handleEC2RunInstances,
-)
+// Queue group → load-balanced (one daemon handles each request)
+{"ec2.CreateKeyPair", d.handleEC2CreateKeyPair, "spinifex-workers"},
 
-// daemon.go:373 - Subscribe without queue group for fan-out
-d.natsSubscriptions["ec2.DescribeInstances"], err = d.natsConn.Subscribe(
-    "ec2.DescribeInstances",
-    d.handleEC2DescribeInstances,  // All daemons respond
-)
+// No queue group → fan-out (every daemon responds)
+{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 ```
 
-**Queue Groups**: Topics subscribed with a queue group (`spinifex-workers`) are load-balanced - only one daemon handles each request. Topics without a queue group fan out to all daemons.
+`ec2.RunInstances` is dynamic: `ResourceManager` subscribes to `ec2.RunInstances.{type}` (and `ec2.RunInstances.{type}.{nodeId}` for targeted dispatch) only while the node has capacity for that type, and unsubscribes when full. Per-instance commands flow over `ec2.cmd.{instanceID}`, subscribed only by the owning node.
+
+**Queue Groups**: topics with the `spinifex-workers` queue group are load-balanced — only one daemon handles each request. Topics without a queue group fan out to all daemons.
 
 ### 6. VM Launch
 
 When a daemon handles `RunInstances`:
 
-1. **Resource Check**: Validates CPU/memory availability (`daemon.go:66-74`)
+1. **Resource Check**: Validates CPU/memory availability via `ResourceManager`
 2. **Volume Generation**: Creates boot, cloud-init, and EFI volumes via Viperblock
 3. **Volume Mount**: Sends `ebs.mount` request to Viperblock, receives NBD URI
 4. **QEMU Launch**: Builds and executes QEMU command with NBD-backed disks
 5. **QMP Monitoring**: Establishes QEMU Machine Protocol connection for VM management
+6. **Command subscription**: Subscribes to `ec2.cmd.{instanceID}` for subsequent commands on this VM
 
 ```go
-// daemon.go - Volume mounting via NATS
+// Volume mounting via NATS
 msg, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 10*time.Second)
 
-// daemon.go - QEMU launch with NBD storage
+// QEMU launch with NBD storage
 cmd := exec.Command("qemu-system-x86_64",
     "-drive", fmt.Sprintf("file=nbd:%s,format=raw", nbdURI),
     // ... additional QEMU args
@@ -144,66 +138,56 @@ cmd := exec.Command("qemu-system-x86_64",
 ### Daemon Structure
 
 ```go
-// daemon.go:76-102
 type Daemon struct {
-    node            string                  // Node identifier
-    clusterConfig   *config.ClusterConfig   // Cluster-wide configuration
-    config          *config.Config          // Node-specific configuration
-    natsConn        *nats.Conn              // NATS connection
-    resourceMgr     *ResourceManager        // CPU/Memory tracking
-    instanceService *InstanceServiceImpl    // EC2 instance operations
-    keyService      *KeyServiceImpl         // SSH key operations
-    imageService    *ImageServiceImpl       // AMI operations
-    Instances       vm.Instances            // Local VMs
-    clusterApp      *fiber.App              // HTTP cluster manager
+    node          string                  // Node identifier
+    clusterConfig *config.ClusterConfig   // Cluster-wide configuration
+    config        *config.Config          // Node-specific configuration
+    natsConn      *nats.Conn              // NATS connection
+    resourceMgr   *ResourceManager        // CPU/Memory tracking + dynamic RunInstances subscriptions
+    Instances     vm.Instances            // Local VMs
+    // ... + one service struct per EC2/ELBv2 resource
+    //       (instance, key, image, volume, snapshot, tags, vpc, subnet,
+    //        igw, eigw, natgw, routetable, eip, placementgroup, elbv2, ...)
 }
 ```
 
 ### Resource Manager
 
-Tracks available and allocated CPU/memory to prevent overcommit:
+Tracks available and allocated CPU/memory to prevent overcommit, and drives the dynamic `ec2.RunInstances.{type}` subscriptions:
 
 ```go
-// daemon.go:66-74
 type ResourceManager struct {
     mu            sync.RWMutex
-    availableVCPU int
-    availableMem  float64
+    hostVCPU      int                                // raw runtime.NumCPU
+    hostMemGB     float64                            // raw /proc/meminfo MemTotal
+    reservedVCPU  int                                // held back for spinifex services
+    reservedMem   float64                            // held back for spinifex services
     allocatedVCPU int
     allocatedMem  float64
-    instanceTypes map[string]InstanceType  // t3.micro, t3.small, etc.
+    instanceTypes map[string]*ec2.InstanceTypeInfo   // t3.micro, t3.small, etc.
 }
 ```
-
-### NATS Topics
-
-| Topic | Queue Group | Purpose |
-|-------|-------------|---------|
-| `ec2.RunInstances` | `spinifex-workers` | Launch new instances |
-| `ec2.DescribeInstances` | None (fan-out) | Query all nodes for instances |
-| `ec2.cmd.{instanceID}` | None (owner only) | Per-instance commands (start/stop/terminate, attach/detach volume) |
-| `ec2.CreateKeyPair` | `spinifex-workers` | Generate SSH keypair |
-| `ec2.DescribeKeyPairs` | `spinifex-workers` | List SSH keypairs |
-| `ec2.DescribeImages` | `spinifex-workers` | List AMIs |
-| `ebs.mount` | - | Mount volume via Viperblock |
-| `ebs.unmount` | - | Unmount volume |
-| `spinifex.admin.{node}.health` | None | Node health checks |
 
 ### Multi-Node Aggregation
 
 For operations that need data from all nodes (like `DescribeInstances`), the gateway uses inbox-based fan-out (`spinifex/gateway/ec2/instance/DescribeInstances.go`):
 
 ```go
-// DescribeInstances.go:16-111
 func DescribeInstances(...) {
     // Create unique inbox for collecting responses
     inbox := nats.NewInbox()
-    sub, err := natsConn.SubscribeSync(inbox)
+    sub, _ := natsConn.SubscribeSync(inbox)
 
-    // Publish to all nodes (no queue group = all daemons respond)
-    err = natsConn.PublishRequest("ec2.DescribeInstances", inbox, jsonData)
+    // Publish to all nodes (no queue group = all daemons respond).
+    // Account ID is propagated as a NATS header so each daemon scopes its response.
+    pubMsg := nats.NewMsg("ec2.DescribeInstances")
+    pubMsg.Reply = inbox
+    pubMsg.Data = jsonData
+    pubMsg.Header.Set(utils.AccountIDHeader, accountID)
+    _ = natsConn.PublishMsg(pubMsg)
 
-    // Collect responses from all nodes with 3-second timeout
+    // Collect responses, returning early once expectedNodes have replied
+    // or the 3s timeout is hit.
     for {
         msg, err := sub.NextMsg(3 * time.Second)
         allReservations = append(allReservations, nodeOutput.Reservations...)
@@ -254,74 +238,72 @@ type ClusterConfig struct {
 
 type Config struct {
     Node, Host, Region, AZ string
-    DataDir    string
-    Daemon     DaemonConfig     // Cluster manager port
-    NATS       NATSConfig       // NATS broker address
-    Predastore PredastoreConfig // S3 endpoint
-    AWSGW      AWSGWConfig      // Gateway port, TLS certs
-    AccessKey, SecretKey string
+    BaseDir, DataDir       string
+    Daemon     DaemonConfig
+    NATS       NATSConfig       // Broker address, JetStream, ACL token, CA cert
+    AWSGW      AWSGWConfig      // Gateway host, TLS certs, throttle config
+    Predastore PredastoreConfig // S3 endpoint + service credentials
+    Viperblock ViperblockConfig
+    VPCD       VPCDConfig       // OVN/OVS endpoints
+    Network    NetworkConfig
 }
 ```
+
+Configs are generated by `spx admin init` (leader) or `spx admin join` (followers).
 
 ## File Structure
 
 ```
 spinifex/
 ├── spinifex/
-│   ├── services/
-│   │   └── awsgw/
-│   │       └── awsgw.go        # AWS Gateway service entry point
-│   ├── gateway/
-│   │   ├── gateway.go          # Request routing, auth middleware
-│   │   ├── ec2.go              # EC2 action dispatcher
-│   │   └── ec2/
-│   │       └── instance/
-│   │           ├── RunInstances.go
-│   │           └── DescribeInstances.go
-│   ├── handlers/
-│   │   └── ec2/
-│   │       ├── instance/
-│   │       │   ├── service_nats.go  # NATS request/response
-│   │       │   └── service_impl.go  # Business logic
-│   │       ├── key/
-│   │       └── image/
+│   ├── services/                # Long-running services (awsgw, spinifex, viperblockd,
+│   │                            #   predastore, nats, vpcd, spinifexui)
+│   ├── gateway/                 # AWS API surface
+│   │   ├── gateway.go           # chi router, SigV4 auth, throttling
+│   │   ├── auth.go              # SigV4 verification + IAM lookup
+│   │   ├── ec2.go               # EC2 action dispatcher
+│   │   ├── ec2/                 # Per-resource handlers (instance, volume, vpc, ...)
+│   │   ├── elbv2/, iam/, policy/
+│   ├── handlers/                # NATS-side service implementations (ec2, elbv2, iam)
 │   ├── daemon/
-│   │   └── daemon.go           # Daemon entry point, NATS subscriptions
-│   ├── config/
-│   │   └── config.go           # Configuration structures
-│   ├── vm/
-│   │   └── instance.go         # VM instance representation
-│   └── qmp/
-│       └── qmp.go              # QEMU Machine Protocol client
+│   │   ├── daemon.go            # Daemon entry, NATS subscription table
+│   │   └── daemon_handlers_*.go # One file per resource family
+│   ├── admin/                   # Cluster bootstrap (init/join, master.key, CA, tokens)
+│   ├── config/                  # Configuration structures
+│   ├── instancetypes/           # t3.*, m5.*, sys.* definitions
+│   ├── lbagent/                 # In-VM agent for ELB target health
+│   ├── vm/                      # VM instance representation
+│   └── qmp/                     # QEMU Machine Protocol client
 └── cmd/
-    └── spinifex/
-        └── main.go             # CLI entry point
+    ├── spinifex/                # spx CLI
+    ├── lb-agent/                # ELB target agent binary
+    └── installer/               # Platform installer
 ```
 
 ## Development
 
 ### Running the Stack
 
-1. Start NATS broker
-2. Start Predastore (S3)
-3. Start Viperblock (EBS)
-4. Start Spinifex Gateway (`spx awsgw`)
-5. Start Spinifex Daemon(s) (`spx daemon`)
+```bash
+sudo spx admin init --node node1 --nodes 1
+sudo systemctl start spinifex.target
+```
+
+`spx admin init` generates the cluster CA, IAM credentials, TLS certs, and AWS CLI `spinifex` profile, then writes config to `/etc/spinifex/` and data to `/var/lib/spinifex/`. `spinifex.target` brings up all services (NATS, Predastore, Viperblock, vpcd, the daemon, awsgw, the UI) under systemd. Use `spx admin join` for additional nodes.
 
 ### Testing with AWS CLI
 
 ```bash
-# Set endpoint
-export AWS_ENDPOINT_URL=https://localhost:9999
+export AWS_PROFILE=spinifex
 
 # Run instance
-aws --no-verify-ssl ec2 run-instances \
-    --image-id ami-debian12 \
-    --instance-type t3.micro
+aws ec2 run-instances --image-id ami-debian12 --instance-type t3.micro
 
 # List instances (queries all nodes)
-aws --no-verify-ssl ec2 describe-instances
+aws ec2 describe-instances
 
 # Terminate instance
-aws --no-verify-ssl ec2 terminate-instances --instance-ids i-xxxxx
+aws ec2 terminate-instances --instance-ids i-xxxxx
 ```
+
+For cluster-state inspection that bypasses the AWS API surface, use the `spx` CLI directly: `spx get nodes`, `spx get vms`, `spx top nodes`.

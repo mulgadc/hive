@@ -344,8 +344,19 @@ func launchService(cfg *Config) error {
 	topoOpts = append(topoOpts, WithBridgeMode(bridgeMode))
 	topo := NewTopologyHandler(liveClient, topoOpts...)
 
-	// Run reconciliation before subscribing
-	Reconcile(ctx, topo, cfg.Bootstrap)
+	// Elect a single vpcd to run startup reconcile. Without this, N vpcds in a
+	// multi-node cluster all hit Get-then-Create on Logical_Router with no
+	// atomicity, producing duplicate rows that ovn-nbctl rejects with
+	// "Multiple logical routers named '...'. Use a UUID." (mulga-siv-29).
+	// Runtime VPC events still fan out via the vpcd-workers queue group, so
+	// non-leaders remain functional after Subscribe below.
+	holder, _ := os.Hostname()
+	releaseLeader, isLeader := AcquireReconcileLeader(nc, holder)
+
+	// Run reconciliation before subscribing (leader only)
+	if isLeader {
+		Reconcile(ctx, topo, cfg.Bootstrap)
+	}
 
 	// Macvlan mode only: align macvlan MAC with the OVN gateway router MAC.
 	// The macvlan only delivers inbound unicast matching its own MAC. With
@@ -375,7 +386,10 @@ func launchService(cfg *Config) error {
 
 	// Pass 2: Reconcile from NATS KV (handles reboots, OVN DB loss, missed events).
 	// Runs after subscribing so new events are not missed during reconciliation.
-	ReconcileFromKV(ctx, nc, topo, chassisNames)
+	// Leader-gated (mulga-siv-29) to avoid concurrent Create races against OVN NB.
+	if isLeader {
+		ReconcileFromKV(ctx, nc, topo, chassisNames)
+	}
 
 	// DHCP manager: services vpc.dhcp.acquire/release requests from the
 	// daemon-side ExternalIPAM handlers, runs a renewal goroutine per lease,
@@ -426,7 +440,17 @@ func launchService(cfg *Config) error {
 	// Pass 3: Retrofit localnet options on every external switch. Walks OVN
 	// directly so stale/missing KV records can't hide a stale nat-addresses
 	// or cleared network_name. Idempotent; silent when all correct.
-	topo.RetrofitAllExternalLocalnetOptions(ctx)
+	// Pass 4: Retrofit gateway-port Networks. Reconcile gates IGW work on
+	// "ext switch missing", so a cluster shipped with the pool-IP bug
+	// (mulga-siv-26) never re-enters reconcileIGW. Walk every gateway LRP
+	// directly and rewrite stale Networks to link-local in place.
+	// Both leader-gated (mulga-siv-29) — these read-modify-write OVN NB and
+	// would race against the leader's Reconcile/ReconcileFromKV otherwise.
+	if isLeader {
+		topo.RetrofitAllExternalLocalnetOptions(ctx)
+		topo.RetrofitAllGatewayPortNetworks(ctx)
+		releaseLeader()
+	}
 
 	slog.Info("vpcd service started, waiting for VPC lifecycle events",
 		"subscriptions", len(subs), "dhcp_subscriptions", len(dhcpSubs))

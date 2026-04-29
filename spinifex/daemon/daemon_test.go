@@ -40,6 +40,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// drainAndClose drains the NATS connection and waits for in-flight subscription
+// callbacks to finish before returning. Plain Close() does not wait, so handler
+// goroutines can race t.TempDir() RemoveAll cleanup and fail with
+// "directory not empty" when they write a final state/WAL file.
+func drainAndClose(t *testing.T, nc *nats.Conn) {
+	t.Helper()
+	done := make(chan struct{})
+	nc.SetClosedHandler(func(*nats.Conn) { close(done) })
+	if err := nc.Drain(); err != nil {
+		nc.Close()
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Logf("drainAndClose: drain did not complete within 5s")
+	}
+}
+
 // createTestDaemon creates a test daemon instance with minimal configuration
 func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	// Create a temporary directory for test data
@@ -88,7 +107,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
-			daemon.natsConn.Close()
+			drainAndClose(t, daemon.natsConn)
 		}
 	})
 
@@ -385,8 +404,8 @@ func TestResourceManager(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, rm)
-	assert.Greater(t, rm.availableVCPU, 0)
-	assert.Greater(t, rm.availableMem, float64(0))
+	assert.Greater(t, rm.hostVCPU, 0)
+	assert.Greater(t, rm.hostMemGB, float64(0))
 
 	// Test allocation using the first available instance type (dynamic based on CPU)
 	require.NotEmpty(t, rm.instanceTypes, "Should have at least one instance type")
@@ -503,24 +522,28 @@ func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 	allTypes := rm.GetInstanceTypeInfos()
 	initialAvailable := rm.GetAvailableInstanceTypeInfos(false)
 
-	t.Logf("System has %d vCPUs, %.2f GB RAM", rm.availableVCPU, rm.availableMem)
+	t.Logf("System has %d vCPUs, %.2f GB RAM (reserved: %d vCPU, %.2f GB)",
+		rm.hostVCPU, rm.hostMemGB, rm.reservedVCPU, rm.reservedMem)
 	t.Logf("All instance types: %d, Initially available: %d", len(allTypes), len(initialAvailable))
 
-	// Initially available types should only include those that fit system resources
-	// (on small machines, xlarge/2xlarge may already be filtered out)
+	// Initially available types should only include those that fit schedulable
+	// capacity (host - reserved). On small machines, xlarge/2xlarge may already
+	// be filtered out.
 	assert.LessOrEqual(t, len(initialAvailable), len(allTypes),
 		"Available types should be <= total types")
 	assert.Greater(t, len(initialAvailable), 0, "Should have at least one available type")
 
-	// Verify all initially available types fit within system resources
+	// Verify all initially available types fit within schedulable resources.
+	schedulableVCPU := rm.hostVCPU - rm.reservedVCPU
+	schedulableMem := rm.hostMemGB - rm.reservedMem
 	for _, info := range initialAvailable {
 		vcpus := int(*info.VCpuInfo.DefaultVCpus)
 		memGB := float64(*info.MemoryInfo.SizeInMiB) / 1024
 
-		assert.LessOrEqual(t, vcpus, rm.availableVCPU,
-			"Instance type %s vCPUs should fit system", *info.InstanceType)
-		assert.LessOrEqual(t, memGB, rm.availableMem,
-			"Instance type %s memory should fit system", *info.InstanceType)
+		assert.LessOrEqual(t, vcpus, schedulableVCPU,
+			"Instance type %s vCPUs should fit schedulable capacity", *info.InstanceType)
+		assert.LessOrEqual(t, memGB, schedulableMem,
+			"Instance type %s memory should fit schedulable capacity", *info.InstanceType)
 	}
 
 	// Allocate the smallest instance type (nano) to consume some resources
@@ -547,9 +570,10 @@ func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 	afterAllocation := rm.GetAvailableInstanceTypeInfos(false)
 	t.Logf("Available after allocation: %d", len(afterAllocation))
 
-	// Verify all returned types fit within REMAINING resources
-	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-	remainingMem := rm.availableMem - rm.allocatedMem
+	// Verify all returned types fit within REMAINING schedulable resources
+	// (host - reserved - allocated).
+	remainingVCPU := rm.hostVCPU - rm.reservedVCPU - rm.allocatedVCPU
+	remainingMem := rm.hostMemGB - rm.reservedMem - rm.allocatedMem
 
 	for _, info := range afterAllocation {
 		typeName := *info.InstanceType
@@ -719,9 +743,9 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		assert.LessOrEqual(t, afterAllocationCount, initialCount,
 			"Should have fewer or equal instance types after allocation")
 
-		// Calculate remaining resources
-		remainingVCPU := daemon.resourceMgr.availableVCPU - daemon.resourceMgr.allocatedVCPU
-		remainingMem := daemon.resourceMgr.availableMem - daemon.resourceMgr.allocatedMem
+		// Calculate remaining schedulable resources (host - reserved - allocated).
+		remainingVCPU := daemon.resourceMgr.hostVCPU - daemon.resourceMgr.reservedVCPU - daemon.resourceMgr.allocatedVCPU
+		remainingMem := daemon.resourceMgr.hostMemGB - daemon.resourceMgr.reservedMem - daemon.resourceMgr.allocatedMem
 
 		t.Logf("Remaining resources: %d vCPUs, %.2f GB RAM", remainingVCPU, remainingMem)
 
@@ -783,18 +807,25 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 	// Test 4: Verify "capacity" filter returns duplicates
 	t.Run("VerifyCapacityFilter_Duplicates", func(t *testing.T) {
-		// Force resources to a predictable state
+		// Force schedulable capacity to a predictable state by zeroing the
+		// reserve and pinning host figures directly.
 		daemon.resourceMgr.mu.Lock()
-		oldAvailableVCPU := daemon.resourceMgr.availableVCPU
-		oldAvailableMem := daemon.resourceMgr.availableMem
-		daemon.resourceMgr.availableVCPU = 2
-		daemon.resourceMgr.availableMem = 16.0
+		oldHostVCPU := daemon.resourceMgr.hostVCPU
+		oldHostMem := daemon.resourceMgr.hostMemGB
+		oldReservedVCPU := daemon.resourceMgr.reservedVCPU
+		oldReservedMem := daemon.resourceMgr.reservedMem
+		daemon.resourceMgr.hostVCPU = 2
+		daemon.resourceMgr.hostMemGB = 16.0
+		daemon.resourceMgr.reservedVCPU = 0
+		daemon.resourceMgr.reservedMem = 0
 		daemon.resourceMgr.mu.Unlock()
 
 		defer func() {
 			daemon.resourceMgr.mu.Lock()
-			daemon.resourceMgr.availableVCPU = oldAvailableVCPU
-			daemon.resourceMgr.availableMem = oldAvailableMem
+			daemon.resourceMgr.hostVCPU = oldHostVCPU
+			daemon.resourceMgr.hostMemGB = oldHostMem
+			daemon.resourceMgr.reservedVCPU = oldReservedVCPU
+			daemon.resourceMgr.reservedMem = oldReservedMem
 			daemon.resourceMgr.mu.Unlock()
 		}()
 
@@ -833,8 +864,8 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 		// Now increase capacity to test duplicate slots
 		daemon.resourceMgr.mu.Lock()
-		daemon.resourceMgr.availableVCPU = 4
-		daemon.resourceMgr.availableMem = 15.0
+		daemon.resourceMgr.hostVCPU = 4
+		daemon.resourceMgr.hostMemGB = 15.0
 		daemon.resourceMgr.mu.Unlock()
 
 		reply, err = daemon.natsConn.Request("ec2.DescribeInstanceTypes", msgData, 5*time.Second)
@@ -1047,8 +1078,20 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 		}
 		require.NotNil(t, microType)
 
+		// Pin host capacity so the test is independent of the runner's
+		// schedulable headroom (host - reserved). CI runners have only
+		// 4 vCPU, leaving 2 schedulable after the default reserve — not
+		// enough to fit two micro instances (2 vCPU each).
+		rm.mu.Lock()
+		rm.hostVCPU = 16
+		rm.hostMemGB = 32.0
+		rm.reservedVCPU = 0
+		rm.reservedMem = 0
+		rm.mu.Unlock()
+
 		initial := rm.canAllocate(microType, 100)
 		t.Logf("Initial capacity: %d micro instances", initial)
+		require.GreaterOrEqual(t, initial, 2, "test needs at least 2 micro slots")
 
 		// Allocate one
 		err = rm.allocate(microType)
@@ -1450,8 +1493,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 		// Allocate all resources so nothing fits
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU
-		rm.allocatedMem = rm.availableMem
+		rm.allocatedVCPU = rm.hostVCPU - rm.reservedVCPU
+		rm.allocatedMem = rm.hostMemGB - rm.reservedMem
 		rm.mu.Unlock()
 
 		rm.updateInstanceSubscriptions()
@@ -1474,8 +1517,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 		// Fill all resources
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU
-		rm.allocatedMem = rm.availableMem
+		rm.allocatedVCPU = rm.hostVCPU - rm.reservedVCPU
+		rm.allocatedMem = rm.hostMemGB - rm.reservedMem
 		rm.mu.Unlock()
 		rm.updateInstanceSubscriptions()
 		assert.Equal(t, 0, len(rm.instanceSubs))
@@ -1501,10 +1544,10 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		handler := func(msg *nats.Msg) {}
 		rm.initSubscriptions(nc, handler, "test-node")
 
-		// Leave only 2 vCPUs and 1 GB free — enough for nano/micro but not larger types
+		// Leave only 2 vCPUs and 1 GB schedulable — enough for nano/micro but not larger types.
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU - 2
-		rm.allocatedMem = rm.availableMem - 1.0
+		rm.allocatedVCPU = (rm.hostVCPU - rm.reservedVCPU) - 2
+		rm.allocatedMem = (rm.hostMemGB - rm.reservedMem) - 1.0
 		rm.mu.Unlock()
 		rm.updateInstanceSubscriptions()
 
@@ -1576,8 +1619,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 		// Fill the node completely
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU
-		rm.allocatedMem = rm.availableMem
+		rm.allocatedVCPU = rm.hostVCPU - rm.reservedVCPU
+		rm.allocatedMem = rm.hostMemGB - rm.reservedMem
 		rm.mu.Unlock()
 		rm.updateInstanceSubscriptions()
 		assert.Equal(t, 0, len(rm.instanceSubs))
@@ -3140,8 +3183,8 @@ func TestDaemon_LoadState_NilJSManager(t *testing.T) {
 
 func TestGetAvailableInstanceTypeInfos_Overcommitted(t *testing.T) {
 	rm := &ResourceManager{
-		availableVCPU: 4,
-		availableMem:  8.0,
+		hostVCPU:      4,
+		hostMemGB:     8.0,
 		allocatedVCPU: 8, // Over-committed
 		allocatedMem:  16.0,
 		instanceTypes: map[string]*ec2.InstanceTypeInfo{
@@ -3162,8 +3205,8 @@ func TestGetAvailableInstanceTypeInfos_Overcommitted(t *testing.T) {
 
 func TestGetAvailableInstanceTypeInfos_ShowCapacity(t *testing.T) {
 	rm := &ResourceManager{
-		availableVCPU: 8,
-		availableMem:  16.0,
+		hostVCPU:      8,
+		hostMemGB:     16.0,
 		allocatedVCPU: 0,
 		allocatedMem:  0,
 		instanceTypes: map[string]*ec2.InstanceTypeInfo{
@@ -3596,8 +3639,10 @@ func TestCanAllocate(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		availableVCPU int
-		availableMem  float64
+		hostVCPU      int
+		hostMemGB     float64
+		reservedVCPU  int
+		reservedMem   float64
 		allocatedVCPU int
 		allocatedMem  float64
 		instanceType  *ec2.InstanceTypeInfo
@@ -3605,39 +3650,33 @@ func TestCanAllocate(t *testing.T) {
 		want          int
 	}{
 		{
-			name:          "plenty of resources",
-			availableVCPU: 16,
-			availableMem:  32.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
-			count:         3,
-			want:          3,
+			name:         "plenty of resources",
+			hostVCPU:     16,
+			hostMemGB:    32.0,
+			instanceType: makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
+			count:        3,
+			want:         3,
 		},
 		{
-			name:          "CPU limited",
-			availableVCPU: 4,
-			availableMem:  32.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048),
-			count:         5,
-			want:          2,
+			name:         "CPU limited",
+			hostVCPU:     4,
+			hostMemGB:    32.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        5,
+			want:         2,
 		},
 		{
-			name:          "memory limited",
-			availableVCPU: 16,
-			availableMem:  4.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(1, 2048), // 1 vCPU, 2 GiB
-			count:         5,
-			want:          2,
+			name:         "memory limited",
+			hostVCPU:     16,
+			hostMemGB:    4.0,
+			instanceType: makeInstanceType(1, 2048), // 1 vCPU, 2 GiB
+			count:        5,
+			want:         2,
 		},
 		{
 			name:          "no resources returns 0",
-			availableVCPU: 4,
-			availableMem:  4.0,
+			hostVCPU:      4,
+			hostMemGB:     4.0,
 			allocatedVCPU: 4,
 			allocatedMem:  4.0,
 			instanceType:  makeInstanceType(2, 2048),
@@ -3645,39 +3684,33 @@ func TestCanAllocate(t *testing.T) {
 			want:          0,
 		},
 		{
-			name:          "zero vCPU instance type returns requested count",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(0, 2048),
-			count:         4,
-			want:          4,
+			name:         "zero vCPU instance type returns requested count",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: makeInstanceType(0, 2048),
+			count:        4,
+			want:         4,
 		},
 		{
-			name:          "zero memory instance type returns requested count",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 0),
-			count:         4,
-			want:          4,
+			name:         "zero memory instance type returns requested count",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: makeInstanceType(2, 0),
+			count:        4,
+			want:         4,
 		},
 		{
-			name:          "nil VCpuInfo and MemoryInfo returns requested count",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  &ec2.InstanceTypeInfo{},
-			count:         3,
-			want:          3,
+			name:         "nil VCpuInfo and MemoryInfo returns requested count",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: &ec2.InstanceTypeInfo{},
+			count:        3,
+			want:         3,
 		},
 		{
 			name:          "partial allocation reduces available",
-			availableVCPU: 8,
-			availableMem:  8.0,
+			hostVCPU:      8,
+			hostMemGB:     8.0,
 			allocatedVCPU: 4,
 			allocatedMem:  4.0,
 			instanceType:  makeInstanceType(2, 2048),
@@ -3685,42 +3718,60 @@ func TestCanAllocate(t *testing.T) {
 			want:          2,
 		},
 		{
-			name:          "exact fit",
-			availableVCPU: 4,
-			availableMem:  4.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048),
-			count:         2,
-			want:          2,
+			name:         "exact fit",
+			hostVCPU:     4,
+			hostMemGB:    4.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        2,
+			want:         2,
 		},
 		{
-			name:          "count zero returns 0",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048),
-			count:         0,
-			want:          0,
+			name:         "count zero returns 0",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        0,
+			want:         0,
 		},
 		{
 			name:          "negative available returns 0",
-			availableVCPU: 2,
-			availableMem:  2.0,
+			hostVCPU:      2,
+			hostMemGB:     2.0,
 			allocatedVCPU: 4,
 			allocatedMem:  4.0,
 			instanceType:  makeInstanceType(2, 2048),
 			count:         1,
 			want:          0,
 		},
+		{
+			name:         "reserve subtracts from schedulable",
+			hostVCPU:     16,
+			hostMemGB:    32.0,
+			reservedVCPU: 2,
+			reservedMem:  4.0,
+			instanceType: makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
+			count:        100,
+			want:         7, // CPU: (16-2)/2=7, mem: (32-4)/2=14 → min=7
+		},
+		{
+			name:         "reserve consumes all CPU",
+			hostVCPU:     4,
+			hostMemGB:    32.0,
+			reservedVCPU: 4,
+			reservedMem:  4.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        5,
+			want:         0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := &ResourceManager{
-				availableVCPU: tt.availableVCPU,
-				availableMem:  tt.availableMem,
+				hostVCPU:      tt.hostVCPU,
+				hostMemGB:     tt.hostMemGB,
+				reservedVCPU:  tt.reservedVCPU,
+				reservedMem:   tt.reservedMem,
 				allocatedVCPU: tt.allocatedVCPU,
 				allocatedMem:  tt.allocatedMem,
 				instanceTypes: map[string]*ec2.InstanceTypeInfo{},

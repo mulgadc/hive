@@ -422,10 +422,11 @@ func TestMaybeRestart_InsufficientResources(t *testing.T) {
 
 	allocType := smallestAllocType(t, d.resourceMgr)
 
-	// Exhaust all resources by setting allocated = available
+	// Exhaust all schedulable resources (host - reserved) so canAllocate
+	// returns 0, matching what's actually achievable at runtime.
 	d.resourceMgr.mu.Lock()
-	d.resourceMgr.allocatedVCPU = d.resourceMgr.availableVCPU
-	d.resourceMgr.allocatedMem = d.resourceMgr.availableMem
+	d.resourceMgr.allocatedVCPU = d.resourceMgr.hostVCPU - d.resourceMgr.reservedVCPU
+	d.resourceMgr.allocatedMem = d.resourceMgr.hostMemGB - d.resourceMgr.reservedMem
 	d.resourceMgr.mu.Unlock()
 
 	instance := &vm.VM{

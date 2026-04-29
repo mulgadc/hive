@@ -53,142 +53,105 @@ func TestExtractPCIIndex(t *testing.T) {
 	}
 }
 
-// TestBuildDeviceMap tests the core device mapping logic using the example
-// QMP query-block response from qmp.go:72
+// TestBuildDeviceMap covers the core device-mapping logic across boot devices,
+// hot-plugged virtio peripherals, non-virtio devices that must be filtered out,
+// PCI-index ordering across mixed boot/hot-plug input, and the empty case.
 func TestBuildDeviceMap(t *testing.T) {
-	// Simulate the exact QMP response from the example in qmp.go
-	devices := []qmp.BlockDevice{
+	tests := []struct {
+		name    string
+		devices []qmp.BlockDevice
+		want    map[string]string // expected entries (subset checked with Equal)
+		absent  []string          // keys that must NOT appear
+		wantLen int
+	}{
 		{
-			IOStatus: "ok",
-			Device:   "os",
-			Locked:   false,
-			Inserted: &qmp.BlockInserted{
-				Image: qmp.BlockImage{
-					VirtualSize: 4294967296,
-					Filename:    "nbd://127.0.0.1:44801",
-					Format:      "raw",
+			name:    "empty input",
+			devices: nil,
+			want:    map[string]string{},
+			wantLen: 0,
+		},
+		{
+			// Mirrors the example QMP query-block response from qmp.go:72
+			name: "boot devices with non-virtio devices filtered out",
+			devices: []qmp.BlockDevice{
+				{
+					IOStatus: "ok",
+					Device:   "os",
+					Inserted: &qmp.BlockInserted{
+						Image: qmp.BlockImage{VirtualSize: 4294967296, Filename: "nbd://127.0.0.1:44801", Format: "raw"},
+					},
+					QDev: "/machine/peripheral-anon/device[0]/virtio-backend",
+					Type: "unknown",
 				},
-			},
-			QDev: "/machine/peripheral-anon/device[0]/virtio-backend",
-			Type: "unknown",
-		},
-		{
-			IOStatus: "ok",
-			Device:   "cloudinit",
-			Locked:   false,
-			Inserted: &qmp.BlockInserted{
-				Image: qmp.BlockImage{
-					VirtualSize: 1048576,
-					Filename:    "nbd://127.0.0.1:42911",
-					Format:      "raw",
+				{
+					IOStatus: "ok",
+					Device:   "cloudinit",
+					Inserted: &qmp.BlockInserted{
+						Image: qmp.BlockImage{VirtualSize: 1048576, Filename: "nbd://127.0.0.1:42911", Format: "raw"},
+						RO:    true,
+					},
+					QDev: "/machine/peripheral-anon/device[3]/virtio-backend",
+					Type: "unknown",
 				},
-				RO: true,
+				{Device: "ide1-cd0", Removable: true, QDev: "/machine/unattached/device[24]"},
+				{Device: "floppy0", Removable: true, QDev: "/machine/unattached/device[18]"},
+				{Device: "sd0", Removable: true},
 			},
-			QDev: "/machine/peripheral-anon/device[3]/virtio-backend",
-			Type: "unknown",
+			want:    map[string]string{"os": "/dev/vda", "cloudinit": "/dev/vdb"},
+			absent:  []string{"ide1-cd0", "floppy0", "sd0"},
+			wantLen: 2,
 		},
 		{
-			IOStatus:  "ok",
-			Device:    "ide1-cd0",
-			Locked:    false,
-			Removable: true,
-			QDev:      "/machine/unattached/device[24]",
-			Type:      "unknown",
+			// Hot-plugged devices have empty Device field and use the
+			// /machine/peripheral/<id>/virtio-backend QDev path format.
+			name: "boot plus hot-plugged devices",
+			devices: []qmp.BlockDevice{
+				{Device: "os", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral-anon/device[0]/virtio-backend"},
+				{Device: "cloudinit", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral-anon/device[3]/virtio-backend"},
+				{Device: "", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral/vdisk-vol-abc123/virtio-backend"},
+				{Device: "", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral/vdisk-vol-def456/virtio-backend"},
+				{Device: "floppy0", QDev: "/machine/unattached/device[18]"},
+				{Device: "sd0"},
+				{Device: "ide1-cd0", QDev: "/machine/unattached/device[24]"},
+			},
+			want: map[string]string{
+				"os":               "/dev/vda",
+				"cloudinit":        "/dev/vdb",
+				"vdisk-vol-abc123": "/dev/vdc",
+				"vdisk-vol-def456": "/dev/vdd",
+			},
+			wantLen: 4,
 		},
 		{
-			Device:    "floppy0",
-			Locked:    false,
-			Removable: true,
-			QDev:      "/machine/unattached/device[18]",
-			Type:      "unknown",
-		},
-		{
-			Device:    "sd0",
-			Locked:    false,
-			Removable: true,
-			Type:      "unknown",
+			// Boot devices returned out of order: lowest PCI index wins /dev/vda;
+			// hot-plugged devices sort after boot devices.
+			name: "PCI-index ordering across mixed boot and hot-plug",
+			devices: []qmp.BlockDevice{
+				{Device: "cloudinit", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral-anon/device[5]/virtio-backend"},
+				{Device: "os", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral-anon/device[1]/virtio-backend"},
+				{Device: "", Inserted: &qmp.BlockInserted{}, QDev: "/machine/peripheral/vdisk-vol-123/virtio-backend"},
+			},
+			want: map[string]string{
+				"os":            "/dev/vda",
+				"cloudinit":     "/dev/vdb",
+				"vdisk-vol-123": "/dev/vdc",
+			},
+			wantLen: 3,
 		},
 	}
 
-	result := buildDeviceMap(devices)
-
-	assert.Equal(t, "/dev/vda", result["os"], "root disk should be /dev/vda")
-	assert.Equal(t, "/dev/vdb", result["cloudinit"], "cloudinit should be /dev/vdb")
-	assert.NotContains(t, result, "ide1-cd0", "ide device should be excluded")
-	assert.NotContains(t, result, "floppy0", "floppy should be excluded")
-	assert.NotContains(t, result, "sd0", "sd device should be excluded")
-	assert.Len(t, result, 2, "should only have 2 virtio devices")
-}
-
-func TestBuildDeviceMapWithHotplug(t *testing.T) {
-	// Hot-plugged devices have empty Device field and use
-	// /machine/peripheral/<id>/virtio-backend QDev path format
-	devices := []qmp.BlockDevice{
-		{
-			Device:   "os",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral-anon/device[0]/virtio-backend",
-		},
-		{
-			Device:   "cloudinit",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral-anon/device[3]/virtio-backend",
-		},
-		{
-			Device:   "",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral/vdisk-vol-abc123/virtio-backend",
-		},
-		{
-			Device:   "",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral/vdisk-vol-def456/virtio-backend",
-		},
-		// Legacy devices to filter out
-		{Device: "floppy0", QDev: "/machine/unattached/device[18]"},
-		{Device: "sd0"},
-		{Device: "ide1-cd0", QDev: "/machine/unattached/device[24]"},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildDeviceMap(tt.devices)
+			for k, v := range tt.want {
+				assert.Equal(t, v, got[k], "device %q", k)
+			}
+			for _, k := range tt.absent {
+				assert.NotContains(t, got, k)
+			}
+			assert.Len(t, got, tt.wantLen)
+		})
 	}
-
-	result := buildDeviceMap(devices)
-
-	assert.Equal(t, "/dev/vda", result["os"])
-	assert.Equal(t, "/dev/vdb", result["cloudinit"])
-	assert.Equal(t, "/dev/vdc", result["vdisk-vol-abc123"])
-	assert.Equal(t, "/dev/vdd", result["vdisk-vol-def456"])
-	assert.Len(t, result, 4)
-}
-
-func TestBuildDeviceMapEmpty(t *testing.T) {
-	result := buildDeviceMap(nil)
-	assert.Empty(t, result)
-}
-
-func TestBuildDeviceMapPCIOrdering(t *testing.T) {
-	// Boot devices returned out of order + hot-plugged device
-	devices := []qmp.BlockDevice{
-		{
-			Device:   "cloudinit",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral-anon/device[5]/virtio-backend",
-		},
-		{
-			Device:   "os",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral-anon/device[1]/virtio-backend",
-		},
-		{
-			Device:   "",
-			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral/vdisk-vol-123/virtio-backend",
-		},
-	}
-
-	result := buildDeviceMap(devices)
-
-	assert.Equal(t, "/dev/vda", result["os"], "lowest PCI index gets /dev/vda")
-	assert.Equal(t, "/dev/vdb", result["cloudinit"], "second boot device")
-	assert.Equal(t, "/dev/vdc", result["vdisk-vol-123"], "hot-plugged device sorts after boot devices")
 }
 
 func TestExtractPeripheralName(t *testing.T) {

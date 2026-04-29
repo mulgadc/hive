@@ -53,6 +53,12 @@ type DHCPManager struct {
 	mu     sync.Mutex
 	leases map[string]*managedLease // keyed by ClientID
 
+	// inFlightMu guards inFlight. Tracks concurrent Acquire calls per
+	// bridge so handleAcquire can surface contention as a diagnostic
+	// signal (mulga-siv-32).
+	inFlightMu sync.Mutex
+	inFlight   map[string]int
+
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 	wg         sync.WaitGroup
@@ -129,6 +135,7 @@ func NewDHCPManager(nc *nats.Conn, js nats.JetStreamContext, client dhcp.Client,
 		jitterFraction: 0.1,
 		rng:            rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0xdeadbeef)), //nolint:gosec // non-cryptographic jitter
 		leases:         map[string]*managedLease{},
+		inFlight:       map[string]int{},
 		stopCtx:        ctx,
 		stopCancel:     cancel,
 		macForClientID: func(id string) net.HardwareAddr {
@@ -254,6 +261,13 @@ func (m *DHCPManager) handleAcquire(msg *nats.Msg) {
 	ctx, cancel := context.WithTimeout(m.stopCtx, m.acquireTimeout)
 	defer cancel()
 
+	// Diagnostic for mulga-siv-32: track concurrent Acquire calls per
+	// bridge and the wallclock cost of each DORA. Concurrent DISCOVERs on
+	// the same bridge are a suspected contributor to nightly DORA timeouts.
+	inFlight := m.beginAcquire(req.Bridge)
+	defer m.endAcquire(req.Bridge)
+	start := time.Now()
+
 	lease, err := m.client.Acquire(ctx, dhcp.AcquireRequest{
 		Bridge:      req.Bridge,
 		ClientID:    req.ClientID,
@@ -262,9 +276,16 @@ func (m *DHCPManager) handleAcquire(msg *nats.Msg) {
 		HWAddr:      hwAddr,
 	})
 	if err != nil {
+		slog.Warn("DHCP Manager: acquire failed",
+			"client_id", req.ClientID, "bridge", req.Bridge,
+			"in_flight_at_start", inFlight, "duration", time.Since(start),
+			"err", err)
 		m.replyAcquireError(msg, err.Error())
 		return
 	}
+	slog.Debug("DHCP Manager: acquire ok",
+		"client_id", req.ClientID, "bridge", req.Bridge,
+		"in_flight_at_start", inFlight, "duration", time.Since(start))
 
 	if err := m.persistLease(lease); err != nil {
 		slog.Warn("DHCP Manager: persist lease failed; lease will not survive restart", "client_id", req.ClientID, "err", err)
@@ -427,6 +448,24 @@ func (m *DHCPManager) tryRenew(parent context.Context, lease *dhcp.Lease) (*dhcp
 	ctx, cancel := context.WithTimeout(parent, m.acquireTimeout)
 	defer cancel()
 	return m.client.Renew(ctx, lease)
+}
+
+// beginAcquire increments the in-flight Acquire counter for bridge and
+// returns the count after increment (>= 1). Diagnostic for mulga-siv-32.
+func (m *DHCPManager) beginAcquire(bridge string) int {
+	m.inFlightMu.Lock()
+	defer m.inFlightMu.Unlock()
+	m.inFlight[bridge]++
+	return m.inFlight[bridge]
+}
+
+// endAcquire decrements the in-flight Acquire counter for bridge.
+func (m *DHCPManager) endAcquire(bridge string) {
+	m.inFlightMu.Lock()
+	defer m.inFlightMu.Unlock()
+	if m.inFlight[bridge] > 0 {
+		m.inFlight[bridge]--
+	}
 }
 
 // snapshotLease returns the tracker's current lease under the lock.

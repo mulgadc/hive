@@ -9,11 +9,42 @@ import (
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAcquireReconcileLeader_OnlyOneWinner(t *testing.T) {
+	_, nc, _ := testutil.StartTestJetStream(t)
+
+	releaseA, electedA := AcquireReconcileLeader(nc, "node-a")
+	require.True(t, electedA, "first caller must win")
+	require.NotNil(t, releaseA)
+
+	releaseB, electedB := AcquireReconcileLeader(nc, "node-b")
+	assert.False(t, electedB, "second caller must lose while A holds the lock")
+	assert.Nil(t, releaseB)
+
+	releaseA()
+
+	// After release the next caller can claim it.
+	releaseC, electedC := AcquireReconcileLeader(nc, "node-c")
+	require.True(t, electedC, "next caller wins after release")
+	releaseC()
+}
+
+func TestAcquireReconcileLeader_NoJetStreamFallsThrough(t *testing.T) {
+	// No JetStream on this server — caller must fall through (elected=true)
+	// rather than deadlock the cluster on first boot.
+	_, nc := testutil.StartTestNATS(t)
+
+	release, elected := AcquireReconcileLeader(nc, "node-a")
+	assert.True(t, elected, "must fall through when KV unavailable")
+	assert.NotNil(t, release)
+	release() // no-op release on fallthrough path must not panic
+}
 
 func TestReconcile_NoBootstrap(t *testing.T) {
 	ovn := NewMockOVNClient()
@@ -541,6 +572,67 @@ func TestReconcileGatewayChassis_RebindsAllGatewayLRPs(t *testing.T) {
 	assert.Equal(t, 15, prioByGC["gw-A-chassis-B"])
 	assert.Equal(t, 20, prioByGC["gw-B-chassis-A"])
 	assert.Equal(t, 15, prioByGC["gw-B-chassis-B"])
+}
+
+// TestReconcileIGW_RewritesStaleGatewayPortNetworks guards the mulga-siv-26
+// D8 self-heal path. Pre-seed an IGW topology with a stale pool-IP on the
+// gateway LRP (the buggy state shipped to env20); the startup retrofit must
+// rewrite every such LRP in place to link-local via UpdateLogicalRouterPort.
+// Internal-role LRPs and LRPs already correct must not be touched.
+func TestReconcileIGW_RewritesStaleGatewayPortNetworks(t *testing.T) {
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+	ctx := context.Background()
+	topo := NewTopologyHandler(ovn)
+
+	// Stale gateway LRP on VPC A — the buggy pool-IP CIDR.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-A"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-A", &nbdb.LogicalRouterPort{
+		Name:        "gw-A",
+		MAC:         "02:00:00:74:e8:d2",
+		Networks:    []string{"192.168.0.160/24"},
+		ExternalIDs: map[string]string{"spinifex:role": "gateway"},
+	}))
+	// Already-correct gateway LRP on VPC B — must not be touched.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-B"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-B", &nbdb.LogicalRouterPort{
+		Name:        "gw-B",
+		MAC:         "02:00:00:bb:6d:14",
+		Networks:    []string{"169.254.0.1/30"},
+		ExternalIDs: map[string]string{"spinifex:role": "gateway"},
+	}))
+	// Internal LRP on VPC C — must not be touched even though Networks differ.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-C"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-C", &nbdb.LogicalRouterPort{
+		Name:        "rtr-subnet-C",
+		Networks:    []string{"10.0.1.1/24"},
+		ExternalIDs: map[string]string{"spinifex:role": "internal"},
+	}))
+
+	topo.RetrofitAllGatewayPortNetworks(ctx)
+
+	gwA, err := ovn.GetLogicalRouterPort(ctx, "gw-A")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"169.254.0.1/30"}, gwA.Networks,
+		"stale gateway Networks must be rewritten in place")
+
+	gwB, err := ovn.GetLogicalRouterPort(ctx, "gw-B")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"169.254.0.1/30"}, gwB.Networks)
+
+	internal, err := ovn.GetLogicalRouterPort(ctx, "rtr-subnet-C")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.1.1/24"}, internal.Networks,
+		"internal LRP must be untouched")
+
+	assert.Equal(t, 1, ovn.UpdateLogicalRouterPortCalls,
+		"only the stale gateway LRP should trigger Update")
+
+	// Idempotent second pass — all gateway LRPs now correct, no Update.
+	ovn.UpdateLogicalRouterPortCalls = 0
+	topo.RetrofitAllGatewayPortNetworks(ctx)
+	assert.Equal(t, 0, ovn.UpdateLogicalRouterPortCalls,
+		"no Update expected when every gateway LRP already link-local")
 }
 
 func TestReconcileGatewayChassis_NoOpWhenAlreadyCorrect(t *testing.T) {

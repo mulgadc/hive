@@ -67,69 +67,50 @@ func startJSNATSServer(t *testing.T) (*nats.Conn, nats.JetStreamContext) {
 	return nc, js
 }
 
-func TestWriteVersion_WritesKey(t *testing.T) {
+// TestVersionStateMachine walks WriteVersion/ReadVersion through every state
+// transition the migration helper guarantees:
+//   - unset → ReadVersion returns 0 with no error
+//   - first write persists the value
+//   - same version is a no-op (idempotent)
+//   - higher version replaces the stored value (upgrade)
+//   - lower version is a no-op (no downgrade)
+//
+// One bucket is reused across steps so each Write is exercised against the
+// state the prior Write left behind — that's the only way to catch a
+// regression that, say, made WriteVersion unconditionally overwrite.
+func TestVersionStateMachine(t *testing.T) {
 	_, js := startJSNATSServer(t)
-
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-write-version"})
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-version-fsm"})
 	require.NoError(t, err)
 
-	err = WriteVersion(kv, 1)
+	// Unset → 0.
+	v, err := ReadVersion(kv)
 	require.NoError(t, err)
+	assert.Equal(t, 0, v, "ReadVersion on unset bucket")
 
+	steps := []struct {
+		name  string
+		write int
+		want  int // expected ReadVersion after the write
+	}{
+		{"first write persists", 1, 1},
+		{"same version is no-op", 1, 1},
+		{"higher version upgrades", 2, 2},
+		{"lower version is no-op (no downgrade)", 1, 2},
+		{"larger jump upgrades", 5, 5},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			require.NoError(t, WriteVersion(kv, step.write))
+			v, err := ReadVersion(kv)
+			require.NoError(t, err)
+			assert.Equal(t, step.want, v)
+		})
+	}
+
+	// Round-trip the raw KV value to confirm the encoding is what readers
+	// outside this package would expect.
 	entry, err := kv.Get(VersionKey)
 	require.NoError(t, err)
-	assert.Equal(t, "1", string(entry.Value()))
-}
-
-func TestReadVersion_ReturnsZeroWhenUnset(t *testing.T) {
-	_, js := startJSNATSServer(t)
-
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-read-unset"})
-	require.NoError(t, err)
-
-	v, err := ReadVersion(kv)
-	require.NoError(t, err)
-	assert.Equal(t, 0, v)
-}
-
-func TestWriteVersion_IdempotentOnSameVersion(t *testing.T) {
-	_, js := startJSNATSServer(t)
-
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-idempotent"})
-	require.NoError(t, err)
-
-	require.NoError(t, WriteVersion(kv, 1))
-	require.NoError(t, WriteVersion(kv, 1))
-
-	v, err := ReadVersion(kv)
-	require.NoError(t, err)
-	assert.Equal(t, 1, v)
-}
-
-func TestWriteVersion_UpdatesOnHigherVersion(t *testing.T) {
-	_, js := startJSNATSServer(t)
-
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-upgrade"})
-	require.NoError(t, err)
-
-	require.NoError(t, WriteVersion(kv, 1))
-	require.NoError(t, WriteVersion(kv, 2))
-
-	v, err := ReadVersion(kv)
-	require.NoError(t, err)
-	assert.Equal(t, 2, v)
-}
-
-func TestWriteVersion_NoOpOnLowerVersion(t *testing.T) {
-	_, js := startJSNATSServer(t)
-
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-downgrade"})
-	require.NoError(t, err)
-
-	require.NoError(t, WriteVersion(kv, 3))
-	require.NoError(t, WriteVersion(kv, 1))
-
-	v, err := ReadVersion(kv)
-	require.NoError(t, err)
-	assert.Equal(t, 3, v)
+	assert.Equal(t, "5", string(entry.Value()))
 }
