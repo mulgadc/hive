@@ -277,7 +277,7 @@ var AvailableImages = map[string]Images{
 
 	"debian-12-x86_64": {
 		Name:         "debian-12-x86_64",
-		Description:  "Debian 12 (Bookworm) x86_64 cloud image (generic cloud)",
+		Description:  "Debian 12 (Bookworm) x86_64 cloud image",
 		Distro:       "debian",
 		Version:      "12",
 		Arch:         "x86_64",
@@ -292,7 +292,7 @@ var AvailableImages = map[string]Images{
 
 	"debian-12-arm64": {
 		Name:         "debian-12-arm64",
-		Description:  "Debian 12 (Bookworm) arm64 cloud image (generic cloud)",
+		Description:  "Debian 12 (Bookworm) arm64 cloud image",
 		Distro:       "debian",
 		Version:      "12",
 		Arch:         "arm64",
@@ -305,9 +305,7 @@ var AvailableImages = map[string]Images{
 		Starred:      true,
 	},
 
-	// Ubuntu
 	"ubuntu-24.04-x86_64": {
-		//Ubuntu 24.04 LTS (Noble Numbat)
 		Name:         "ubuntu-24.04-x86_64",
 		Description:  "Ubuntu 24.04 LTS (Noble Numbat) x86_64 cloud image",
 		Distro:       "ubuntu",
@@ -323,7 +321,6 @@ var AvailableImages = map[string]Images{
 	},
 
 	"ubuntu-24.04-arm64": {
-		//Ubuntu 24.04 LTS (Noble Numbat)
 		Name:         "ubuntu-24.04-arm64",
 		Description:  "Ubuntu 24.04 LTS (Noble Numbat) arm64 cloud image",
 		Distro:       "ubuntu",
@@ -338,26 +335,19 @@ var AvailableImages = map[string]Images{
 		Starred:      false,
 	},
 
-	"lb-alpine-3.21.6-x86_64":
-	// Alpine Linux (cloud init) x86_64 — LB system image with HAProxy and lb-agent
-	{
-		Name:         "lb-alpine-3.21.6-x86_64",
-		Description:  "LB Alpine Linux 3.21.6 x86_64 system image",
+	"alpine-3.22.2-x86_64": {
+		Name:         "alpine-3.22.2-x86_64",
+		Description:  "Alpine Linux 3.22.2 x86_64 cloud image",
 		Distro:       "alpine",
-		Version:      "3.21.6",
+		Version:      "3.22.2",
 		Arch:         "x86_64",
 		Platform:     "Linux/UNIX",
-		CreatedAt:    time.Date(2026, 03, 27, 0, 0, 0, 0, time.UTC),
-		URL:          "https://iso.mulgadc.com/system-ami/lb-alpine-3.21.6-x86_64.raw",
-		Checksum:     "https://iso.mulgadc.com/system-ami/lb-alpine-3.21.6-x86_64.raw.sha512",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/generic_alpine-3.22.2-x86_64-bios-cloudinit-r0.qcow2",
+		Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/generic_alpine-3.22.2-x86_64-bios-cloudinit-r0.qcow2.sha512",
 		ChecksumType: "sha512",
 		BootMode:     "bios",
 		Starred:      false,
-		// Marked system-managed: the UI hides this AMI from the Images
-		// page so customers don't mistake it for a bootable OS image.
-		Tags: map[string]string{
-			"spinifex:managed-by": "elbv2",
-		},
 	},
 
 	/*
@@ -379,6 +369,26 @@ var AvailableImages = map[string]Images{
 		},
 	*/
 
+	// Alpine Linux (cloud init) x86_64 — LB system image with HAProxy and lb-agent
+	"lb-alpine-3.21.6-x86_64": {
+		Name:         "lb-alpine-3.21.6-x86_64",
+		Description:  "LB Alpine Linux 3.21.6 x86_64 system image",
+		Distro:       "alpine",
+		Version:      "3.21.6",
+		Arch:         "x86_64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2026, 03, 27, 0, 0, 0, 0, time.UTC),
+		URL:          "https://iso.mulgadc.com/system-ami/lb-alpine-3.21.6-x86_64.raw",
+		Checksum:     "https://iso.mulgadc.com/system-ami/lb-alpine-3.21.6-x86_64.raw.sha512",
+		ChecksumType: "sha512",
+		BootMode:     "bios",
+		Starred:      false,
+		// Marked system-managed: the UI hides this AMI from the Images
+		// page so customers don't mistake it for a bootable OS image.
+		Tags: map[string]string{
+			"spinifex:managed-by": "elbv2",
+		},
+	},
 }
 
 // AMI / image extraction utils
