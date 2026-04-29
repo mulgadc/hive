@@ -98,7 +98,7 @@ func TestLbVMUserData_Structural(t *testing.T) {
 		SystemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		region:          "ap-southeast-2",
 	}
-	ud, err := svc.lbVMUserData("lb-abc123")
+	ud, err := svc.lbVMUserData("lb-abc123", SchemeInternetFacing)
 	require.NoError(t, err)
 
 	envs, runcmd := extractAgentEnv(t, ud)
@@ -147,7 +147,7 @@ func TestLbVMUserData_MissingCredentials(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.svc.lbVMUserData("lb-test")
+			_, err := tt.svc.lbVMUserData("lb-test", SchemeInternetFacing)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "missing system credentials")
 		})

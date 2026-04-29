@@ -2929,4 +2929,13 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.MgmtRouteGateway = d.mgmtBridgeIP
 		d.elbv2Service.MgmtRouteTarget = d.mgmtRouteVia
 	}
+
+	// Always expose mgmtBridgeIP and advertiseIP so lbVMUserData can synthesize
+	// a mgmt-NIC fallback route for internal-scheme LBs on single-node setups
+	// (where MgmtRoute{Gateway,Target} stay empty because internet-facing LBs
+	// reach AWSGW via VPC + EIP SNAT). Internal LBs have no EIP, so without
+	// this fallback the agent has no return path and the LB stays in
+	// provisioning forever.
+	d.elbv2Service.MgmtBridgeIP = d.mgmtBridgeIP
+	d.elbv2Service.AdvertiseIP = advertiseIP
 }

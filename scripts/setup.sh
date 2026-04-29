@@ -221,6 +221,13 @@ install_apt_deps() {
         ovn-central ovn-host openvswitch-switch dhcpcd-base \
         > /dev/null
 
+    # Mask the standalone dhcpcd.service auto-enabled on Debian Trixie. It
+    # binds br-wan and competes with vpcd's nclient4 for OFFERs, draining
+    # the upstream pool and causing intermittent DORA failures. The ISO
+    # installer does the same mask (cmd/installer/install/install.go).
+    $SUDO systemctl disable --now dhcpcd.service 2>/dev/null || true
+    $SUDO systemctl mask dhcpcd.service 2>/dev/null || true
+
     info "System dependencies installed"
 }
 

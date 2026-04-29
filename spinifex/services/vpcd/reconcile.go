@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
@@ -12,6 +13,47 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
+
+// reconcileLeaderBucket holds a single CAS-elected leader key. MaxAge bounds
+// recovery time when an elected vpcd crashes before releasing the lock.
+const (
+	reconcileLeaderBucket = "spinifex-vpcd-reconcile"
+	reconcileLeaderKey    = "leader"
+	reconcileLeaderTTL    = 60 * time.Second
+)
+
+// AcquireReconcileLeader returns release+true exactly once across all vpcds in
+// a cluster, gating the startup Reconcile/ReconcileFromKV passes. Other vpcds
+// get release=nil, elected=false and skip reconcile (runtime VPC events use the
+// vpcd-workers queue group, so they remain handled cluster-wide).
+//
+// Returns elected=true on KV-bucket failure: first-boot has at most one vpcd
+// up, so falling through is safe and avoids deadlocking the cluster if NATS
+// KV isn't ready.
+func AcquireReconcileLeader(nc *nats.Conn, holder string) (func(), bool) {
+	js, _ := nc.JetStream()
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket:  reconcileLeaderBucket,
+		History: 1,
+		TTL:     reconcileLeaderTTL,
+	})
+	if err != nil {
+		slog.Warn("vpcd reconcile-leader: KV bucket unavailable, running reconcile unguarded", "err", err)
+		return func() {}, true
+	}
+
+	if _, err := kv.Create(reconcileLeaderKey, []byte(holder)); err != nil {
+		slog.Info("vpcd reconcile-leader: another vpcd is leader, skipping reconcile", "holder", holder, "err", err)
+		return nil, false
+	}
+
+	slog.Info("vpcd reconcile-leader: elected", "holder", holder)
+	return func() {
+		if err := kv.Delete(reconcileLeaderKey); err != nil {
+			slog.Warn("vpcd reconcile-leader: failed to release lock (TTL will reap)", "holder", holder, "err", err)
+		}
+	}, true
+}
 
 // ReconcileResult tracks what was created during reconciliation.
 type ReconcileResult struct {

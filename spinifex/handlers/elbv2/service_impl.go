@@ -44,7 +44,7 @@ const (
 // Cloud-init guarantees write_files runs before runcmd. The service is NOT
 // enabled at boot in the image — cloud-init is the sole trigger so the env
 // vars are always present before the agent starts.
-func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) (string, error) {
+func (s *ELBv2ServiceImpl) lbVMUserData(lbID, scheme string) (string, error) {
 	if s.GatewayURL == "" || s.SystemAccessKey == "" || s.SystemSecretKey == "" {
 		return "", fmt.Errorf("missing system credentials: gatewayURL=%q accessKey=%q secretKey-set=%t",
 			s.GatewayURL, s.SystemAccessKey, s.SystemSecretKey != "")
@@ -61,19 +61,40 @@ write_files:
       LB_REGION=%s
 `, lbID, s.GatewayURL, s.SystemAccessKey, s.SystemSecretKey, s.region)
 
-	// When AWSGW binds to a specific IP (multi-node), add a host route via
-	// the management NIC so the agent can reach the gateway. bootcmd runs
-	// early enough that networking is configured before lb-agent starts.
-	if s.MgmtRouteGateway != "" && s.MgmtRouteTarget != "" {
+	mgmtGW, mgmtTarget := s.resolveMgmtRoute(scheme)
+	if mgmtGW != "" && mgmtTarget != "" {
 		cfg += fmt.Sprintf(`bootcmd:
   - [ "ip", "route", "add", "%s/32", "via", "%s" ]
-`, s.MgmtRouteTarget, s.MgmtRouteGateway)
+`, mgmtTarget, mgmtGW)
 	}
 
 	cfg += `runcmd:
   - [ "rc-service", "lb-agent", "start" ]
 `
 	return cfg, nil
+}
+
+// resolveMgmtRoute returns the (gateway, target) pair for the bootcmd host
+// route the lb-agent uses to reach AWSGW, or empty strings to skip the route.
+//
+// Multi-node (AWSGW on dedicated mgmt IP): MgmtRoute{Gateway,Target} are set
+// by the daemon for both schemes — return them.
+//
+// Single-node (AWSGW on advertiseIP, MgmtRoute fields empty): internet-facing
+// LBs reach AWSGW via VPC → external (their EIP gives OVN a SNAT pair for the
+// reply), so they need no mgmt route — and adding a /32 to advertiseIP would
+// steal the host's WAN return path. Internal LBs have no EIP and no SNAT pair,
+// so the VPC egress reply targets the VM's private IP from the host's WAN with
+// no route back → packet drops, lb-agent never heartbeats, LB sticks in
+// provisioning. Force the mgmt route for internal scheme via the br-mgmt IP.
+func (s *ELBv2ServiceImpl) resolveMgmtRoute(scheme string) (gateway, target string) {
+	if s.MgmtRouteGateway != "" && s.MgmtRouteTarget != "" {
+		return s.MgmtRouteGateway, s.MgmtRouteTarget
+	}
+	if scheme == SchemeInternal && s.MgmtBridgeIP != "" && s.AdvertiseIP != "" {
+		return s.MgmtBridgeIP, s.AdvertiseIP
+	}
+	return "", ""
 }
 
 // Ensure ELBv2ServiceImpl implements ELBv2Service at compile time.
@@ -91,6 +112,8 @@ type ELBv2ServiceImpl struct {
 	GatewayURL                 string                           // AWS gateway URL for ALB agent outbound connections
 	MgmtRouteGateway           string                           // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
 	MgmtRouteTarget            string                           // AWSGW bind IP to route via mgmt NIC
+	MgmtBridgeIP               string                           // br-mgmt IP, populated whenever br-mgmt exists (single + multi node) for the internal-scheme fallback route
+	AdvertiseIP                string                           // AdvertiseIP / WAN gateway, populated whenever set; used as the internal-scheme fallback route target on single-node
 	nodeID                     string
 	region                     string
 	systemAMI                  string                 // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
@@ -663,7 +686,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			})
 		}
 
-		userData, udErr := s.lbVMUserData(lbID)
+		userData, udErr := s.lbVMUserData(lbID, scheme)
 		if udErr != nil {
 			slog.Error("CreateLoadBalancer: system credentials not configured — cannot launch ALB VM", "lbId", lbID, "err", udErr)
 			launchFailed = true

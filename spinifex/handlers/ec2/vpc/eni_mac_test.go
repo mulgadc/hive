@@ -1,10 +1,11 @@
 package handlers_ec2_vpc
 
 import (
-	"regexp"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateENIMac_Deterministic(t *testing.T) {
@@ -21,12 +22,18 @@ func TestGenerateENIMac_DifferentInputs(t *testing.T) {
 
 func TestGenerateENIMac_LocallyAdministered(t *testing.T) {
 	mac := generateENIMac("eni-test123")
-	// Must start with 02:00:00 (locally-administered unicast)
-	assert.Regexp(t, regexp.MustCompile(`^02:00:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$`), mac)
+	hw, err := net.ParseMAC(mac)
+	require.NoError(t, err)
+	// IEEE 802 reserved bits on first octet: bit0=0 unicast, bit1=1 LAA.
+	assert.Equal(t, byte(0x02), hw[0]&0x03)
 }
 
 func TestGenerateENIMac_EmptyString(t *testing.T) {
 	mac := generateENIMac("")
-	// Hash of empty string = 0, so all three octets should be 00
-	assert.Equal(t, "02:00:00:00:00:00", mac)
+	hw, err := net.ParseMAC(mac)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x02), hw[0]&0x03)
+	// New impl hashes the prefix-and-id; empty input no longer collapses to
+	// the degenerate 02:00:00:00:00:00 of the old 24-bit impl.
+	assert.NotEqual(t, "02:00:00:00:00:00", hw.String())
 }

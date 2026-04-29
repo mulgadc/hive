@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -194,17 +196,29 @@ func TestGenerateDevMAC(t *testing.T) {
 		{"i-ghi789"},
 	}
 
-	// All MACs should be unique and have the 02:de:v0 prefix
+	// All MACs must be valid locally-administered unicast and unique. First
+	// octet is hash-derived (not the literal class prefix of the old impl).
 	seen := make(map[string]bool)
 	for _, tt := range tests {
 		mac := generateDevMAC(tt.instanceId)
-		if !strings.HasPrefix(mac, "02:de:00:") {
-			t.Errorf("generateDevMAC(%q) = %q, want prefix '02:de:00:'", tt.instanceId, mac)
+		hw, err := net.ParseMAC(mac)
+		if err != nil {
+			t.Errorf("generateDevMAC(%q) = %q: invalid MAC: %v", tt.instanceId, mac, err)
+			continue
+		}
+		if hw[0]&0x03 != 0x02 {
+			t.Errorf("generateDevMAC(%q) = %q: expected unicast+LAA bits, got %#x",
+				tt.instanceId, mac, hw[0])
 		}
 		if seen[mac] {
 			t.Errorf("generateDevMAC(%q) = %q, duplicate MAC", tt.instanceId, mac)
 		}
 		seen[mac] = true
+	}
+
+	// Class separation: dev and mgmt MACs for the same instance must differ.
+	if generateDevMAC("i-abc123") == generateMgmtMAC("i-abc123") {
+		t.Error("expected dev and mgmt MACs for same instance to differ")
 	}
 
 	// Same input should produce same output (deterministic)
@@ -402,14 +416,19 @@ func TestEnsureDataRoute_NoOVS(t *testing.T) {
 }
 
 func TestSetupComputeNode_ValidatesArgs(t *testing.T) {
-	// SetupComputeNode requires ovs-vsctl which may not be available in CI.
-	// This test verifies the function signature and that it returns an error
-	// when OVS is not installed (expected on CI).
-	err := SetupComputeNode("chassis-test", "tcp:127.0.0.1:6642", "10.0.0.1")
+	// Stub sudoCommand so the test never shells out to the host's real
+	// ovs-vsctl. Without this stub, on a dev box with OVS installed the call
+	// silently mutated external_ids:system-id (and ovn-remote, ovn-encap-ip)
+	// on the live cluster, breaking vpcd's chassis discovery until reboot.
+	orig := sudoCommand
+	t.Cleanup(func() { sudoCommand = orig })
+	sudoCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("/bin/false")
+	}
 
-	// We expect an error in CI (no OVS), but the function should not panic.
-	// On a dev machine with OVS, it would succeed. Either result is acceptable.
-	_ = err
+	if err := SetupComputeNode("chassis-test", "tcp:127.0.0.1:6642", "10.0.0.1"); err == nil {
+		t.Fatal("expected error from stubbed sudoCommand, got nil")
+	}
 }
 
 func TestMockNetworkPlumber_SetupError(t *testing.T) {
@@ -456,25 +475,14 @@ func TestGenerateDevMAC_Format(t *testing.T) {
 	}
 	for _, id := range tests {
 		mac := generateDevMAC(id)
-		// Must be 17 chars: xx:xx:xx:xx:xx:xx
-		if len(mac) != 17 {
-			t.Errorf("generateDevMAC(%q) = %q, expected 17 chars", id, mac)
+		hw, err := net.ParseMAC(mac)
+		if err != nil {
+			t.Errorf("generateDevMAC(%q) = %q: invalid MAC: %v", id, mac, err)
+			continue
 		}
-		// Must start with locally-administered unicast prefix 02:de:00
-		if !strings.HasPrefix(mac, "02:de:00:") {
-			t.Errorf("generateDevMAC(%q) = %q, expected prefix 02:de:00:", id, mac)
-		}
-		// All chars must be valid hex or colons
-		for i, c := range mac {
-			if i%3 == 2 {
-				if c != ':' {
-					t.Errorf("generateDevMAC(%q) = %q, expected ':' at pos %d", id, mac, i)
-				}
-			} else {
-				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-					t.Errorf("generateDevMAC(%q) = %q, invalid hex char '%c' at pos %d", id, mac, c, i)
-				}
-			}
+		if hw[0]&0x03 != 0x02 {
+			t.Errorf("generateDevMAC(%q) = %q: expected unicast+LAA bits, got %#x",
+				id, mac, hw[0])
 		}
 	}
 }
@@ -516,11 +524,14 @@ func TestGenerateMgmtMAC(t *testing.T) {
 	seen := make(map[string]bool)
 	for _, id := range tests {
 		mac := generateMgmtMAC(id)
-		if !strings.HasPrefix(mac, "02:a0:00:") {
-			t.Errorf("generateMgmtMAC(%q) = %q, want prefix '02:a0:00:'", id, mac)
+		hw, err := net.ParseMAC(mac)
+		if err != nil {
+			t.Errorf("generateMgmtMAC(%q) = %q: invalid MAC: %v", id, mac, err)
+			continue
 		}
-		if len(mac) != 17 {
-			t.Errorf("generateMgmtMAC(%q) = %q, expected 17 chars", id, mac)
+		if hw[0]&0x03 != 0x02 {
+			t.Errorf("generateMgmtMAC(%q) = %q: expected unicast+LAA bits, got %#x",
+				id, mac, hw[0])
 		}
 		if seen[mac] {
 			t.Errorf("generateMgmtMAC(%q) = %q, duplicate MAC", id, mac)

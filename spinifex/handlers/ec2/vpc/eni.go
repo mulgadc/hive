@@ -553,7 +553,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 
 // generateENIMac creates a locally-administered unicast MAC address from an ENI ID.
 func generateENIMac(eniId string) string {
-	return utils.HashMAC("02:00:00", eniId)
+	return utils.HashMAC(eniId)
 }
 
 // publishENIEvent publishes an ENI lifecycle event to NATS for vpcd consumption.
