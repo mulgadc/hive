@@ -603,6 +603,15 @@ func TestObtainDHCPLease_RequestTimeout(t *testing.T) {
 	dhcpNATSTimeout = 150 * time.Millisecond
 	t.Cleanup(func() { dhcpNATSTimeout = prev })
 
+	prevMax := dhcpAcquireMaxAttempts
+	prevDelay := dhcpAcquireRetryDelay
+	dhcpAcquireMaxAttempts = 2
+	dhcpAcquireRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() {
+		dhcpAcquireMaxAttempts = prevMax
+		dhcpAcquireRetryDelay = prevDelay
+	})
+
 	_, err = ObtainDHCPLease(nc, "br-wan", "eni-timeout", "eni-timeout", "mulga-spinifex", "wan")
 	assert.ErrorContains(t, err, "dhcp acquire NATS request")
 }

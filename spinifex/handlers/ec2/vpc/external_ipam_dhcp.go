@@ -17,6 +17,17 @@ import (
 // 20 s per table entry.
 var dhcpNATSTimeout = 30 * time.Second
 
+// dhcpAcquireMaxAttempts caps retry of vpc.dhcp.acquire. 60 attempts × 1 s
+// sleep covers a cold-boot vpcd start window where NATS is up but the
+// dhcp.Manager hasn't yet subscribed (typical: 5–30 s, pathological: 60 s
+// during full reconcile). Tests override to keep timeout-path coverage
+// fast — see external_ipam_test.go.
+var dhcpAcquireMaxAttempts = 60
+
+// dhcpAcquireRetryDelay is the wait between retries. Var for the same
+// reason as dhcpAcquireMaxAttempts.
+var dhcpAcquireRetryDelay = 1 * time.Second
+
 // dhcpLeaseResult is the data ExternalIPAM needs from a successful acquire.
 // It maps directly from dhcp.AcquireReplyMsg; kept as a handler-side type
 // so the IPAM ledger records the fields without coupling to the NATS wire
@@ -61,9 +72,8 @@ func ObtainDHCPLease(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poo
 		return dhcpLeaseResult{}, fmt.Errorf("marshal dhcp acquire request: %w", err)
 	}
 
-	// Attempt 5 deliveres to NAT (timeout, service not started, temp errors)
 	var reply dhcp.AcquireReplyMsg
-	const maxAttempts = 5
+	maxAttempts := dhcpAcquireMaxAttempts
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		msg, err := nc.Request(dhcp.TopicAcquire, data, dhcpNATSTimeout)
@@ -85,7 +95,7 @@ func ObtainDHCPLease(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poo
 				"err", err,
 			)
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(dhcpAcquireRetryDelay)
 			continue
 		}
 
