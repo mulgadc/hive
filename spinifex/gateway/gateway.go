@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -34,6 +35,7 @@ const (
 	ctxRegion    contextKey = "sigv4.region"
 	ctxAccessKey contextKey = "sigv4.accessKey"
 	ctxAction    contextKey = "sigv4.action"
+	ctxQueryArgs contextKey = "sigv4.queryArgs"
 )
 
 type GatewayConfig struct {
@@ -64,9 +66,11 @@ var supportedServices = map[string]bool{
 // here for now; per-service namespaces can be added as a follow-up.
 const xmlnsEC2 = "http://ec2.amazonaws.com/doc/2016-11-15/"
 
+// ErrorResponse is the EC2 query-protocol error envelope. The xmlns is baked
+// into XMLName so every marshal emits the namespace attribute — callers can't
+// accidentally construct an envelope without it.
 type ErrorResponse struct {
-	XMLName   xml.Name `xml:"ErrorResponse"`
-	XMLNS     string   `xml:"xmlns,attr"`
+	XMLName   xml.Name `xml:"http://ec2.amazonaws.com/doc/2016-11-15/ ErrorResponse"`
 	Errors    Errors   `xml:"Errors"`
 	RequestID string   `xml:"RequestID"`
 }
@@ -337,6 +341,21 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 	}
 }
 
+// readQueryArgs returns the parsed query args for the request, reading them
+// from context if SigV4 auth already parsed them, otherwise reading the body
+// and parsing once. This avoids the dispatchers re-doing work the middleware
+// already did (every authenticated request is otherwise parsed twice).
+func readQueryArgs(r *http.Request) (map[string]string, error) {
+	if args, ok := r.Context().Value(ctxQueryArgs).(map[string]string); ok {
+		return args, nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	return ParseAWSQueryArgs(string(body))
+}
+
 // ParseAWSQueryArgs parses an AWS query-protocol body (application/x-www-form-urlencoded
 // key=value pairs joined by '&'). Returns MalformedQueryString-style errors when keys
 // or values contain invalid percent-encoding so callers can surface AWS-correct error codes.
@@ -364,7 +383,6 @@ func ParseAWSQueryArgs(query string) (map[string]string, error) {
 
 func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 	errorXml := ErrorResponse{
-		XMLNS: xmlnsEC2,
 		Errors: Errors{
 			Error: ErrorDetail{
 				Code:    code,

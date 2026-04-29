@@ -3,7 +3,6 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -21,12 +20,7 @@ var spinifexAdminActions = map[string]bool{
 }
 
 func (gw *GatewayConfig) Spinifex_Request(w http.ResponseWriter, r *http.Request) error {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		slog.Error("Failed to read spinifex request body", "error", err)
-		return errors.New(awserrors.ErrorInternalError)
-	}
-	queryArgs, err := ParseAWSQueryArgs(string(body))
+	queryArgs, err := readQueryArgs(r)
 	if err != nil {
 		slog.Debug("Spinifex: malformed query string", "err", err)
 		return errors.New(awserrors.ErrorMalformedQueryString)

@@ -2,11 +2,17 @@ package awsec2query
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 )
+
+// ErrSliceTooLarge is returned by QueryParamsToStruct when a single indexed
+// list (Prefix.N or Prefix.member.N) contains more than maxSliceLen contiguous
+// entries. Callers should map this to AWS's MalformedQueryString error code.
+var ErrSliceTooLarge = errors.New("list parameter exceeds maximum entries")
 
 /*
 
@@ -226,7 +232,7 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 	for indices[denseLen+1] {
 		denseLen++
 		if denseLen > maxSliceLen {
-			return fmt.Errorf("list parameter %q exceeds maximum of %d entries", prefix, maxSliceLen)
+			return fmt.Errorf("%w: %q (max %d)", ErrSliceTooLarge, prefix, maxSliceLen)
 		}
 	}
 	if denseLen == 0 {

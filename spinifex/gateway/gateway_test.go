@@ -544,6 +544,41 @@ func TestRequest_UnsupportedService(t *testing.T) {
 	assert.Contains(t, string(body), "UnsupportedOperation")
 }
 
+// TestRequest_MalformedQueryString_EndToEnd verifies that malformed percent-
+// encoding produces a 400 response with code MalformedQueryString through the
+// full Request → ErrorHandler path on every dispatcher. The per-handler tests
+// only assert the returned error string; this asserts the HTTP code mapping
+// from awserrors.ErrorLookup also reaches the wire.
+func TestRequest_MalformedQueryString_EndToEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		service string
+		body    string
+	}{
+		{"ec2", "ec2", "Action=DescribeInstances&Bad=%ZZ"},
+		{"elbv2", "elasticloadbalancing", "Action=DescribeLoadBalancers&Bad=%ZZ"},
+		{"iam", "iam", "Action=ListUsers&Bad=%ZZ"},
+		{"spinifex", "spinifex", "Action=GetVersion&Bad=%ZZ"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &GatewayConfig{DisableLogging: true}
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			ctx := context.WithValue(req.Context(), ctxService, tc.service)
+			ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			gw.Request(w, req)
+
+			resp := w.Result()
+			body, _ := io.ReadAll(resp.Body)
+			assert.Equal(t, 400, resp.StatusCode)
+			assert.Contains(t, string(body), "MalformedQueryString")
+		})
+	}
+}
+
 func TestRequest_EC2MissingAction(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))

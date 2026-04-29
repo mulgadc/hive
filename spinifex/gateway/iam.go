@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -23,6 +22,9 @@ func iamHandler[In any](handler func(string, *In, handlers_iam.IAMService) (any,
 	return func(action string, q map[string]string, gw *GatewayConfig, accountID string) ([]byte, error) {
 		input := new(In)
 		if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
+			if errors.Is(err, awsec2query.ErrSliceTooLarge) {
+				return nil, errors.New(awserrors.ErrorMalformedQueryString)
+			}
 			return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 		}
 		output, err := handler(accountID, input, gw.IAMService)
@@ -94,12 +96,7 @@ var iamActions = map[string]IAMHandler{
 }
 
 func (gw *GatewayConfig) IAM_Request(w http.ResponseWriter, r *http.Request) error {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		slog.Error("Failed to read IAM request body", "error", err)
-		return errors.New(awserrors.ErrorInternalError)
-	}
-	queryArgs, err := ParseAWSQueryArgs(string(body))
+	queryArgs, err := readQueryArgs(r)
 	if err != nil {
 		slog.Debug("IAM: malformed query string", "err", err)
 		return errors.New(awserrors.ErrorMalformedQueryString)

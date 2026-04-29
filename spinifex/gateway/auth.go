@@ -189,15 +189,18 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, ctxRegion, region)
 			ctx = context.WithValue(ctx, ctxAccessKey, accessKey)
 
-			// Extract the Action parameter from the already-buffered body
-			// so downstream middleware (throttle) can read it from context
-			// instead of re-reading/re-parsing the body. Best-effort: a
+			// Parse the body once and stash both the args and the action in
+			// context so downstream middleware (throttle) and the per-service
+			// dispatchers don't have to re-read/re-parse it. Best-effort: a
 			// malformed query string surfaces from the dispatch handler with
 			// the AWS-correct MalformedQueryString error.
 			if args, err := ParseAWSQueryArgs(string(body)); err == nil {
+				ctx = context.WithValue(ctx, ctxQueryArgs, args)
 				if action := args["Action"]; action != "" {
 					ctx = context.WithValue(ctx, ctxAction, action)
 				}
+			} else {
+				slog.Debug("SigV4: query body parse failed; dispatcher will return MalformedQueryString", "err", err)
 			}
 
 			slog.Debug("SigV4 authentication successful", "accessKey", accessKey, "identity", ak.UserName)
