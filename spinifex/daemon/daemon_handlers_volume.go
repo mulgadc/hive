@@ -450,6 +450,10 @@ func (d *Daemon) handleEC2DescribeVolumeStatus(msg *nats.Msg) {
 	handleNATSRequest(msg, d.volumeService.DescribeVolumeStatus)
 }
 
+func (d *Daemon) handleEC2DescribeVolumesModifications(msg *nats.Msg) {
+	handleNATSRequest(msg, d.volumeService.DescribeVolumesModifications)
+}
+
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
 func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject)

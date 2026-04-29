@@ -158,6 +158,9 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeVolumeStatus": ec2Handler(func(input *ec2.DescribeVolumeStatusInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn, accountID)
 	}),
+	"DescribeVolumesModifications": ec2Handler(func(input *ec2.DescribeVolumesModificationsInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_volume.DescribeVolumesModifications(input, gw.NATSConn, accountID)
+	}),
 	"DetachVolume": ec2Handler(func(input *ec2.DetachVolumeInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_volume.DetachVolume(input, gw.NATSConn, accountID)
 	}),
