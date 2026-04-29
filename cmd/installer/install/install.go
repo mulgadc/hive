@@ -465,15 +465,16 @@ func installBootloader(disk string) error {
 	copySplashImage(mountRoot)
 	copyGrubFont(mountRoot)
 
-	// Kernel cmdline and basic defaults only — graphics/serial handled by 05_spinifex below.
-	// Confirm requirement
-	// console=ttyS0,115200n8
-
+	// Both consoles listed: tty0 stays primary for local install, ttyS0 mirrors
+	// kernel output to serial so headless installs (CI, racks with serial-only
+	// IPMI, remote-dev SSH-to-QEMU) see boot messages. The last `console=` on
+	// the cmdline becomes the system console, so ttyS0 wins on serial-only
+	// hardware while tty0 still receives output for local display.
 	grubDefault := `GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Spinifex
 GRUB_CMDLINE_LINUX_DEFAULT=""
-GRUB_CMDLINE_LINUX="console=tty0 systemd.show_status=1"
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 systemd.show_status=1"
 `
 
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
