@@ -575,6 +575,236 @@ func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeSta
 	}, result.tenantID, nil
 }
 
+// volumeModificationTimeFormat is the AWS-CLI compatible RFC3339-ish format
+// used both for response serialisation and for filter equality on time fields.
+// Round-tripping a value through this format and back into a filter must match.
+const volumeModificationTimeFormat = "2006-01-02T15:04:05.000Z"
+
+// describeVolumesModificationsValidFilters defines the set of filter names
+// accepted by DescribeVolumesModifications.
+var describeVolumesModificationsValidFilters = map[string]bool{
+	"modification-state":   true,
+	"original-iops":        true,
+	"original-size":        true,
+	"original-volume-type": true,
+	"start-time":           true,
+	"target-iops":          true,
+	"target-size":          true,
+	"target-volume-type":   true,
+	"volume-id":            true,
+}
+
+// vbModificationToEC2 converts a persisted viperblock.VolumeModification into
+// the AWS SDK shape returned by ModifyVolume / DescribeVolumesModifications.
+func vbModificationToEC2(m *viperblock.VolumeModification) *ec2.VolumeModification {
+	if m == nil {
+		return nil
+	}
+	out := &ec2.VolumeModification{
+		VolumeId:           aws.String(m.VolumeID),
+		ModificationState:  aws.String(m.ModificationState),
+		Progress:           aws.Int64(m.Progress),
+		OriginalSize:       aws.Int64(m.OriginalSize),
+		OriginalIops:       aws.Int64(m.OriginalIops),
+		OriginalVolumeType: aws.String(m.OriginalVolumeType),
+		TargetSize:         aws.Int64(m.TargetSize),
+		TargetIops:         aws.Int64(m.TargetIops),
+		TargetVolumeType:   aws.String(m.TargetVolumeType),
+		StartTime:          aws.Time(m.StartTime),
+	}
+	if !m.EndTime.IsZero() {
+		out.EndTime = aws.Time(m.EndTime)
+	}
+	if m.StatusMessage != "" {
+		out.StatusMessage = aws.String(m.StatusMessage)
+	}
+	return out
+}
+
+// volumeModificationMatchesFilters checks whether an ec2.VolumeModification
+// satisfies all parsed filters.
+func volumeModificationMatchesFilters(m *ec2.VolumeModification, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			// Modifications don't carry tags; any tag filter means no match.
+			return false
+		}
+
+		var field string
+		switch name {
+		case "volume-id":
+			if m.VolumeId != nil {
+				field = *m.VolumeId
+			}
+		case "modification-state":
+			if m.ModificationState != nil {
+				field = *m.ModificationState
+			}
+		case "original-iops":
+			if m.OriginalIops != nil {
+				field = strconv.FormatInt(*m.OriginalIops, 10)
+			}
+		case "original-size":
+			if m.OriginalSize != nil {
+				field = strconv.FormatInt(*m.OriginalSize, 10)
+			}
+		case "original-volume-type":
+			if m.OriginalVolumeType != nil {
+				field = *m.OriginalVolumeType
+			}
+		case "target-iops":
+			if m.TargetIops != nil {
+				field = strconv.FormatInt(*m.TargetIops, 10)
+			}
+		case "target-size":
+			if m.TargetSize != nil {
+				field = strconv.FormatInt(*m.TargetSize, 10)
+			}
+		case "target-volume-type":
+			if m.TargetVolumeType != nil {
+				field = *m.TargetVolumeType
+			}
+		case "start-time":
+			if m.StartTime != nil {
+				field = m.StartTime.UTC().Format(volumeModificationTimeFormat)
+			}
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+	return true
+}
+
+// DescribeVolumesModifications returns the most recent modification record
+// for one or more EBS volumes. Volumes that have never been modified are
+// silently omitted from both fast and slow paths.
+func (s *VolumeServiceImpl) DescribeVolumesModifications(input *ec2.DescribeVolumesModificationsInput, accountID string) (*ec2.DescribeVolumesModificationsOutput, error) {
+	if input == nil {
+		input = &ec2.DescribeVolumesModificationsInput{}
+	}
+
+	slog.Info("DescribeVolumesModifications", "volumeIds", input.VolumeIds)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumesModificationsValidFilters)
+	if err != nil {
+		slog.Warn("DescribeVolumesModifications: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	var modifications []*ec2.VolumeModification
+
+	// Fast path: specific volume IDs requested.
+	if len(input.VolumeIds) > 0 {
+		results := s.fetchVolumeModificationsByIDs(input.VolumeIds, accountID)
+		// AWS contract: any unknown / cross-tenant ID fails the whole call.
+		for i, vid := range input.VolumeIds {
+			if vid == nil {
+				continue
+			}
+			if results[i].err != nil {
+				slog.Error("DescribeVolumesModifications volume not found", "volumeId", *vid, "err", results[i].err)
+				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+			}
+		}
+		for _, r := range results {
+			if r.modification == nil {
+				continue
+			}
+			if len(parsedFilters) > 0 && !volumeModificationMatchesFilters(r.modification, parsedFilters) {
+				continue
+			}
+			modifications = append(modifications, r.modification)
+		}
+		slog.Info("DescribeVolumesModifications completed", "count", len(modifications))
+		return &ec2.DescribeVolumesModificationsOutput{VolumesModifications: modifications}, nil
+	}
+
+	// Slow path: list all volumes.
+	volumeIDs, err := s.listAllVolumeIDs()
+	if err != nil {
+		return nil, err
+	}
+
+	var volumeIDFilterValues []string
+	if parsedFilters != nil {
+		volumeIDFilterValues = parsedFilters["volume-id"]
+	}
+
+	for _, volumeID := range volumeIDs {
+		if len(volumeIDFilterValues) > 0 {
+			if !filterutil.MatchesAny(volumeIDFilterValues, volumeID) {
+				continue
+			}
+		}
+
+		cfg, err := s.GetVolumeConfig(volumeID)
+		if err != nil {
+			slog.Error("Failed to get volume config", "volumeId", volumeID, "err", err)
+			continue
+		}
+		if cfg.VolumeMetadata.TenantID != accountID {
+			continue
+		}
+		if cfg.Modification == nil {
+			continue
+		}
+
+		mod := vbModificationToEC2(cfg.Modification)
+		if len(parsedFilters) > 0 && !volumeModificationMatchesFilters(mod, parsedFilters) {
+			continue
+		}
+		modifications = append(modifications, mod)
+	}
+
+	slog.Info("DescribeVolumesModifications completed", "count", len(modifications))
+	return &ec2.DescribeVolumesModificationsOutput{
+		VolumesModifications: modifications,
+	}, nil
+}
+
+// volumeModificationResult bundles a per-ID lookup result so the fast path
+// can preserve input ordering and surface errors after the parallel fan-out.
+type volumeModificationResult struct {
+	modification *ec2.VolumeModification
+	err          error
+}
+
+// fetchVolumeModificationsByIDs reads each requested volume's config in
+// parallel, returning a result slice positionally aligned with volumeIDs.
+// Cross-tenant volumes surface as InvalidVolume.NotFound, mirroring
+// DescribeVolumes' silent tenant scoping.
+func (s *VolumeServiceImpl) fetchVolumeModificationsByIDs(volumeIDs []*string, accountID string) []volumeModificationResult {
+	results := make([]volumeModificationResult, len(volumeIDs))
+	var wg sync.WaitGroup
+
+	for i, volumeID := range volumeIDs {
+		if volumeID == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, volID string) {
+			defer wg.Done()
+			cfg, err := s.GetVolumeConfig(volID)
+			if err != nil {
+				results[idx] = volumeModificationResult{err: errors.New(awserrors.ErrorInvalidVolumeNotFound)}
+				return
+			}
+			if cfg.VolumeMetadata.TenantID != accountID {
+				results[idx] = volumeModificationResult{err: errors.New(awserrors.ErrorInvalidVolumeNotFound)}
+				return
+			}
+			results[idx] = volumeModificationResult{modification: vbModificationToEC2(cfg.Modification)}
+		}(i, *volumeID)
+	}
+
+	wg.Wait()
+	return results
+}
+
 // listAllVolumeIDs lists all volume IDs from S3 by scanning bucket prefixes.
 // It filters for vol-* prefixes and skips internal sub-volumes (EFI and cloud-init).
 func (s *VolumeServiceImpl) listAllVolumeIDs() ([]string, error) {
@@ -898,12 +1128,6 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput, accountID
 		volMeta.IOPS = int(*input.Iops)
 	}
 
-	// Persist updated config
-	if err := s.putVolumeConfig(volumeID, cfg); err != nil {
-		slog.Error("ModifyVolume failed to write config", "volumeId", volumeID, "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	// Build target values (after modification)
 	targetSize := utils.SafeUint64ToInt64(volMeta.SizeGiB)
 	targetType := volMeta.VolumeType
@@ -912,20 +1136,32 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput, accountID
 	}
 	targetIOPS := int64(volMeta.IOPS)
 
+	// Persist the modification record alongside the volume metadata so
+	// DescribeVolumesModifications can read it back. spinifex applies
+	// modifications synchronously, so the persisted state is always
+	// completed/100/EndTime==StartTime.
 	now := time.Now()
-	modification := &ec2.VolumeModification{
-		VolumeId:           aws.String(volumeID),
-		ModificationState:  aws.String("completed"),
-		Progress:           aws.Int64(100),
-		OriginalSize:       aws.Int64(originalSize),
-		OriginalVolumeType: aws.String(originalType),
-		OriginalIops:       aws.Int64(originalIOPS),
-		TargetSize:         aws.Int64(targetSize),
-		TargetVolumeType:   aws.String(targetType),
-		TargetIops:         aws.Int64(targetIOPS),
-		StartTime:          aws.Time(now),
-		EndTime:            aws.Time(now),
+	cfg.Modification = &viperblock.VolumeModification{
+		VolumeID:           volumeID,
+		ModificationState:  "completed",
+		Progress:           100,
+		OriginalSize:       originalSize,
+		OriginalIops:       originalIOPS,
+		OriginalVolumeType: originalType,
+		TargetSize:         targetSize,
+		TargetIops:         targetIOPS,
+		TargetVolumeType:   targetType,
+		StartTime:          now,
+		EndTime:            now,
 	}
+
+	// Persist updated config
+	if err := s.putVolumeConfig(volumeID, cfg); err != nil {
+		slog.Error("ModifyVolume failed to write config", "volumeId", volumeID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	modification := vbModificationToEC2(cfg.Modification)
 
 	slog.Info("ModifyVolume completed", "volumeId", volumeID,
 		"originalSize", originalSize, "targetSize", targetSize)

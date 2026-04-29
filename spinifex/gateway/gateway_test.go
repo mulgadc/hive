@@ -968,7 +968,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"DescribeImageAttribute", "ModifyImageAttribute", "ResetImageAttribute",
 		"DescribeRegions", "DescribeAvailabilityZones",
 		"DescribeVolumes", "ModifyVolume", "CreateVolume", "DeleteVolume",
-		"AttachVolume", "DescribeVolumeStatus", "DetachVolume",
+		"AttachVolume", "DescribeVolumeStatus", "DescribeVolumesModifications", "DetachVolume",
 		"DescribeAccountAttributes", "EnableEbsEncryptionByDefault",
 		"DisableEbsEncryptionByDefault", "GetEbsEncryptionByDefault",
 		"GetSerialConsoleAccessStatus", "EnableSerialConsoleAccess",

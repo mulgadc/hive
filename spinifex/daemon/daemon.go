@@ -448,6 +448,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "spinifex-workers"},
 		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "spinifex-workers"},
 		{"ec2.DescribeVolumeStatus", d.handleEC2DescribeVolumeStatus, "spinifex-workers"},
+		{"ec2.DescribeVolumesModifications", d.handleEC2DescribeVolumesModifications, "spinifex-workers"},
 		{"ec2.CreateSnapshot", d.handleEC2CreateSnapshot, "spinifex-workers"},
 		{"ec2.DescribeSnapshots", d.handleEC2DescribeSnapshots, "spinifex-workers"},
 		{"ec2.DeleteSnapshot", d.handleEC2DeleteSnapshot, "spinifex-workers"},
