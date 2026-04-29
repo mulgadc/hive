@@ -172,6 +172,7 @@ func copyRootfs() error {
 		"--exclude=/etc/openvswitch/",
 		"--exclude=/var/lib/openvswitch/",
 		"--exclude=/var/lib/dhcpcd/",
+		"--exclude=/etc/ssh/ssh_host_*",
 		"--exclude=/lost+found",
 		"--exclude=/boot/efi",
 		"/", mountRoot+"/",
@@ -300,7 +301,10 @@ func installSpinifex(cfg *Config) error {
 		return err
 	}
 
-	return systemd.EnableNetworkd(mountRoot)
+	if err := systemd.EnableNetworkd(mountRoot); err != nil {
+		return err
+	}
+	return systemd.EnableUnit(mountRoot, "regenerate-ssh-host-keys.service")
 }
 
 func writeNetworkConfig(cfg *Config) error {
