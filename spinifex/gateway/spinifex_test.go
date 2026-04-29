@@ -101,6 +101,20 @@ func TestSpinifex_InvalidAction(t *testing.T) {
 	assert.Contains(t, w.Body.String(), awserrors.ErrorInvalidAction)
 }
 
+func TestSpinifex_MissingAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
+	ctx := context.WithValue(req.Context(), ctxService, "spinifex")
+	ctx = context.WithValue(ctx, ctxAccountID, admin.DefaultAccountID())
+	ctx = context.WithValue(ctx, ctxIdentity, "admin")
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	err := gw.Spinifex_Request(w, req)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingAction, err.Error())
+}
+
 func TestSpinifex_NoAccountID(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
 	body := "Action=GetCallerIdentity"

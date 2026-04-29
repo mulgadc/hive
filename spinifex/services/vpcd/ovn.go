@@ -134,6 +134,8 @@ type LiveOVNClient struct {
 	client   client.Client
 }
 
+var _ OVNClient = (*LiveOVNClient)(nil)
+
 // NewLiveOVNClient creates a new LiveOVNClient targeting the given OVN NB DB endpoint.
 // The endpoint should be in the format "tcp:host:port" or "unix:/path/to/socket".
 func NewLiveOVNClient(endpoint string) *LiveOVNClient {

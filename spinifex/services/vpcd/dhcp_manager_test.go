@@ -411,3 +411,26 @@ func TestDHCPManager_EncodeDecodeLeaseRoundTrip(t *testing.T) {
 	require.Equal(t, in.RawACK, out.RawACK)
 	require.Equal(t, in.RawOffer, out.RawOffer)
 }
+
+func TestResolveHWAddr(t *testing.T) {
+	t.Run("InvalidRawMACReturnsParseError", func(t *testing.T) {
+		mac, err := resolveHWAddr("not-a-mac", "client-1", nil)
+		require.Error(t, err)
+		require.Nil(t, mac)
+		require.Contains(t, err.Error(), "parse hw_addr")
+	})
+
+	t.Run("EmptyRawWithNilDeriveErrors", func(t *testing.T) {
+		mac, err := resolveHWAddr("", "client-1", nil)
+		require.Error(t, err)
+		require.Nil(t, mac)
+		require.Contains(t, err.Error(), "no derivation function")
+	})
+
+	t.Run("EmptyRawWithDeriveReturningEmptyErrors", func(t *testing.T) {
+		mac, err := resolveHWAddr("", "client-1", func(string) net.HardwareAddr { return nil })
+		require.Error(t, err)
+		require.Nil(t, mac)
+		require.Contains(t, err.Error(), "empty result")
+	})
+}

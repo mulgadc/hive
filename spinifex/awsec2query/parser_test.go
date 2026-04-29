@@ -1,12 +1,14 @@
 package awsec2query
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestQueryParamsToStruct_RunInstances(t *testing.T) {
@@ -587,4 +589,63 @@ func TestQueryParamsToStruct_ELBv2CreateListenerWithActions(t *testing.T) {
 	assert.Len(t, input.DefaultActions, 1)
 	assert.Equal(t, "forward", aws.StringValue(input.DefaultActions[0].Type))
 	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123", aws.StringValue(input.DefaultActions[0].TargetGroupArn))
+}
+
+func TestQueryParamsToStruct_StopsAtFirstGap(t *testing.T) {
+	args := map[string]string{
+		"Action":           "DescribeInstances",
+		"Filter.1.Name":    "instance-type",
+		"Filter.1.Value.1": "t2.micro",
+		"Filter.3.Name":    "instance-state-name",
+		"Filter.3.Value.1": "running",
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Len(t, input.Filters, 1)
+	assert.Equal(t, "instance-type", aws.StringValue(input.Filters[0].Name))
+}
+
+func TestQueryParamsToStruct_GapAtIndexOne(t *testing.T) {
+	args := map[string]string{
+		"Action":           "DescribeInstances",
+		"Filter.2.Name":    "skipped",
+		"Filter.2.Value.1": "x",
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Empty(t, input.Filters)
+}
+
+func TestQueryParamsToStruct_RejectsOversizedDenseList(t *testing.T) {
+	args := map[string]string{"Action": "DescribeInstances"}
+	for i := 1; i <= maxSliceLen+1; i++ {
+		args[fmt.Sprintf("Filter.%d.Name", i)] = "x"
+		args[fmt.Sprintf("Filter.%d.Value.1", i)] = "y"
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestQueryParamsToStruct_SparseHugeIndexNoOp(t *testing.T) {
+	args := map[string]string{
+		"Action":                "DescribeInstances",
+		"Filter.999999.Name":    "ignored",
+		"Filter.999999.Value.1": "y",
+	}
+
+	input := &ec2.DescribeInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Empty(t, input.Filters)
 }

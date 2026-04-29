@@ -20,6 +20,16 @@ type Service interface {
 	Reload() error
 }
 
+var (
+	_ Service = (*nats.Service)(nil)
+	_ Service = (*predastore.Service)(nil)
+	_ Service = (*viperblockd.Service)(nil)
+	_ Service = (*spinifex.Service)(nil)
+	_ Service = (*awsgw.Service)(nil)
+	_ Service = (*spinifexui.Service)(nil)
+	_ Service = (*vpcd.Service)(nil)
+)
+
 func New(btype string, config any) (Service, error) {
 	switch btype {
 	case "nats":

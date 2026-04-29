@@ -18,6 +18,8 @@ type NClient4Client struct {
 	retry   int
 }
 
+var _ Client = (*NClient4Client)(nil)
+
 // NewNClient4 creates an NClient4Client with sensible DORA defaults.
 func NewNClient4(timeout time.Duration, retry int) *NClient4Client {
 	if timeout <= 0 {

@@ -50,6 +50,8 @@ type IAMServiceImpl struct {
 	decrypter            *Decrypter
 }
 
+var _ IAMService = (*IAMServiceImpl)(nil)
+
 // NewIAMServiceImpl creates a new IAM service backed by NATS JetStream KV.
 // clusterSize sets the JetStream replication factor for KV buckets. For
 // multi-node clusters this must match the number of NATS servers so that

@@ -35,6 +35,8 @@ type sshClient struct {
 	runDur     time.Duration
 }
 
+var _ SSH = (*sshClient)(nil)
+
 // NewSSH returns an SSH transport configured from a Cluster.
 //
 // The private key at cluster.SSHKeyPath must be in a format understood by

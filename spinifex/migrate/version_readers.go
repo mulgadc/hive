@@ -19,6 +19,8 @@ type ConfigVersionReader interface {
 // New writes always use quoted strings (version = "2").
 type TOMLVersionReader struct{}
 
+var _ ConfigVersionReader = (*TOMLVersionReader)(nil)
+
 var tomlVersionRe = regexp.MustCompile(`(?m)^version\s*=\s*(?:"([^"]+)"|(\d+))\s*$`)
 
 func (r *TOMLVersionReader) ReadVersion(path string) (int, error) {
@@ -77,6 +79,8 @@ func (r *TOMLVersionReader) WriteVersion(path string, version int) error {
 // Version is tracked via a comment on the first line: # spinifex-config-version: 1
 // If absent, the file is treated as version 0 (pre-versioning).
 type NATSConfVersionReader struct{}
+
+var _ ConfigVersionReader = (*NATSConfVersionReader)(nil)
 
 var natsVersionRe = regexp.MustCompile(`^#\s*spinifex-config-version:\s*(\d+)\s*$`)
 

@@ -4,7 +4,6 @@ package gateway
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -41,6 +40,9 @@ func ec2Handler[In any](handler func(*In, *GatewayConfig, string) (any, error)) 
 	return func(action string, q map[string]string, gw *GatewayConfig, accountID string) ([]byte, error) {
 		input := new(In)
 		if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
+			if errors.Is(err, awsec2query.ErrSliceTooLarge) {
+				return nil, errors.New(awserrors.ErrorMalformedQueryString)
+			}
 			return nil, err
 		}
 		output, err := handler(input, gw, accountID)
@@ -358,14 +360,16 @@ var ec2LocalActions = map[string]bool{
 }
 
 func (gw *GatewayConfig) EC2_Request(w http.ResponseWriter, r *http.Request) error {
-	body, err := io.ReadAll(r.Body)
+	queryArgs, err := readQueryArgs(r)
 	if err != nil {
-		slog.Error("Failed to read EC2 request body", "error", err)
-		return errors.New(awserrors.ErrorInternalError)
+		slog.Debug("EC2: malformed query string", "err", err)
+		return errors.New(awserrors.ErrorMalformedQueryString)
 	}
-	queryArgs := ParseAWSQueryArgs(string(body))
 
 	action := queryArgs["Action"]
+	if action == "" {
+		return errors.New(awserrors.ErrorMissingAction)
+	}
 	handler, ok := ec2Actions[action]
 	if !ok {
 		return errors.New(awserrors.ErrorInvalidAction)

@@ -210,6 +210,84 @@ func TestResourceStatsForType(t *testing.T) {
 	}
 }
 
+func TestApplyHostReserve(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       hostReserve
+		totalVCPU  int
+		totalMemGB float64
+		wantVCPU   int
+		wantMem    float64
+		wantErr    bool
+	}{
+		{
+			name:       "normal host with default reserve",
+			host:       defaultHostReserve,
+			totalVCPU:  16,
+			totalMemGB: 64.0,
+			wantVCPU:   2,
+			wantMem:    4.0,
+		},
+		{
+			name:       "boundary host (3 vCPU, 4.5 GB)",
+			host:       defaultHostReserve,
+			totalVCPU:  3,
+			totalMemGB: 4.5,
+			wantVCPU:   2,
+			wantMem:    4.0,
+		},
+		{
+			name:       "too small: vCPU equals reserve",
+			host:       defaultHostReserve,
+			totalVCPU:  2,
+			totalMemGB: 8.0,
+			wantErr:    true,
+		},
+		{
+			name:       "too small: vCPU below reserve",
+			host:       defaultHostReserve,
+			totalVCPU:  1,
+			totalMemGB: 8.0,
+			wantErr:    true,
+		},
+		{
+			name:       "too small: mem at reserve threshold (no headroom)",
+			host:       defaultHostReserve,
+			totalVCPU:  8,
+			totalMemGB: 4.0,
+			wantErr:    true,
+		},
+		{
+			name:       "too small: mem just under reserve+headroom",
+			host:       defaultHostReserve,
+			totalVCPU:  8,
+			totalMemGB: 4.49,
+			wantErr:    true,
+		},
+		{
+			name:       "custom reserve passed through",
+			host:       hostReserve{vCPU: 4, memGB: 8.0},
+			totalVCPU:  16,
+			totalMemGB: 64.0,
+			wantVCPU:   4,
+			wantMem:    8.0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotVCPU, gotMem, err := applyHostReserve(tc.host, tc.totalVCPU, tc.totalMemGB)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantVCPU, gotVCPU)
+			assert.InDelta(t, tc.wantMem, gotMem, 0.001)
+		})
+	}
+}
+
 func TestAllocateForLaunch(t *testing.T) {
 	tests := []struct {
 		name     string
