@@ -312,7 +312,7 @@ var viperblockStartCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Println("Viperblock service started", service)
+		fmt.Println("Viperblock service started")
 	},
 }
 
