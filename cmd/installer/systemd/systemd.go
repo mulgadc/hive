@@ -25,52 +25,50 @@ import (
 	"path/filepath"
 )
 
-// WriteLANBridgeUnit installs a non-critical oneshot service that brings up
-// br-lan *after* network-online.target. This keeps br-lan out of
-// networking.service entirely — a missing LAN cable or DHCP timeout on the
-// secondary bridge can never stall the management interface or firstboot.
-func WriteLANBridgeUnit(root string) error {
-	unit := `[Unit]
-Description=Spinifex LAN bridge (non-critical)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/ifup br-lan
-RemainAfterExit=yes
-# Failure is non-critical — cable unplugged or switch not ready at boot.
-SuccessExitStatus=0 1
-
-[Install]
-WantedBy=multi-user.target
-`
-	unitPath := filepath.Join(root, "etc/systemd/system/spinifex-lan-bridge.service")
-	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
+// EnableNetworkd enables systemd-networkd on the installed system by creating
+// the standard wants/socket symlinks. This makes the ISO-installed system use
+// the same network backend as the Debian genericcloud bootstrap path, which
+// means setup-ovn.sh's veth .netdev persistence works identically on both.
+func EnableNetworkd(root string) error {
+	multiUserWants := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
+	if err := os.MkdirAll(multiUserWants, 0o755); err != nil {
 		return err
 	}
-	wantsDir := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
-	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
-		return err
+	networkdService := filepath.Join(multiUserWants, "systemd-networkd.service")
+	if err := os.Remove(networkdService); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale symlink %s: %w", networkdService, err)
 	}
-	link := filepath.Join(wantsDir, "spinifex-lan-bridge.service")
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale symlink %s: %w", link, err)
+	if err := os.Symlink("/lib/systemd/system/systemd-networkd.service", networkdService); err != nil {
+		return fmt.Errorf("enable systemd-networkd.service: %w", err)
 	}
-	return os.Symlink("/etc/systemd/system/spinifex-lan-bridge.service", link)
-}
 
-// WriteNetworkingDropIn writes a networking.service drop-in that treats exit
-// code 1 as success. This prevents a secondary interface failure (e.g. br-lan
-// DHCP timeout when no cable is plugged in) from blocking network-online.target
-// and therefore spinifex-firstboot.service.
-func WriteNetworkingDropIn(root string) error {
-	dir := filepath.Join(root, "etc/systemd/system/networking.service.d")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	socketsWants := filepath.Join(root, "etc/systemd/system/sockets.target.wants")
+	if err := os.MkdirAll(socketsWants, 0o755); err != nil {
 		return err
 	}
-	dropIn := "[Service]\nSuccessExitStatus=0 1\n"
-	return os.WriteFile(filepath.Join(dir, "spinifex-optional-ifaces.conf"), []byte(dropIn), 0o644)
+	networkdSocket := filepath.Join(socketsWants, "systemd-networkd.socket")
+	if err := os.Remove(networkdSocket); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale symlink %s: %w", networkdSocket, err)
+	}
+	if err := os.Symlink("/lib/systemd/system/systemd-networkd.socket", networkdSocket); err != nil {
+		return fmt.Errorf("enable systemd-networkd.socket: %w", err)
+	}
+
+	// networkd-wait-online drives network-online.target, which firstboot
+	// depends on. Without this symlink, network-online.target is satisfied
+	// immediately (no waiters) before br-wan has an IP.
+	networkWants := filepath.Join(root, "etc/systemd/system/network-online.target.wants")
+	if err := os.MkdirAll(networkWants, 0o755); err != nil {
+		return err
+	}
+	waitOnline := filepath.Join(networkWants, "systemd-networkd-wait-online.service")
+	if err := os.Remove(waitOnline); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale symlink %s: %w", waitOnline, err)
+	}
+	if err := os.Symlink("/lib/systemd/system/systemd-networkd-wait-online.service", waitOnline); err != nil {
+		return fmt.Errorf("enable systemd-networkd-wait-online.service: %w", err)
+	}
+	return nil
 }
 
 // WriteFirstbootUnit writes the spinifex-firstboot.service oneshot unit that
