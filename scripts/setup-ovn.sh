@@ -301,7 +301,8 @@ if [ -n "$WAN_BRIDGE" ]; then
     # veth pair re-materialises on reboot and fights the current mode's
     # bridge plumbing (Fix 1, mulga-998.b, per D17).
     if [ "$WAN_BRIDGE_MODE" != "veth" ]; then
-        sudo rm -f /etc/systemd/network/15-spinifex-veth-wan.netdev \
+        sudo rm -f /etc/systemd/network/14-spinifex-br-wan.netdev \
+                   /etc/systemd/network/15-spinifex-veth-wan.netdev \
                    /etc/systemd/network/15-spinifex-veth-wan.network \
                    /etc/systemd/network/16-spinifex-veth-wan-ovs.network
         sudo networkctl reload 2>/dev/null || true
@@ -366,9 +367,37 @@ if [ -n "$WAN_BRIDGE" ]; then
             # are kernel-only and vanish on reboot; without persistence vpcd
             # starts with the OVS port pointing at a nonexistent peer and
             # silently falls back to direct mode (Fix 1, mulga-998.b).
+            #
+            # Declare the Linux bridge as a NetDev too (even though it's
+            # already created by ifupdown) so networkd recognises it and the
+            # `Bridge=$LINUX_BRIDGE` directive below resolves. Without this,
+            # networkd logs `br-wan NetDev could not be found, ignoring
+            # assignment` and veth-wan-br ends up orphaned with no master,
+            # which crashes vpcd's veth bridge mode sanity check on reboot.
+            # `Failed to create netdev: File exists` is harmless — networkd
+            # then matches the existing kernel bridge by name+kind.
+            #
+            # Gate: skip the write if any operator-managed .netdev (cloud-init,
+            # netplan, manual op) already declares this bridge — don't clobber
+            # custom networkd config. networkd searches /etc, /run, /usr/lib in
+            # that priority order; check all three. Our own file is excluded so
+            # idempotent re-runs still rewrite when needed.
+            BR_WAN_NETDEV="/etc/systemd/network/14-spinifex-br-wan.netdev"
             VETH_NETDEV="/etc/systemd/network/15-spinifex-veth-wan.netdev"
             VETH_NETWORK="/etc/systemd/network/15-spinifex-veth-wan.network"
             VETH_OVS_NETWORK="/etc/systemd/network/16-spinifex-veth-wan-ovs.network"
+            EXISTING_BR_NETDEV=$(grep -rls --include="*.netdev" -E "^\s*Name=$LINUX_BRIDGE\s*$" \
+                /etc/systemd/network /run/systemd/network /usr/lib/systemd/network 2>/dev/null \
+                | grep -v "^$BR_WAN_NETDEV$" || true)
+            if [ -n "$EXISTING_BR_NETDEV" ]; then
+                echo "  skipping $BR_WAN_NETDEV — operator-managed NetDev already declares $LINUX_BRIDGE: $EXISTING_BR_NETDEV"
+            else
+                sudo tee "$BR_WAN_NETDEV" >/dev/null <<NETDEV
+[NetDev]
+Name=$LINUX_BRIDGE
+Kind=bridge
+NETDEV
+            fi
             sudo tee "$VETH_NETDEV" >/dev/null <<NETDEV
 [NetDev]
 Name=veth-wan-br
