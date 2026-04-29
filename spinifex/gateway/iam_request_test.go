@@ -228,23 +228,8 @@ func TestIAMRequest_EmptyAction(t *testing.T) {
 	resp := doRequest(handler, req)
 	assert.Equal(t, 400, resp.StatusCode)
 
-	// AWS distinguishes "no Action parameter" (MissingAction) from
-	// "Action present but unknown" (InvalidAction).
 	body, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(body), "MissingAction")
-}
-
-func TestIAMRequest_MalformedQueryString(t *testing.T) {
-	handler := setupIAMRequestHandler(&flexMockIAMService{})
-
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=ListUsers&Bad=%ZZ"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp := doRequest(handler, req)
-	assert.Equal(t, 400, resp.StatusCode)
-
-	body, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, string(body), "MalformedQueryString")
 }
 
 func TestIAMRequest_NilService(t *testing.T) {

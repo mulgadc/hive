@@ -27,14 +27,6 @@ func TestELBv2Request_MissingAction(t *testing.T) {
 	assert.Equal(t, awserrors.ErrorMissingAction, err.Error())
 }
 
-func TestELBv2Request_MalformedQueryString(t *testing.T) {
-	gw := &GatewayConfig{DisableLogging: true}
-	w := httptest.NewRecorder()
-	err := gw.ELBv2_Request(w, setupELBv2Request("Action=DescribeLoadBalancers&Bad=%ZZ"))
-	require.Error(t, err)
-	assert.Equal(t, awserrors.ErrorMalformedQueryString, err.Error())
-}
-
 func TestELBv2Request_UnknownAction(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
 	w := httptest.NewRecorder()

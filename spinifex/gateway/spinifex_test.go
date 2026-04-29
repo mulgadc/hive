@@ -102,7 +102,6 @@ func TestSpinifex_InvalidAction(t *testing.T) {
 }
 
 func TestSpinifex_MissingAction(t *testing.T) {
-	// Empty body → no Action parameter → MissingAction (not InvalidAction).
 	gw := &GatewayConfig{DisableLogging: true}
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
 	ctx := context.WithValue(req.Context(), ctxService, "spinifex")
@@ -114,21 +113,6 @@ func TestSpinifex_MissingAction(t *testing.T) {
 	err := gw.Spinifex_Request(w, req)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorMissingAction, err.Error())
-}
-
-func TestSpinifex_MalformedQueryString(t *testing.T) {
-	// Invalid percent-encoding → MalformedQueryString.
-	gw := &GatewayConfig{DisableLogging: true}
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=Get%ZZ"))
-	ctx := context.WithValue(req.Context(), ctxService, "spinifex")
-	ctx = context.WithValue(ctx, ctxAccountID, admin.DefaultAccountID())
-	ctx = context.WithValue(ctx, ctxIdentity, "admin")
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	err := gw.Spinifex_Request(w, req)
-	require.Error(t, err)
-	assert.Equal(t, awserrors.ErrorMalformedQueryString, err.Error())
 }
 
 func TestSpinifex_NoAccountID(t *testing.T) {

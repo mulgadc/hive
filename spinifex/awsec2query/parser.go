@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-// ErrSliceTooLarge is returned by QueryParamsToStruct when a single indexed
-// list (Prefix.N or Prefix.member.N) contains more than maxSliceLen contiguous
-// entries. Callers should map this to AWS's MalformedQueryString error code.
+// ErrSliceTooLarge is returned when a list exceeds maxSliceLen entries.
+// Callers should map this to AWS's MalformedQueryString error code.
 var ErrSliceTooLarge = errors.New("list parameter exceeds maximum entries")
 
 /*
@@ -191,10 +190,8 @@ func setFieldValue(field reflect.Value, value string) error {
 	return nil
 }
 
-// maxSliceLen bounds the size of any single Prefix.N / Prefix.member.N list
-// we will materialise. Without this an adversarial caller could submit
-// `Filter.1`…`Filter.999999` and force a huge allocation; AWS rejects oversized
-// lists, so erroring here matches AWS-parity intent and provides DoS protection.
+// maxSliceLen caps list materialisation to prevent unbounded allocation
+// from adversarial indexes like `Filter.999999`.
 const maxSliceLen = 1024
 
 func setSliceField(field reflect.Value, params map[string]string, prefix string) error {
@@ -225,9 +222,7 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 		return nil
 	}
 
-	// AWS stops list parsing at the first gap: Filter.1, Filter.3 yields one
-	// entry, not three with a phantom zero-value slot at index 2. Walk
-	// contiguous indices from 1; reject runs that exceed maxSliceLen.
+	// AWS stops at the first gap: Filter.1, Filter.3 yields one entry, not three.
 	denseLen := 0
 	for indices[denseLen+1] {
 		denseLen++

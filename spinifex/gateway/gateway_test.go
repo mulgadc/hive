@@ -72,8 +72,8 @@ func TestGenerateEC2ErrorResponse_Structure(t *testing.T) {
 			// Verify request ID
 			assert.Contains(t, xmlStr, "<RequestID>"+tc.requestID+"</RequestID>")
 
-			// Verify root element with EC2 xmlns (AWS SDK clients expect this)
-			assert.Contains(t, xmlStr, `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+			// Verify root element
+			assert.Contains(t, xmlStr, `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
 			assert.Contains(t, xmlStr, "</ErrorResponse>")
 
 			// Verify Errors wrapper
@@ -137,8 +137,6 @@ func TestGenerateIAMErrorResponse_Structure(t *testing.T) {
 			// Verify XML header
 			assert.True(t, strings.HasPrefix(xmlStr, xml.Header))
 
-			// IAM and EC2 both use <ErrorResponse> root; IAM has <Type>Sender</Type>
-			// while EC2 has <Errors><Error>… — distinguish by structure, not root tag.
 			assert.Contains(t, xmlStr, "<ErrorResponse>")
 			assert.Contains(t, xmlStr, "</ErrorResponse>")
 
@@ -205,8 +203,7 @@ func TestErrorHandler_UnknownError(t *testing.T) {
 	xmlStr := string(body)
 	// Unknown errors should be remapped to InternalError
 	assert.Contains(t, xmlStr, "<Code>InternalError</Code>")
-	// EC2 format: <ErrorResponse xmlns="…"><Errors><Error>…
-	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
 	assert.Contains(t, xmlStr, "<Errors>")
 }
 
@@ -225,8 +222,7 @@ func TestErrorHandler_EC2Service(t *testing.T) {
 
 	body, _ := io.ReadAll(resp.Body)
 	xmlStr := string(body)
-	// EC2 uses <ErrorResponse xmlns="…"><Errors><Error>… (matches AWS SDK expectation)
-	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
 	assert.Contains(t, xmlStr, "<Errors>")
 	assert.Contains(t, xmlStr, "<Code>InvalidParameterValue</Code>")
 }
@@ -544,11 +540,6 @@ func TestRequest_UnsupportedService(t *testing.T) {
 	assert.Contains(t, string(body), "UnsupportedOperation")
 }
 
-// TestRequest_MalformedQueryString_EndToEnd verifies that malformed percent-
-// encoding produces a 400 response with code MalformedQueryString through the
-// full Request → ErrorHandler path on every dispatcher. The per-handler tests
-// only assert the returned error string; this asserts the HTTP code mapping
-// from awserrors.ErrorLookup also reaches the wire.
 func TestRequest_MalformedQueryString_EndToEnd(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -592,8 +583,6 @@ func TestRequest_EC2MissingAction(t *testing.T) {
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, 400, resp.StatusCode)
-	// AWS-correct: empty body has no Action parameter → MissingAction.
-	// Action present but unknown is the InvalidAction case (covered separately).
 	assert.Contains(t, string(body), "MissingAction")
 }
 
@@ -655,17 +644,6 @@ func TestEC2Request_UnknownAction(t *testing.T) {
 	err := gw.EC2_Request(w, req)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAction, err.Error())
-}
-
-func TestEC2Request_MalformedQueryString(t *testing.T) {
-	// AWS returns MalformedQueryString (400) when percent-encoding is invalid.
-	gw := &GatewayConfig{DisableLogging: true}
-	req := setupEC2Request("Action=DescribeInstances&Bad=%ZZ", "123456789012")
-	w := httptest.NewRecorder()
-
-	err := gw.EC2_Request(w, req)
-	require.Error(t, err)
-	assert.Equal(t, awserrors.ErrorMalformedQueryString, err.Error())
 }
 
 func TestEC2Request_NilNATSNonLocalAction(t *testing.T) {
@@ -1165,7 +1143,7 @@ func TestWriteThrottleError_EC2(t *testing.T) {
 	assert.Equal(t, 503, resp.StatusCode)
 	assert.Equal(t, "application/xml", resp.Header.Get("Content-Type"))
 	assert.Contains(t, string(body), "<Code>RequestLimitExceeded</Code>")
-	assert.Contains(t, string(body), `<ErrorResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">`)
+	assert.Contains(t, string(body), `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
 }
 
 func TestWriteThrottleError_IAM(t *testing.T) {
@@ -1180,8 +1158,7 @@ func TestWriteThrottleError_IAM(t *testing.T) {
 
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
-	// AWS returns 503 for Throttling on every service (including IAM); this
-	// matters because TF respects 503-with-Retry-After and gives up on 400.
+	// AWS returns 503 for Throttling on every service; TF respects 503 + Retry-After but gives up on 400.
 	assert.Equal(t, 503, resp.StatusCode)
 	assert.Contains(t, string(body), "<Code>Throttling</Code>")
 	assert.Contains(t, string(body), "<ErrorResponse>")

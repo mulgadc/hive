@@ -61,14 +61,8 @@ var supportedServices = map[string]bool{
 	"spinifex":             true,
 }
 
-// xmlnsEC2 is the XML namespace AWS SDK clients expect on EC2 query-protocol
-// error responses. ELBv2 / Account / Spinifex share the EC2 query envelope
-// here for now; per-service namespaces can be added as a follow-up.
 const xmlnsEC2 = "http://ec2.amazonaws.com/doc/2016-11-15/"
 
-// ErrorResponse is the EC2 query-protocol error envelope. The xmlns is baked
-// into XMLName so every marshal emits the namespace attribute — callers can't
-// accidentally construct an envelope without it.
 type ErrorResponse struct {
 	XMLName   xml.Name `xml:"http://ec2.amazonaws.com/doc/2016-11-15/ ErrorResponse"`
 	Errors    Errors   `xml:"Errors"`
@@ -156,8 +150,6 @@ func (gw *GatewayConfig) throttleKeyFuncs() []ratelimit.KeyFunc {
 }
 
 // writeThrottleError writes the service-appropriate throttle rejection response.
-// HTTPCode comes from awserrors.ErrorLookup so any change there (e.g. Throttling
-// 400→503 to match AWS) is reflected here without further edits.
 func (gw *GatewayConfig) writeThrottleError(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.NewString()
 	svc, _ := r.Context().Value(ctxService).(string)
@@ -341,10 +333,8 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 	}
 }
 
-// readQueryArgs returns the parsed query args for the request, reading them
-// from context if SigV4 auth already parsed them, otherwise reading the body
-// and parsing once. This avoids the dispatchers re-doing work the middleware
-// already did (every authenticated request is otherwise parsed twice).
+// readQueryArgs returns parsed query args from context (set by SigV4) or
+// parses the body. The fallback only fires for unauthenticated/test paths.
 func readQueryArgs(r *http.Request) (map[string]string, error) {
 	if args, ok := r.Context().Value(ctxQueryArgs).(map[string]string); ok {
 		return args, nil
@@ -356,9 +346,8 @@ func readQueryArgs(r *http.Request) (map[string]string, error) {
 	return ParseAWSQueryArgs(string(body))
 }
 
-// ParseAWSQueryArgs parses an AWS query-protocol body (application/x-www-form-urlencoded
-// key=value pairs joined by '&'). Returns MalformedQueryString-style errors when keys
-// or values contain invalid percent-encoding so callers can surface AWS-correct error codes.
+// ParseAWSQueryArgs parses an AWS query-protocol body. Returns an error on
+// invalid percent-encoding so callers can surface MalformedQueryString.
 func ParseAWSQueryArgs(query string) (map[string]string, error) {
 	params := make(map[string]string)
 	pairs := strings.SplitSeq(query, "&")
