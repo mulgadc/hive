@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -32,12 +33,22 @@ const (
 	TopicDeleteNATGateway = "vpc.delete-nat-gateway"
 )
 
-// gatewayPortNetwork is the link-local CIDR every IGW gateway-LRP carries.
-// Pool IPs are reserved for per-VM dnat_and_snat external addresses; reusing
-// them on the LRP causes intra-cluster ARP collisions when multiple VPCs
-// share a br-ext localnet (mulga-siv-26). The default route's OutputPort is
-// set explicitly so the WAN nexthop need not be on this subnet.
+// gatewayPortNetwork is the link-local CIDR every IGW gateway-LRP carries
+// in distributed-NAT (direct) mode. Per-VM dnat_and_snat handles ARP per
+// chassis so the LRP IP itself never goes on the wire. The default route's
+// OutputPort is set explicitly so the WAN nexthop need not be on this subnet.
+//
+// Centralized-NAT (veth/macvlan) bypasses this constant: the gateway LRP is
+// the on-wire egress point and must hold a WAN-subnet IP from the pool's
+// gw_lrp_range, otherwise the upstream router silently drops ARP requests
+// from an off-subnet sender (RFC 826) and the default route never resolves
+// (mulga-siv-36).
 const gatewayPortNetwork = "169.254.0.1/30"
+
+// gatewayIPExtID is the LRP external_ids key holding the gw IP allocated
+// from the pool's gw_lrp_range. Persisted so reconcile/retrofit can recover
+// the assignment without re-allocating, and so siblings see it as "used".
+const gatewayIPExtID = "spinifex:gateway_ip"
 
 // VPCEvent is published on vpc.create after a VPC is persisted.
 type VPCEvent struct {
@@ -107,6 +118,11 @@ type TopologyHandler struct {
 	externalPools []ExternalPoolConfig
 	chassisNames  []string // OVN chassis names for gateway HA scheduling
 	bridgeMode    string   // "direct" or "macvlan" — controls NAT mode and localnet options
+	// nc is used to talk to vpcd's DHCPManager via vpc.dhcp.acquire /
+	// vpc.dhcp.release for gateway LRP IPs in centralized NAT on
+	// source="dhcp" pools (mulga-siv-38). nil when no DHCP pool is wired or
+	// the test stack supplies a static-only mock.
+	nc *nats.Conn
 }
 
 // NewTopologyHandler creates a new TopologyHandler with optional external network config.
@@ -142,6 +158,15 @@ func WithChassisNames(names []string) TopologyOption {
 func WithBridgeMode(mode string) TopologyOption {
 	return func(h *TopologyHandler) {
 		h.bridgeMode = mode
+	}
+}
+
+// WithNATSConn wires the NATS connection used to talk to vpcd's DHCPManager
+// for gateway-LRP DHCP-acquire (mulga-siv-38). Tests with mock OVN clients
+// can omit this — the static / auto-derive paths still work.
+func WithNATSConn(nc *nats.Conn) TopologyOption {
+	return func(h *TopologyHandler) {
+		h.nc = nc
 	}
 }
 
@@ -202,22 +227,81 @@ func (h *TopologyHandler) ensureLocalnetOptions(ctx context.Context, extPortName
 	return nil
 }
 
+// expectedGatewayPortNetwork returns the Networks CIDR a gateway LRP for
+// vpcId should carry. In direct mode, or in centralized mode without a pool,
+// it is the link-local fallback. In centralized mode with a DHCP pool the
+// gateway IP is acquired via vpc.dhcp.acquire (mulga-siv-38). With a static
+// pool the IP comes from gw_lrp_range or the auto-derived top-of-subnet
+// block (mulga-siv-36). Returns the gw IP (empty when link-local) so
+// callers can persist it to external_ids.
+func (h *TopologyHandler) expectedGatewayPortNetwork(ctx context.Context, vpcId string) (network, gwIP string, err error) {
+	if !h.useCentralizedNAT() {
+		return gatewayPortNetwork, "", nil
+	}
+	pool := h.findExternalPool("", "")
+	if pool == nil {
+		return gatewayPortNetwork, "", nil
+	}
+	if pool.IsDHCP() {
+		ip, prefix, dhcpErr := h.allocateGatewayLRPIPViaDHCP(ctx, vpcId, pool)
+		if dhcpErr != nil {
+			return "", "", dhcpErr
+		}
+		return fmt.Sprintf("%s/%d", ip, prefix), ip, nil
+	}
+	ip, prefix, ok, allocErr := h.allocateGatewayLRPIP(ctx, vpcId, pool)
+	if allocErr != nil {
+		return "", "", allocErr
+	}
+	if !ok {
+		return gatewayPortNetwork, "", nil
+	}
+	return fmt.Sprintf("%s/%d", ip, prefix), ip, nil
+}
+
 // ensureGatewayPortNetworks rewrites the gateway LRP's Networks column in
-// place when it drifts from the link-local CIDR. CreateLogicalRouterPort is
-// a no-op when the row exists, so reconcile of an upgraded cluster otherwise
-// keeps the old pool-IP networks (mulga-siv-26 D8). Idempotent — no UPDATE
-// is issued when already correct.
+// place when it drifts from the mode's expected value. CreateLogicalRouterPort
+// is a no-op when the row exists, so reconcile of an upgraded cluster
+// otherwise keeps the stale pool-IP networks (mulga-siv-26 D8) or, in
+// centralized NAT, the off-subnet link-local that breaks ARP upstream
+// (mulga-siv-36). Idempotent — no UPDATE is issued when already correct.
 func (h *TopologyHandler) ensureGatewayPortNetworks(ctx context.Context, gwPortName string) error {
 	lrp, err := h.ovn.GetLogicalRouterPort(ctx, gwPortName)
 	if err != nil {
 		return fmt.Errorf("get gateway router port %s: %w", gwPortName, err)
 	}
-	if len(lrp.Networks) == 1 && lrp.Networks[0] == gatewayPortNetwork {
+	vpcId := lrp.ExternalIDs["spinifex:vpc_id"]
+	if vpcId == "" {
+		// No VPC tag — this is from the legacy "gw-vpc-..." naming or a
+		// hand-edited row; fall back to link-local to keep behavior safe.
+		if len(lrp.Networks) == 1 && lrp.Networks[0] == gatewayPortNetwork {
+			return nil
+		}
+		slog.Info("vpcd: rewriting stale gateway port networks (no vpc_id tag)",
+			"port", gwPortName, "old", lrp.Networks, "new", gatewayPortNetwork)
+		lrp.Networks = []string{gatewayPortNetwork}
+		return h.ovn.UpdateLogicalRouterPort(ctx, lrp)
+	}
+	wantNetwork, wantGwIP, err := h.expectedGatewayPortNetwork(ctx, vpcId)
+	if err != nil {
+		return fmt.Errorf("compute expected network for %s: %w", gwPortName, err)
+	}
+	currentGwIP := lrp.ExternalIDs[gatewayIPExtID]
+	if len(lrp.Networks) == 1 && lrp.Networks[0] == wantNetwork && currentGwIP == wantGwIP {
 		return nil
 	}
 	slog.Info("vpcd: rewriting stale gateway port networks",
-		"port", gwPortName, "old", lrp.Networks, "new", gatewayPortNetwork)
-	lrp.Networks = []string{gatewayPortNetwork}
+		"port", gwPortName, "old", lrp.Networks, "new", wantNetwork,
+		"old_gw_ip", currentGwIP, "new_gw_ip", wantGwIP)
+	lrp.Networks = []string{wantNetwork}
+	if lrp.ExternalIDs == nil {
+		lrp.ExternalIDs = map[string]string{}
+	}
+	if wantGwIP == "" {
+		delete(lrp.ExternalIDs, gatewayIPExtID)
+	} else {
+		lrp.ExternalIDs[gatewayIPExtID] = wantGwIP
+	}
 	if err := h.ovn.UpdateLogicalRouterPort(ctx, lrp); err != nil {
 		return fmt.Errorf("update gateway router port %s: %w", gwPortName, err)
 	}
@@ -225,10 +309,10 @@ func (h *TopologyHandler) ensureGatewayPortNetworks(ctx context.Context, gwPortN
 }
 
 // RetrofitAllGatewayPortNetworks walks every LRP tagged
-// spinifex:role=gateway and ensures Networks is the link-local CIDR. Needed
+// spinifex:role=gateway and ensures Networks matches the current mode. Needed
 // because Reconcile/ReconcileFromKV early-return when the external switch
 // already exists, so reconcileIGW never runs against pre-existing topologies
-// shipped by the buggy pool-IP build (mulga-siv-26 D8). Idempotent — the
+// shipped by older builds (mulga-siv-26 D8 / mulga-siv-36). Idempotent — the
 // underlying ensureGatewayPortNetworks no-ops when already correct.
 func (h *TopologyHandler) RetrofitAllGatewayPortNetworks(ctx context.Context) {
 	lrps, err := h.ovn.ListLogicalRouterPorts(ctx)
@@ -804,37 +888,64 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		return
 	}
 
-	// Resolve external pool for this VPC's WAN nexthop. The router port
-	// itself always takes link-local 169.254.0.1/30 — pool IPs are reserved
-	// for per-VM dnat_and_snat external addresses (mulga-siv-26). Sharing a
-	// pool IP across VPCs causes intra-cluster ARP collisions on br-ext.
+	// Resolve external pool for this VPC's WAN nexthop and gw LRP IP.
+	//
+	// Direct mode: link-local LRP is fine — distributed NAT puts a per-VM
+	// dnat_and_snat row with external_mac/logical_port on every chassis, so
+	// the LRP IP itself never goes on the wire.
+	//
+	// Centralized mode (veth/macvlan): the LRP is the on-wire egress, so it
+	// must hold a WAN-subnet IP. Allocate one from pool.GwLrpRange (or
+	// auto-derive from the WAN subnet) so each VPC gets a distinct sender
+	// IP (mulga-siv-36). Without this the upstream router silently drops
+	// ARP for the WAN nexthop (RFC 826) and the default route never
+	// resolves.
 	// TODO: use VPC's region/AZ once we track it; for now use first matching pool.
 	pool := h.findExternalPool("", "")
 	gatewayNetwork := gatewayPortNetwork
 	wanGateway := "169.254.0.2"
+	gwLrpIP := ""
 
-	if pool != nil {
+	switch {
+	case pool != nil:
 		wanGateway = pool.Gateway
+		if h.useCentralizedNAT() {
+			network, ip, allocErr := h.expectedGatewayPortNetwork(ctx, evt.VpcId)
+			if allocErr != nil {
+				slog.Error("vpcd: failed to allocate gw LRP IP for centralized NAT",
+					"vpc_id", evt.VpcId, "pool", pool.Name, "err", allocErr)
+				_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+				respond(msg, allocErr)
+				return
+			}
+			gwLrpIP = ip
+			gatewayNetwork = network
+		}
 		slog.Info("vpcd: using external pool for IGW",
 			"pool", pool.Name,
+			"source", pool.Source,
 			"lrp_network", gatewayNetwork,
 			"wan_gateway", wanGateway,
 		)
-	} else if h.externalMode == "pool" {
+	case h.externalMode == "pool":
 		slog.Warn("vpcd: external mode is set but no matching pool found, using link-local fallback")
 	}
 
 	// 3. Create gateway router port on the VPC router connecting to external switch
 	gwMAC := generateMAC("gw-" + evt.VpcId)
+	lrpExtIDs := map[string]string{
+		"spinifex:vpc_id": evt.VpcId,
+		"spinifex:igw_id": evt.InternetGatewayId,
+		"spinifex:role":   "gateway",
+	}
+	if gwLrpIP != "" {
+		lrpExtIDs[gatewayIPExtID] = gwLrpIP
+	}
 	lrp := &nbdb.LogicalRouterPort{
-		Name:     gwPortName,
-		MAC:      gwMAC,
-		Networks: []string{gatewayNetwork},
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:igw_id": evt.InternetGatewayId,
-			"spinifex:role":   "gateway",
-		},
+		Name:        gwPortName,
+		MAC:         gwMAC,
+		Networks:    []string{gatewayNetwork},
+		ExternalIDs: lrpExtIDs,
 	}
 	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
 		slog.Error("vpcd: failed to create gateway router port", "port", gwPortName, "err", err)
@@ -981,6 +1092,10 @@ func (h *TopologyHandler) handleIGWDetach(msg *nats.Msg) {
 		respond(msg, err)
 		return
 	}
+
+	// 7. Release any DHCP-acquired gateway LRP lease (mulga-siv-38). Best-
+	//    effort — upstream server expires the lease on its own if this fails.
+	h.releaseGatewayLRPLease(evt.VpcId)
 
 	slog.Info("vpcd: detached internet gateway from VPC",
 		"igw_id", evt.InternetGatewayId,
@@ -1194,13 +1309,22 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	gwPortName := "gw-" + vpcId
 	switchGWPortName := "gw-port-" + vpcId
 
-	// Router port always link-local; pool IPs reserved for per-VM
-	// dnat_and_snat external addresses (mulga-siv-26).
+	// Direct mode: link-local LRP. Centralized mode: allocate from
+	// pool.GwLrpRange so the LRP can ARP on the WAN subnet (mulga-siv-36).
 	pool := h.findExternalPool("", "")
 	gatewayNetwork := gatewayPortNetwork
 	wanGateway := "169.254.0.2"
+	gwLrpIP := ""
 	if pool != nil {
 		wanGateway = pool.Gateway
+		if h.useCentralizedNAT() {
+			network, ip, allocErr := h.expectedGatewayPortNetwork(ctx, vpcId)
+			if allocErr != nil {
+				return fmt.Errorf("allocate gw LRP IP for %s: %w", vpcId, allocErr)
+			}
+			gwLrpIP = ip
+			gatewayNetwork = network
+		}
 	}
 
 	// Build external IDs with optional IGW ID
@@ -1252,14 +1376,18 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 
 	// 3. Create gateway router port
 	gwMAC := generateMAC("gw-" + vpcId)
+	reconcileLrpExtIDs := map[string]string{
+		"spinifex:vpc_id": vpcId,
+		"spinifex:role":   "gateway",
+	}
+	if gwLrpIP != "" {
+		reconcileLrpExtIDs[gatewayIPExtID] = gwLrpIP
+	}
 	lrp := &nbdb.LogicalRouterPort{
-		Name:     gwPortName,
-		MAC:      gwMAC,
-		Networks: []string{gatewayNetwork},
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": vpcId,
-			"spinifex:role":   "gateway",
-		},
+		Name:        gwPortName,
+		MAC:         gwMAC,
+		Networks:    []string{gatewayNetwork},
+		ExternalIDs: reconcileLrpExtIDs,
 	}
 	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
 		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
@@ -1386,6 +1514,220 @@ func (h *TopologyHandler) reconcileGatewayChassis(ctx context.Context, validName
 }
 
 // --- Helpers ---
+
+// gwLrpRange returns the per-VPC gateway LRP IP range for a pool. Priority:
+//
+//  1. Explicit pool.GwLrpRangeStart/End set in spinifex.toml.
+//  2. Auto-derived from pool.Gateway + pool.PrefixLen — last 16 host IPs of
+//     the WAN subnet (broadcast - 16 .. broadcast - 1). When that range
+//     overlaps the per-VM EIP range (RangeStart..RangeEnd), shift to the
+//     16 IPs immediately below RangeStart instead.
+//
+// Returns ok=false only when the pool is missing or the gateway/prefix is
+// unparseable — link-local has no role here, the WAN-subnet IP is the only
+// thing the upstream router will ARP-resolve.
+func gwLrpRange(pool *ExternalPoolConfig) (start, end net.IP, prefix int, ok bool) {
+	if pool == nil {
+		return nil, nil, 0, false
+	}
+	prefix = pool.PrefixLen
+	if prefix <= 0 || prefix > 32 {
+		prefix = 24
+	}
+
+	// 1. Explicit operator config wins.
+	if pool.GwLrpRangeStart != "" || pool.GwLrpRangeEnd != "" {
+		s := net.ParseIP(pool.GwLrpRangeStart).To4()
+		e := net.ParseIP(pool.GwLrpRangeEnd).To4()
+		if s != nil && e != nil && ipv4ToUint32(s) <= ipv4ToUint32(e) {
+			return s, e, prefix, true
+		}
+		slog.Warn("vpcd: invalid explicit gw_lrp_range, attempting auto-derive",
+			"pool", pool.Name, "start", pool.GwLrpRangeStart, "end", pool.GwLrpRangeEnd)
+	}
+
+	// 2. Auto-derive from subnet.
+	gw := net.ParseIP(pool.Gateway).To4()
+	if gw == nil {
+		return nil, nil, 0, false
+	}
+	mask := net.CIDRMask(prefix, 32)
+	network := gw.Mask(mask)
+	bcast := make(net.IP, 4)
+	for i := range 4 {
+		bcast[i] = network[i] | ^mask[i]
+	}
+	bcastU := ipv4ToUint32(bcast)
+	if bcastU < 17 {
+		return nil, nil, 0, false
+	}
+	autoEndU := bcastU - 1    // skip broadcast itself
+	autoStartU := bcastU - 16 // 16-IP range
+
+	// Shift below per-VM EIP range when overlap.
+	if pool.RangeStart != "" && pool.RangeEnd != "" {
+		rs := net.ParseIP(pool.RangeStart).To4()
+		re := net.ParseIP(pool.RangeEnd).To4()
+		if rs != nil && re != nil {
+			rsU := ipv4ToUint32(rs)
+			reU := ipv4ToUint32(re)
+			if autoEndU >= rsU && autoStartU <= reU {
+				if rsU < 17 {
+					return nil, nil, 0, false
+				}
+				autoEndU = rsU - 1
+				autoStartU = rsU - 16
+			}
+		}
+	}
+
+	// Clamp inside the subnet (network+1 .. broadcast-1) — never hand out
+	// the network address, the broadcast, or an off-subnet IP.
+	netU := ipv4ToUint32(network)
+	if autoStartU <= netU {
+		autoStartU = netU + 1
+	}
+	if autoEndU >= bcastU {
+		autoEndU = bcastU - 1
+	}
+	if autoStartU > autoEndU {
+		return nil, nil, 0, false
+	}
+
+	// Guard the gateway IP itself — never give a VPC the upstream nexthop.
+	gwU := ipv4ToUint32(gw)
+	if gwU >= autoStartU && gwU <= autoEndU {
+		// Gateway is inside the auto range — shrink to exclude it.
+		switch gwU {
+		case autoStartU:
+			autoStartU++
+		case autoEndU:
+			autoEndU--
+		default:
+			// Gateway in the middle: prefer the upper half.
+			autoStartU = gwU + 1
+		}
+		if autoStartU > autoEndU {
+			return nil, nil, 0, false
+		}
+	}
+
+	return uint32ToIPv4(autoStartU), uint32ToIPv4(autoEndU), prefix, true
+}
+
+// gwLrpClientID is the DHCP client-id used for a VPC's gateway LRP lease.
+// Stable across reboots — DHCPManager reuses the same lease on idempotent
+// re-attach so the LRP IP doesn't change unless the upstream server
+// reassigns it.
+func gwLrpClientID(vpcId string) string { return "gw-lrp-" + vpcId }
+
+// allocateGatewayLRPIPViaDHCP requests a DHCP lease from vpcd's DHCPManager
+// for the gateway LRP of vpcId. The handler-side acquire is idempotent on
+// client-id so retries return the same IP without a fresh DORA. Prefix
+// comes from the lease's SubnetMask, falling back to pool.PrefixLen when
+// the server omits option 1 (rare; should not happen in practice).
+func (h *TopologyHandler) allocateGatewayLRPIPViaDHCP(ctx context.Context, vpcId string, pool *ExternalPoolConfig) (ip string, prefix int, err error) {
+	_ = ctx
+	if h.nc == nil {
+		return "", 0, fmt.Errorf("vpcd: no NATS conn for DHCP gw LRP allocation (vpc %s, pool %s)", vpcId, pool.Name)
+	}
+	clientID := gwLrpClientID(vpcId)
+	hostname := "spinifex-gw-" + vpcId
+	vendorClass := "mulga-spinifex-gw-lrp"
+	lease, dhcpErr := dhcp.RequestAcquire(h.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, pool.Name)
+	if dhcpErr != nil {
+		return "", 0, fmt.Errorf("dhcp acquire gw LRP IP for vpc %s: %w", vpcId, dhcpErr)
+	}
+	prefix = prefixFromMask(lease.SubnetMask)
+	if prefix == 0 {
+		prefix = pool.PrefixLen
+	}
+	if prefix <= 0 || prefix > 32 {
+		return "", 0, fmt.Errorf("dhcp gw LRP for vpc %s: cannot determine prefix (mask=%q pool prefix=%d)", vpcId, lease.SubnetMask, pool.PrefixLen)
+	}
+	return lease.IP, prefix, nil
+}
+
+// releaseGatewayLRPLease asks vpcd's DHCPManager to drop the lease held for
+// vpcId's gateway LRP. Best-effort — log on failure but never block IGW
+// detach, since the upstream server will eventually expire the lease on
+// its own.
+func (h *TopologyHandler) releaseGatewayLRPLease(vpcId string) {
+	if h.nc == nil {
+		return
+	}
+	if err := dhcp.RequestRelease(h.nc, gwLrpClientID(vpcId)); err != nil {
+		slog.Warn("vpcd: dhcp release for gw LRP failed", "vpc_id", vpcId, "err", err)
+	}
+}
+
+// prefixFromMask converts a dotted-decimal mask ("255.255.255.0") to a
+// prefix length. Returns 0 when the mask is empty or unparseable.
+func prefixFromMask(mask string) int {
+	if mask == "" {
+		return 0
+	}
+	ip := net.ParseIP(mask).To4()
+	if ip == nil {
+		return 0
+	}
+	ones, bits := net.IPMask(ip).Size()
+	if bits != 32 {
+		return 0
+	}
+	return ones
+}
+
+// allocateGatewayLRPIP picks the next free IP in pool.GwLrpRange for the
+// given VPC, scanning every existing LRP's spinifex:gateway_ip external_id
+// to compute the used set. If gw-<vpcId> already has an allocation the
+// existing IP is returned (idempotent reconcile). Returns ok=false when
+// the pool has no gw_lrp_range — caller falls back to link-local.
+func (h *TopologyHandler) allocateGatewayLRPIP(ctx context.Context, vpcId string, pool *ExternalPoolConfig) (ip string, prefix int, ok bool, err error) {
+	start, end, prefix, ok := gwLrpRange(pool)
+	if !ok {
+		return "", 0, false, nil
+	}
+
+	gwPortName := "gw-" + vpcId
+	lrps, err := h.ovn.ListLogicalRouterPorts(ctx)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("list LRPs for gw IP allocation: %w", err)
+	}
+	used := make(map[uint32]struct{}, len(lrps))
+	for _, lrp := range lrps {
+		existing := lrp.ExternalIDs[gatewayIPExtID]
+		if existing == "" {
+			continue
+		}
+		if lrp.Name == gwPortName {
+			// Idempotent: already allocated to this VPC.
+			return existing, prefix, true, nil
+		}
+		if v := net.ParseIP(existing).To4(); v != nil {
+			used[ipv4ToUint32(v)] = struct{}{}
+		}
+	}
+
+	startU := ipv4ToUint32(start)
+	endU := ipv4ToUint32(end)
+	for n := startU; n <= endU; n++ {
+		if _, taken := used[n]; taken {
+			continue
+		}
+		return uint32ToIPv4(n).String(), prefix, true, nil
+	}
+	return "", 0, false, fmt.Errorf("gw_lrp_range exhausted for pool %q (%s-%s)", pool.Name, pool.GwLrpRangeStart, pool.GwLrpRangeEnd)
+}
+
+func ipv4ToUint32(ip net.IP) uint32 {
+	v := ip.To4()
+	return uint32(v[0])<<24 | uint32(v[1])<<16 | uint32(v[2])<<8 | uint32(v[3])
+}
+
+func uint32ToIPv4(n uint32) net.IP {
+	return net.IPv4(byte(n>>24&0xff), byte(n>>16&0xff), byte(n>>8&0xff), byte(n&0xff)).To4()
+}
 
 // subnetGateway computes the gateway IP (.1) from a CIDR string.
 // Returns the gateway IP string and the prefix length.

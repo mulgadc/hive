@@ -32,9 +32,16 @@ type DHCPManager struct {
 	// HWAddr unset. Defaults to generateMAC; tests override.
 	macForClientID func(clientID string) net.HardwareAddr
 
-	// acquireTimeout bounds a single DORA (Acquire) / Renew / Release
-	// handshake. Independent of the RPC reply timeout on the handler side.
+	// acquireTimeout is the wallclock budget for a full Acquire — sum of
+	// every retransmit attempt in acquireBackoff plus slack. Renew/Release
+	// reuse this as their single-attempt deadline.
 	acquireTimeout time.Duration
+
+	// acquireBackoff drives the per-DISCOVER timeouts used by
+	// acquireWithBackoff (RFC 2131 §4.1 retransmission). Each entry is
+	// the wait-for-OFFER window for one attempt; the next entry doubles.
+	// Default: 4s, 8s, 16s, 32s. ±1s jitter applied per attempt.
+	acquireBackoff []time.Duration
 
 	// jitterFraction is the ± range applied to renewal sleeps, expressed
 	// as a fraction of T1 (0.1 = ±10%).
@@ -69,9 +76,17 @@ func WithDHCPMACFunc(fn func(clientID string) net.HardwareAddr) DHCPManagerOptio
 	return func(m *DHCPManager) { m.macForClientID = fn }
 }
 
-// WithDHCPAcquireTimeout overrides the per-handshake DORA timeout.
+// WithDHCPAcquireTimeout overrides the wallclock budget for a full Acquire
+// (sum of every retransmit attempt + slack). Renew/Release reuse it.
 func WithDHCPAcquireTimeout(d time.Duration) DHCPManagerOption {
 	return func(m *DHCPManager) { m.acquireTimeout = d }
+}
+
+// WithDHCPAcquireBackoff overrides the per-DISCOVER timeout schedule used
+// by acquireWithBackoff. Tests use a tight schedule; production keeps the
+// RFC 2131 §4.1 default (4s, 8s, 16s, 32s with ±1s jitter).
+func WithDHCPAcquireBackoff(b []time.Duration) DHCPManagerOption {
+	return func(m *DHCPManager) { m.acquireBackoff = b }
 }
 
 // WithDHCPJitterFraction overrides the ±fraction applied to renewal sleeps.
@@ -108,10 +123,18 @@ func NewDHCPManager(nc *nats.Conn, js nats.JetStreamContext, client dhcp.Client,
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &DHCPManager{
-		client:         client,
-		kv:             kv,
-		nc:             nc,
-		acquireTimeout: 15 * time.Second,
+		client: client,
+		kv:     kv,
+		nc:     nc,
+		// 90s = sum of default acquireBackoff (4+8+16+32 = 60s) + slack for
+		// socket open/close on each attempt and the final ACK round-trip.
+		acquireTimeout: 90 * time.Second,
+		acquireBackoff: []time.Duration{
+			4 * time.Second,
+			8 * time.Second,
+			16 * time.Second,
+			32 * time.Second,
+		},
 		jitterFraction: 0.1,
 		rng:            rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0xdeadbeef)), //nolint:gosec // non-cryptographic jitter
 		leases:         map[string]*managedLease{},
@@ -245,7 +268,7 @@ func (m *DHCPManager) handleAcquire(msg *nats.Msg) {
 	defer m.endAcquire(req.Bridge)
 	start := time.Now()
 
-	lease, err := m.client.Acquire(ctx, dhcp.AcquireRequest{
+	lease, err := m.acquireWithBackoff(ctx, dhcp.AcquireRequest{
 		Bridge:      req.Bridge,
 		ClientID:    req.ClientID,
 		Hostname:    req.Hostname,
@@ -390,6 +413,73 @@ func (m *DHCPManager) renewLoop(ctx context.Context, tracker *managedLease) {
 		m.forget(lease.ClientID, "expired")
 		return
 	}
+}
+
+// acquireWithBackoff drives RFC 2131 §4.1 DISCOVER retransmission. Each
+// entry in acquireBackoff sets one attempt's per-OFFER wait window with
+// ±1s jitter; on timeout the loop tries the next entry. Returns on first
+// success, on parent ctx cancellation, or after the schedule is exhausted.
+//
+// Real DHCP servers (consumer routers, ISC dhcpd, dnsmasq) silently drop
+// OFFERs under load — without retransmission a single lost packet kills
+// the whole DORA. mulga-siv-39.
+func (m *DHCPManager) acquireWithBackoff(parent context.Context, req dhcp.AcquireRequest) (*dhcp.Lease, error) {
+	schedule := m.acquireBackoff
+	if len(schedule) == 0 {
+		// Defensive: caller passed an empty schedule via WithDHCPAcquireBackoff.
+		// Fall through to a single attempt bounded by parent ctx.
+		schedule = []time.Duration{0}
+	}
+
+	var lastErr error
+	for i, base := range schedule {
+		if err := parent.Err(); err != nil {
+			if lastErr != nil {
+				return nil, fmt.Errorf("dhcp acquire on %s (client=%s): %w (last attempt err: %v)", req.Bridge, req.ClientID, err, lastErr)
+			}
+			return nil, fmt.Errorf("dhcp acquire on %s (client=%s): %w", req.Bridge, req.ClientID, err)
+		}
+
+		attemptTimeout := m.dhcpAttemptTimeout(base)
+		var (
+			ctx    context.Context
+			cancel context.CancelFunc
+		)
+		if attemptTimeout > 0 {
+			ctx, cancel = context.WithTimeout(parent, attemptTimeout)
+		} else {
+			ctx, cancel = context.WithCancel(parent)
+		}
+
+		lease, err := m.client.Acquire(ctx, req)
+		cancel()
+		if err == nil {
+			return lease, nil
+		}
+		lastErr = err
+
+		if i < len(schedule)-1 {
+			slog.Debug("DHCP Manager: DORA retransmit",
+				"client_id", req.ClientID, "bridge", req.Bridge,
+				"attempt", i+1, "next_timeout", m.dhcpAttemptTimeout(schedule[i+1]),
+				"prev_err", err)
+		}
+	}
+	return nil, lastErr
+}
+
+// dhcpAttemptTimeout applies ±1s jitter to a base DISCOVER timeout.
+// Pass 0 to disable timeout (used when schedule is empty fallback).
+func (m *DHCPManager) dhcpAttemptTimeout(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	jitter := time.Duration((m.rng.Float64()*2 - 1) * float64(time.Second))
+	out := base + jitter
+	if out <= 0 {
+		return base
+	}
+	return out
 }
 
 // tryRenew calls the backend Renew under a bounded context.

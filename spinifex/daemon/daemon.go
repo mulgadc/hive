@@ -692,16 +692,18 @@ func (d *Daemon) Start() error {
 			}
 			for _, p := range d.clusterConfig.Network.ExternalPools {
 				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
-					Name:           p.Name,
-					Source:         p.Source,
-					RangeStart:     p.RangeStart,
-					RangeEnd:       p.RangeEnd,
-					Gateway:        p.Gateway,
-					GatewayIP:      p.GatewayIP,
-					PrefixLen:      p.PrefixLen,
-					Region:         p.Region,
-					AZ:             p.AZ,
-					DhcpBindBridge: dhcpBindBridge,
+					Name:            p.Name,
+					Source:          p.Source,
+					RangeStart:      p.RangeStart,
+					RangeEnd:        p.RangeEnd,
+					Gateway:         p.Gateway,
+					GatewayIP:       p.GatewayIP,
+					PrefixLen:       p.PrefixLen,
+					Region:          p.Region,
+					AZ:              p.AZ,
+					DhcpBindBridge:  dhcpBindBridge,
+					GwLrpRangeStart: p.GwLrpRangeStart,
+					GwLrpRangeEnd:   p.GwLrpRangeEnd,
 				})
 			}
 			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(d.natsConn, js, pools)

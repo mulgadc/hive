@@ -9,6 +9,7 @@ import (
 	"net"
 
 	"github.com/mulgadc/spinifex/spinifex/migrate"
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -28,7 +29,7 @@ type ExternalIPAllocation struct {
 	Note         string `json:"note,omitempty"`          // Human-readable note
 
 	// DHCP-sourced metadata — set only for allocations whose pool has
-	// source="dhcp" (see ObtainDHCPLease). These fields let describe
+	// source="dhcp" (see dhcp.RequestAcquire). These fields let describe
 	// surfaces and operators trace a given IP back to the upstream lease
 	// without re-querying vpcd.
 	LeaseExpiresUnix int64  `json:"lease_expires_unix,omitempty"` // Absolute expiry from the server's ACK
@@ -38,16 +39,21 @@ type ExternalIPAllocation struct {
 
 // ExternalIPAMRecord tracks allocated external IPs for a single pool.
 type ExternalIPAMRecord struct {
-	PoolName   string                          `json:"pool_name"`
-	Source     string                          `json:"source"` // "static" (default) or "dhcp"
-	RangeStart string                          `json:"range_start"`
-	RangeEnd   string                          `json:"range_end"`
-	Gateway    string                          `json:"gateway"`
-	GatewayIP  string                          `json:"gateway_ip"`
-	PrefixLen  int                             `json:"prefix_len"`
-	Region     string                          `json:"region,omitempty"`
-	AZ         string                          `json:"az,omitempty"`
-	Allocated  map[string]ExternalIPAllocation `json:"allocated"`
+	PoolName   string `json:"pool_name"`
+	Source     string `json:"source"` // "static" (default) or "dhcp"
+	RangeStart string `json:"range_start"`
+	RangeEnd   string `json:"range_end"`
+	Gateway    string `json:"gateway"`
+	GatewayIP  string `json:"gateway_ip"`
+	PrefixLen  int    `json:"prefix_len"`
+	Region     string `json:"region,omitempty"`
+	AZ         string `json:"az,omitempty"`
+	// GwLrpRangeStart/End mirrors ExternalPoolConfig — IPAM skips this
+	// sub-range so it doesn't collide with vpcd's gateway LRP IPs in
+	// centralized NAT (mulga-siv-36).
+	GwLrpRangeStart string                          `json:"gw_lrp_range_start,omitempty"`
+	GwLrpRangeEnd   string                          `json:"gw_lrp_range_end,omitempty"`
+	Allocated       map[string]ExternalIPAllocation `json:"allocated"`
 }
 
 // ExternalPoolConfig is the admin-defined pool from spinifex.toml.
@@ -62,6 +68,11 @@ type ExternalPoolConfig struct {
 	Region         string
 	AZ             string
 	DhcpBindBridge string // Bridge where the DHCP AF_PACKET socket binds (e.g. "br-wan"). Linux bridge in veth mode; OVS bridge in direct mode. Never "br-ext".
+	// GwLrpRangeStart/End reserves a sub-range of the LAN for OVN gateway
+	// LRP IPs in centralized NAT mode (mulga-siv-36). IPAM must skip these
+	// addresses or the per-VM EIP allocator and vpcd will fight over them.
+	GwLrpRangeStart string
+	GwLrpRangeEnd   string
 }
 
 // IsDHCP returns true if this pool obtains IPs from router DHCP.
@@ -122,15 +133,20 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	}
 
 	if err == nil {
-		if chk.RangeStart != pool.RangeStart || chk.RangeEnd != pool.RangeEnd || chk.Source != pool.Source {
+		if chk.RangeStart != pool.RangeStart || chk.RangeEnd != pool.RangeEnd || chk.Source != pool.Source ||
+			chk.GwLrpRangeStart != pool.GwLrpRangeStart || chk.GwLrpRangeEnd != pool.GwLrpRangeEnd {
 			slog.Info("external IPAM pool config drift, reconciling KV",
 				"pool", pool.Name,
 				"old_range", chk.RangeStart+"-"+chk.RangeEnd, "new_range", pool.RangeStart+"-"+pool.RangeEnd,
-				"old_source", chk.Source, "new_source", pool.Source)
+				"old_source", chk.Source, "new_source", pool.Source,
+				"old_gw_lrp_range", chk.GwLrpRangeStart+"-"+chk.GwLrpRangeEnd,
+				"new_gw_lrp_range", pool.GwLrpRangeStart+"-"+pool.GwLrpRangeEnd)
 
 			chk.RangeStart = pool.RangeStart
 			chk.RangeEnd = pool.RangeEnd
 			chk.Source = pool.Source
+			chk.GwLrpRangeStart = pool.GwLrpRangeStart
+			chk.GwLrpRangeEnd = pool.GwLrpRangeEnd
 
 			data, err := json.Marshal(chk)
 			if err != nil {
@@ -158,9 +174,9 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	// For DHCP pools, obtain the gateway IP from router DHCP if not set.
 	// The gateway lease is long-lived: vpcd's renewal goroutine keeps it
 	// refreshed until the pool is torn down.
-	var gatewayLease *dhcpLeaseResult
+	var gatewayLease *dhcp.LeaseResult
 	if gwIP == "" && pool.IsDHCP() {
-		lease, dhcpErr := ObtainDHCPLease(m.nc, pool.DhcpBindBridge,
+		lease, dhcpErr := dhcp.RequestAcquire(m.nc, pool.DhcpBindBridge,
 			"gateway-"+pool.Name,
 			"gateway-"+pool.Name,
 			"mulga-spinifex-gw",
@@ -182,14 +198,16 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	}
 
 	record := &ExternalIPAMRecord{
-		PoolName:   pool.Name,
-		RangeStart: pool.RangeStart,
-		RangeEnd:   pool.RangeEnd,
-		Gateway:    pool.Gateway,
-		GatewayIP:  gwIP,
-		PrefixLen:  pool.PrefixLen,
-		Region:     pool.Region,
-		AZ:         pool.AZ,
+		PoolName:        pool.Name,
+		RangeStart:      pool.RangeStart,
+		RangeEnd:        pool.RangeEnd,
+		Gateway:         pool.Gateway,
+		GatewayIP:       gwIP,
+		PrefixLen:       pool.PrefixLen,
+		Region:          pool.Region,
+		AZ:              pool.AZ,
+		GwLrpRangeStart: pool.GwLrpRangeStart,
+		GwLrpRangeEnd:   pool.GwLrpRangeEnd,
 		Allocated: map[string]ExternalIPAllocation{
 			gwIP: gatewayAlloc,
 		},
@@ -250,10 +268,10 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 	// Manager is idempotent on ClientID, so CAS retries below will not
 	// trigger a second DORA — we only release at the end if no CAS
 	// attempt succeeded.
-	var dhcpLease *dhcpLeaseResult
+	var dhcpLease *dhcp.LeaseResult
 	if pool != nil && pool.IsDHCP() {
 		hostname, vendorClass := dhcpIdentityOptions(eniID, instanceID, poolName)
-		lease, err := ObtainDHCPLease(m.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, poolName)
+		lease, err := dhcp.RequestAcquire(m.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, poolName)
 		if err != nil {
 			return "", fmt.Errorf("DHCP lease for %s: %w", clientID, err)
 		}
@@ -264,7 +282,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 		record, revision, err := m.getRecord(poolName)
 		if err != nil {
 			if dhcpLease != nil {
-				_ = ReleaseDHCPLease(m.nc, clientID)
+				_ = dhcp.RequestRelease(m.nc, clientID)
 			}
 			return "", fmt.Errorf("get external IPAM record: %w", err)
 		}
@@ -296,7 +314,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 		data, err := json.Marshal(record)
 		if err != nil {
 			if dhcpLease != nil {
-				_ = ReleaseDHCPLease(m.nc, clientID)
+				_ = dhcp.RequestRelease(m.nc, clientID)
 			}
 			return "", fmt.Errorf("marshal external IPAM record: %w", err)
 		}
@@ -317,7 +335,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 	// All CAS attempts exhausted — release any DHCP lease we acquired so
 	// vpcd doesn't hold a binding for an IP we won't use.
 	if dhcpLease != nil {
-		_ = ReleaseDHCPLease(m.nc, clientID)
+		_ = dhcp.RequestRelease(m.nc, clientID)
 	}
 	return "", fmt.Errorf("external IPAM allocation failed after CAS retries for pool %s", poolName)
 }
@@ -372,7 +390,7 @@ func (m *ExternalIPAM) ReleaseIP(poolName, ip string) error {
 			if clientID == "" {
 				clientID = alloc.InstanceId
 			}
-			if releaseErr := ReleaseDHCPLease(m.nc, clientID); releaseErr != nil {
+			if releaseErr := dhcp.RequestRelease(m.nc, clientID); releaseErr != nil {
 				slog.Warn("Failed to release DHCP lease", "pool", poolName, "ip", ip, "err", releaseErr)
 			}
 		}
@@ -453,7 +471,9 @@ func (m *ExternalIPAM) getRecord(poolName string) (*ExternalIPAMRecord, uint64, 
 	return &record, entry.Revision(), nil
 }
 
-// nextAvailableExternalIP finds the next unallocated IP in the pool's range.
+// nextAvailableExternalIP finds the next unallocated IP in the pool's
+// range. Addresses inside [GwLrpRangeStart, GwLrpRangeEnd] are skipped —
+// vpcd reserves them for OVN gateway LRPs (mulga-siv-36).
 func nextAvailableExternalIP(record *ExternalIPAMRecord) (string, error) {
 	startIP := net.ParseIP(record.RangeStart).To4()
 	endIP := net.ParseIP(record.RangeEnd).To4()
@@ -461,10 +481,23 @@ func nextAvailableExternalIP(record *ExternalIPAMRecord) (string, error) {
 		return "", fmt.Errorf("invalid IP range: %s - %s", record.RangeStart, record.RangeEnd)
 	}
 
+	var gwLrpStart, gwLrpEnd int64 = -1, -1
+	if record.GwLrpRangeStart != "" && record.GwLrpRangeEnd != "" {
+		s := net.ParseIP(record.GwLrpRangeStart).To4()
+		e := net.ParseIP(record.GwLrpRangeEnd).To4()
+		if s != nil && e != nil {
+			gwLrpStart = ipToInt(s).Int64()
+			gwLrpEnd = ipToInt(e).Int64()
+		}
+	}
+
 	startInt := ipToInt(startIP)
 	endInt := ipToInt(endIP)
 
 	for i := startInt.Int64(); i <= endInt.Int64(); i++ {
+		if gwLrpStart >= 0 && i >= gwLrpStart && i <= gwLrpEnd {
+			continue
+		}
 		candidate := intToIP(intFromInt64(i)).String()
 		if _, taken := record.Allocated[candidate]; !taken {
 			return candidate, nil
@@ -500,6 +533,32 @@ func ValidatePoolConfig(pool ExternalPoolConfig) error {
 		}
 		if ipToInt(startIP.To4()).Cmp(ipToInt(endIP.To4())) > 0 {
 			return fmt.Errorf("range_start %s is greater than range_end %s", pool.RangeStart, pool.RangeEnd)
+		}
+		// gw_lrp_range must be valid IPs and must NOT overlap range_start/end
+		// — otherwise vpcd's gateway LRP allocator and per-VM EIP allocator
+		// would fight over the same address (mulga-siv-36).
+		if pool.GwLrpRangeStart != "" || pool.GwLrpRangeEnd != "" {
+			gwS := net.ParseIP(pool.GwLrpRangeStart)
+			gwE := net.ParseIP(pool.GwLrpRangeEnd)
+			if gwS == nil {
+				return fmt.Errorf("invalid gw_lrp_range_start: %q", pool.GwLrpRangeStart)
+			}
+			if gwE == nil {
+				return fmt.Errorf("invalid gw_lrp_range_end: %q", pool.GwLrpRangeEnd)
+			}
+			gwSi := ipToInt(gwS.To4())
+			gwEi := ipToInt(gwE.To4())
+			if gwSi.Cmp(gwEi) > 0 {
+				return fmt.Errorf("gw_lrp_range_start %s is greater than gw_lrp_range_end %s",
+					pool.GwLrpRangeStart, pool.GwLrpRangeEnd)
+			}
+			rangeSi := ipToInt(startIP.To4())
+			rangeEi := ipToInt(endIP.To4())
+			// Overlap test: !(gwE < rangeS || gwS > rangeE)
+			if gwEi.Cmp(rangeSi) >= 0 && gwSi.Cmp(rangeEi) <= 0 {
+				return fmt.Errorf("gw_lrp_range %s-%s overlaps range %s-%s",
+					pool.GwLrpRangeStart, pool.GwLrpRangeEnd, pool.RangeStart, pool.RangeEnd)
+			}
 		}
 	}
 	return nil
