@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/utils"
+	"github.com/nats-io/nats.go"
 )
 
 // sudoCommand wraps exec.Command with sudo when running as non-root.
@@ -405,7 +407,14 @@ func launchService(cfg *Config) error {
 	}
 	// timeout/retry args are legacy no-ops (mulga-siv-39): DHCPManager
 	// owns DORA retransmission via acquireWithBackoff.
-	dhcpManager, err := NewDHCPManager(nc, js, dhcp.NewNClient4(0, 0))
+	//
+	// Retry on JetStream-not-ready: NewDHCPManager creates the DHCP-leases
+	// KV bucket, which fails immediately if the JetStream cluster has not
+	// reached quorum. On multi-node bring-up vpcd's launchService runs
+	// before all peers are reachable, so we mirror the daemon's
+	// initJetStream backoff (500ms→10s, 5 min cap) instead of crashing the
+	// service and aborting the rest of the node bring-up.
+	dhcpManager, err := newDHCPManagerWithRetry(ctx, nc, js)
 	if err != nil {
 		slog.Error("Failed to create DHCP manager", "err", err)
 		return err
@@ -465,6 +474,48 @@ func launchService(cfg *Config) error {
 
 	slog.Info("vpcd service shutting down")
 	return nil
+}
+
+// newDHCPManagerWithRetry constructs a DHCPManager, retrying on transient
+// JetStream-not-ready errors with exponential backoff (500ms→10s, capped
+// at 5 min). NewDHCPManager creates the spinifex-dhcp-leases KV bucket;
+// on multi-node bring-up the JetStream cluster may not yet have quorum
+// when vpcd starts, and a single-shot CreateKeyValue would otherwise crash
+// the service before the rest of the node finishes coming up.
+//
+// Mirrors daemon.initJetStream's backoff so vpcd waits as patiently as the
+// daemon does for the cluster to form.
+func newDHCPManagerWithRetry(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext) (*DHCPManager, error) {
+	const maxWait = 5 * time.Minute
+	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+	attempt := 0
+
+	for {
+		attempt++
+		mgr, err := NewDHCPManager(nc, js, dhcp.NewNClient4(0, 0))
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("vpcd: DHCP manager ready", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
+			}
+			return mgr, nil
+		}
+
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return nil, fmt.Errorf("DHCP manager init timed out after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
+		}
+
+		slog.Warn("vpcd: DHCP manager not ready (waiting for JetStream cluster quorum)",
+			"err", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("DHCP manager init cancelled: %w", ctx.Err())
+		case <-time.After(retryDelay):
+		}
+		retryDelay = min(retryDelay*2, 10*time.Second)
+	}
 }
 
 // resolveBridgeConfig picks the bridge mode and DHCP-bind-bridge to use,
