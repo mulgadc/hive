@@ -242,6 +242,7 @@ func (d *Daemon) maybeRestartInstance(instance *vm.VM) {
 // and relaunches it via LaunchInstance.
 func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
 	var skipReason string
+	var restartCount int
 	d.vmMgr.Inspect(instance, func(v *vm.VM) {
 		if v.Status != vm.StateError {
 			skipReason = fmt.Sprintf("not in error state (%s)", v.Status)
@@ -252,6 +253,7 @@ func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
 			return
 		}
 		v.Health.RestartCount++
+		restartCount = v.Health.RestartCount
 	})
 	if skipReason != "" {
 		slog.Info("Skipping restart of crashed instance",
@@ -261,7 +263,7 @@ func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
 
 	slog.Info("Restarting crashed instance",
 		"instance", instance.ID,
-		"restartCount", instance.Health.RestartCount)
+		"restartCount", restartCount)
 
 	// Re-allocate resources before relaunch — handleCrashedInstance deallocates
 	// them, so we must re-reserve before starting the VM again.

@@ -2076,7 +2076,9 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 	// don't spawn a second finalizeTermination goroutine — the existing cleanup
 	// handler owns the lifecycle from here.
 	skip := false
+	var observedStatus vm.InstanceState
 	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		observedStatus = v.Status
 		if v.Status == vm.StateShuttingDown || v.Status == vm.StateTerminated {
 			skip = true
 			return
@@ -2090,7 +2092,7 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 	})
 	if skip {
 		slog.Info("markInstanceFailed: instance already in cleanup state, skipping",
-			"instanceId", instance.ID, "status", string(instance.Status), "reason", reason)
+			"instanceId", instance.ID, "status", string(observedStatus), "reason", reason)
 		return
 	}
 
@@ -2098,7 +2100,9 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 		slog.Error("markInstanceFailed transition failed", "instanceId", instance.ID, "err", err)
 		// If the error was a write failure, the in-memory state is already
 		// shutting-down. Still proceed with finalization to avoid getting stuck.
-		if instance.Status != vm.StateShuttingDown {
+		var postErrStatus vm.InstanceState
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { postErrStatus = v.Status })
+		if postErrStatus != vm.StateShuttingDown {
 			return
 		}
 	}

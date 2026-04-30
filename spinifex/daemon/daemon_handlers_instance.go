@@ -746,75 +746,78 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	// Group instances by reservation ID (AWS returns instances grouped by reservation)
 	reservationMap := make(map[string]*ec2.Reservation)
 
-	// Iterate through all instances on this node. Snapshot lets us release
-	// the manager lock for the duration of the response build.
-	for _, instance := range d.vmMgr.Snapshot() {
-		// Skip instances not owned by the caller's account.
-		// Pre-Phase4 instances (empty AccountID) are only visible to root.
-		if !isInstanceVisible(accountID, instance.AccountID) {
-			continue
-		}
-
-		// Skip if filtering by instance IDs and this instance is not in the filter
-		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
-			continue
-		}
-
-		// Use stored reservation metadata if available
-		if instance.Reservation != nil && instance.Instance != nil {
-			resID := ""
-			if instance.Reservation.ReservationId != nil {
-				resID = *instance.Reservation.ReservationId
-			}
-
-			// Create reservation entry if it doesn't exist
-			if _, exists := reservationMap[resID]; !exists {
-				reservation := &ec2.Reservation{}
-				reservation.SetReservationId(resID)
-				if instance.Reservation.OwnerId != nil {
-					reservation.SetOwnerId(*instance.Reservation.OwnerId)
-				}
-				reservation.Instances = []*ec2.Instance{}
-				reservationMap[resID] = reservation
-			}
-
-			// Update the instance state to current state
-			instanceCopy := *instance.Instance
-			instanceCopy.State = &ec2.InstanceState{}
-
-			// Populate PublicIpAddress from VM if stored
-			if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
-				instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
-			}
-
-			// Map internal status to EC2 state codes using the centralized mapping
-			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
-				instanceCopy.State.SetCode(info.Code)
-				instanceCopy.State.SetName(info.Name)
-			} else {
-				slog.Warn("Instance has unmapped status, reporting as pending",
-					"instanceId", instance.ID, "status", string(instance.Status))
-				instanceCopy.State.SetCode(0)
-				instanceCopy.State.SetName("pending")
-			}
-
-			// Populate Placement if instance belongs to a placement group
-			if instance.PlacementGroupName != "" {
-				instanceCopy.Placement = &ec2.Placement{
-					GroupName:        aws.String(instance.PlacementGroupName),
-					AvailabilityZone: aws.String(d.config.AZ),
-				}
-			}
-
-			// Apply filters against the fully-built instance copy
-			if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+	// Iterate under the manager lock — VM fields (Status, Instance, Reservation,
+	// PublicIP, PlacementGroupName) are mutated through manager-locked
+	// Inspect/UpdateState elsewhere, so reading them lock-free would race.
+	d.vmMgr.View(func(vms map[string]*vm.VM) {
+		for _, instance := range vms {
+			// Skip instances not owned by the caller's account.
+			// Pre-Phase4 instances (empty AccountID) are only visible to root.
+			if !isInstanceVisible(accountID, instance.AccountID) {
 				continue
 			}
 
-			// Add instance to its reservation
-			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+			// Skip if filtering by instance IDs and this instance is not in the filter
+			if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+				continue
+			}
+
+			// Use stored reservation metadata if available
+			if instance.Reservation != nil && instance.Instance != nil {
+				resID := ""
+				if instance.Reservation.ReservationId != nil {
+					resID = *instance.Reservation.ReservationId
+				}
+
+				// Create reservation entry if it doesn't exist
+				if _, exists := reservationMap[resID]; !exists {
+					reservation := &ec2.Reservation{}
+					reservation.SetReservationId(resID)
+					if instance.Reservation.OwnerId != nil {
+						reservation.SetOwnerId(*instance.Reservation.OwnerId)
+					}
+					reservation.Instances = []*ec2.Instance{}
+					reservationMap[resID] = reservation
+				}
+
+				// Update the instance state to current state
+				instanceCopy := *instance.Instance
+				instanceCopy.State = &ec2.InstanceState{}
+
+				// Populate PublicIpAddress from VM if stored
+				if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
+					instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
+				}
+
+				// Map internal status to EC2 state codes using the centralized mapping
+				if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+					instanceCopy.State.SetCode(info.Code)
+					instanceCopy.State.SetName(info.Name)
+				} else {
+					slog.Warn("Instance has unmapped status, reporting as pending",
+						"instanceId", instance.ID, "status", string(instance.Status))
+					instanceCopy.State.SetCode(0)
+					instanceCopy.State.SetName("pending")
+				}
+
+				// Populate Placement if instance belongs to a placement group
+				if instance.PlacementGroupName != "" {
+					instanceCopy.Placement = &ec2.Placement{
+						GroupName:        aws.String(instance.PlacementGroupName),
+						AvailabilityZone: aws.String(d.config.AZ),
+					}
+				}
+
+				// Apply filters against the fully-built instance copy
+				if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+					continue
+				}
+
+				// Add instance to its reservation
+				reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+			}
 		}
-	}
+	})
 
 	// Convert map to slice
 	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
