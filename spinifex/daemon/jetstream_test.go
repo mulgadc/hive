@@ -31,18 +31,16 @@ func TestJetStreamManager_WriteAndLoadState(t *testing.T) {
 
 	// Create test instances
 	testNodeID := "test-node-1"
-	testInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-test-001": {
-				ID:           "i-test-001",
-				Status:       vm.StateRunning,
-				InstanceType: "t3.micro",
-			},
-			"i-test-002": {
-				ID:           "i-test-002",
-				Status:       vm.StateStopped,
-				InstanceType: "t3.small",
-			},
+	testInstances := map[string]*vm.VM{
+		"i-test-001": {
+			ID:           "i-test-001",
+			Status:       vm.StateRunning,
+			InstanceType: "t3.micro",
+		},
+		"i-test-002": {
+			ID:           "i-test-002",
+			Status:       vm.StateStopped,
+			InstanceType: "t3.small",
 		},
 	}
 
@@ -56,13 +54,13 @@ func TestJetStreamManager_WriteAndLoadState(t *testing.T) {
 	require.NotNil(t, loadedInstances, "Loaded instances should not be nil")
 
 	// Verify the loaded state matches
-	assert.Len(t, loadedInstances.VMS, 2, "Should have 2 instances")
-	assert.NotNil(t, loadedInstances.VMS["i-test-001"], "Should have i-test-001")
-	assert.NotNil(t, loadedInstances.VMS["i-test-002"], "Should have i-test-002")
-	assert.Equal(t, vm.StateRunning, loadedInstances.VMS["i-test-001"].Status)
-	assert.Equal(t, vm.StateStopped, loadedInstances.VMS["i-test-002"].Status)
-	assert.Equal(t, "t3.micro", loadedInstances.VMS["i-test-001"].InstanceType)
-	assert.Equal(t, "t3.small", loadedInstances.VMS["i-test-002"].InstanceType)
+	assert.Len(t, loadedInstances, 2, "Should have 2 instances")
+	assert.NotNil(t, loadedInstances["i-test-001"], "Should have i-test-001")
+	assert.NotNil(t, loadedInstances["i-test-002"], "Should have i-test-002")
+	assert.Equal(t, vm.StateRunning, loadedInstances["i-test-001"].Status)
+	assert.Equal(t, vm.StateStopped, loadedInstances["i-test-002"].Status)
+	assert.Equal(t, "t3.micro", loadedInstances["i-test-001"].InstanceType)
+	assert.Equal(t, "t3.small", loadedInstances["i-test-002"].InstanceType)
 }
 
 // TestJetStreamManager_LoadState_KeyNotFound tests that LoadState returns empty state when key doesn't exist
@@ -83,7 +81,7 @@ func TestJetStreamManager_LoadState_KeyNotFound(t *testing.T) {
 	instances, err := jsm.LoadState("non-existent-node")
 	require.NoError(t, err, "Should not error when key not found")
 	require.NotNil(t, instances, "Should return non-nil instances")
-	assert.Empty(t, instances.VMS, "Should return empty VMS map")
+	assert.Empty(t, instances, "Should return empty VMS map")
 }
 
 // TestJetStreamManager_BucketCreation tests that InitKVBucket creates the bucket when it doesn't exist
@@ -120,12 +118,10 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 	require.NoError(t, err, "First InitKVBucket should succeed")
 
 	// Write some test data
-	testInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-persist": {
-				ID:     "i-persist",
-				Status: vm.StateRunning,
-			},
+	testInstances := map[string]*vm.VM{
+		"i-persist": {
+			ID:     "i-persist",
+			Status: vm.StateRunning,
 		},
 	}
 	err = jsm1.WriteState("persist-node", testInstances)
@@ -147,9 +143,9 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 	// Verify data persisted
 	loadedInstances, err := jsm2.LoadState("persist-node")
 	require.NoError(t, err)
-	assert.NotEmpty(t, loadedInstances.VMS, "Should have persisted instances")
-	assert.NotNil(t, loadedInstances.VMS["i-persist"], "Should have i-persist")
-	assert.Equal(t, vm.StateRunning, loadedInstances.VMS["i-persist"].Status)
+	assert.NotEmpty(t, loadedInstances, "Should have persisted instances")
+	assert.NotNil(t, loadedInstances["i-persist"], "Should have i-persist")
+	assert.Equal(t, vm.StateRunning, loadedInstances["i-persist"].Status)
 }
 
 // TestJetStreamManager_DeleteState tests deleting state from the KV store
@@ -168,12 +164,10 @@ func TestJetStreamManager_DeleteState(t *testing.T) {
 
 	// Write state
 	testNodeID := "delete-test-node"
-	testInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-delete-me": {
-				ID:     "i-delete-me",
-				Status: vm.StateRunning,
-			},
+	testInstances := map[string]*vm.VM{
+		"i-delete-me": {
+			ID:     "i-delete-me",
+			Status: vm.StateRunning,
 		},
 	}
 	err = jsm.WriteState(testNodeID, testInstances)
@@ -182,7 +176,7 @@ func TestJetStreamManager_DeleteState(t *testing.T) {
 	// Verify state exists
 	loadedInstances, err := jsm.LoadState(testNodeID)
 	require.NoError(t, err)
-	assert.NotEmpty(t, loadedInstances.VMS)
+	assert.NotEmpty(t, loadedInstances)
 
 	// Delete state
 	err = jsm.DeleteState(testNodeID)
@@ -191,7 +185,7 @@ func TestJetStreamManager_DeleteState(t *testing.T) {
 	// Verify state is gone (should return empty state)
 	loadedInstances, err = jsm.LoadState(testNodeID)
 	require.NoError(t, err)
-	assert.Empty(t, loadedInstances.VMS, "Should return empty state after deletion")
+	assert.Empty(t, loadedInstances, "Should return empty state after deletion")
 }
 
 // TestJetStreamManager_DeleteState_NonExistent tests deleting state that doesn't exist
@@ -230,28 +224,24 @@ func TestJetStreamManager_WriteState_UpdateExisting(t *testing.T) {
 	testNodeID := "update-test-node"
 
 	// Write initial state
-	initialInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-initial": {
-				ID:     "i-initial",
-				Status: vm.StateRunning,
-			},
+	initialInstances := map[string]*vm.VM{
+		"i-initial": {
+			ID:     "i-initial",
+			Status: vm.StateRunning,
 		},
 	}
 	err = jsm.WriteState(testNodeID, initialInstances)
 	require.NoError(t, err)
 
 	// Update state with different instances
-	updatedInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-initial": {
-				ID:     "i-initial",
-				Status: vm.StateStopped, // Changed status
-			},
-			"i-new": { // Added new instance
-				ID:     "i-new",
-				Status: vm.StateRunning,
-			},
+	updatedInstances := map[string]*vm.VM{
+		"i-initial": {
+			ID:     "i-initial",
+			Status: vm.StateStopped, // Changed status
+		},
+		"i-new": { // Added new instance
+			ID:     "i-new",
+			Status: vm.StateRunning,
 		},
 	}
 	err = jsm.WriteState(testNodeID, updatedInstances)
@@ -260,9 +250,9 @@ func TestJetStreamManager_WriteState_UpdateExisting(t *testing.T) {
 	// Load and verify updated state
 	loadedInstances, err := jsm.LoadState(testNodeID)
 	require.NoError(t, err)
-	assert.Len(t, loadedInstances.VMS, 2, "Should have 2 instances")
-	assert.Equal(t, vm.StateStopped, loadedInstances.VMS["i-initial"].Status, "Status should be updated")
-	assert.NotNil(t, loadedInstances.VMS["i-new"], "Should have new instance")
+	assert.Len(t, loadedInstances, 2, "Should have 2 instances")
+	assert.Equal(t, vm.StateStopped, loadedInstances["i-initial"].Status, "Status should be updated")
+	assert.NotNil(t, loadedInstances["i-new"], "Should have new instance")
 }
 
 // TestJetStreamManager_MultipleNodes tests storing state for multiple nodes
@@ -280,20 +270,16 @@ func TestJetStreamManager_MultipleNodes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write state for node-1
-	node1Instances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-node1-001": {ID: "i-node1-001", Status: vm.StateRunning},
-		},
+	node1Instances := map[string]*vm.VM{
+		"i-node1-001": {ID: "i-node1-001", Status: vm.StateRunning},
 	}
 	err = jsm.WriteState("node-1", node1Instances)
 	require.NoError(t, err)
 
 	// Write state for node-2
-	node2Instances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-node2-001": {ID: "i-node2-001", Status: vm.StateStopped},
-			"i-node2-002": {ID: "i-node2-002", Status: vm.StateRunning},
-		},
+	node2Instances := map[string]*vm.VM{
+		"i-node2-001": {ID: "i-node2-001", Status: vm.StateStopped},
+		"i-node2-002": {ID: "i-node2-002", Status: vm.StateRunning},
 	}
 	err = jsm.WriteState("node-2", node2Instances)
 	require.NoError(t, err)
@@ -301,18 +287,18 @@ func TestJetStreamManager_MultipleNodes(t *testing.T) {
 	// Load and verify node-1 state
 	loadedNode1, err := jsm.LoadState("node-1")
 	require.NoError(t, err)
-	assert.Len(t, loadedNode1.VMS, 1)
-	assert.NotNil(t, loadedNode1.VMS["i-node1-001"])
+	assert.Len(t, loadedNode1, 1)
+	assert.NotNil(t, loadedNode1["i-node1-001"])
 
 	// Load and verify node-2 state
 	loadedNode2, err := jsm.LoadState("node-2")
 	require.NoError(t, err)
-	assert.Len(t, loadedNode2.VMS, 2)
-	assert.NotNil(t, loadedNode2.VMS["i-node2-001"])
-	assert.NotNil(t, loadedNode2.VMS["i-node2-002"])
+	assert.Len(t, loadedNode2, 2)
+	assert.NotNil(t, loadedNode2["i-node2-001"])
+	assert.NotNil(t, loadedNode2["i-node2-002"])
 
 	// Verify node isolation - node-1 doesn't have node-2's instances
-	_, exists := loadedNode1.VMS["i-node2-001"]
+	_, exists := loadedNode1["i-node2-001"]
 	assert.False(t, exists, "Node-1 should not have node-2's instances")
 }
 
@@ -328,7 +314,7 @@ func TestJetStreamManager_KVNotInitialized(t *testing.T) {
 	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
-	testInstances := &vm.Instances{VMS: make(map[string]*vm.VM)}
+	testInstances := make(map[string]*vm.VM)
 	err = jsm.WriteState("test-node", testInstances)
 	assert.Error(t, err, "WriteState should error when KV not initialized")
 
@@ -522,10 +508,8 @@ func TestJetStreamManager_StoppedInstances_NoInterference(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write per-node state
-	nodeInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-running-001": {ID: "i-running-001", Status: vm.StateRunning},
-		},
+	nodeInstances := map[string]*vm.VM{
+		"i-running-001": {ID: "i-running-001", Status: vm.StateRunning},
 	}
 	err = jsm.WriteState("interference-test-node", nodeInstances)
 	require.NoError(t, err)
@@ -538,8 +522,8 @@ func TestJetStreamManager_StoppedInstances_NoInterference(t *testing.T) {
 	// Verify per-node state is unaffected
 	loaded, err := jsm.LoadState("interference-test-node")
 	require.NoError(t, err)
-	assert.Len(t, loaded.VMS, 1)
-	assert.NotNil(t, loaded.VMS["i-running-001"])
+	assert.Len(t, loaded, 1)
+	assert.NotNil(t, loaded["i-running-001"])
 
 	// Verify stopped instance loads independently
 	loadedStopped, err := jsm.LoadStoppedInstance(stoppedVM.ID)
@@ -684,10 +668,8 @@ func TestJetStreamManager_WriteState_RecoverAfterStreamLost(t *testing.T) {
 	deleteInstanceStateBucket(t, nc)
 
 	// WriteState should recover by recreating the bucket
-	testInstances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-recover-001": {ID: "i-recover-001", Status: vm.StateRunning},
-		},
+	testInstances := map[string]*vm.VM{
+		"i-recover-001": {ID: "i-recover-001", Status: vm.StateRunning},
 	}
 	err = jsm.WriteState("recovery-node", testInstances)
 	require.NoError(t, err, "WriteState should recover after stream loss")
@@ -695,8 +677,8 @@ func TestJetStreamManager_WriteState_RecoverAfterStreamLost(t *testing.T) {
 	// Verify data was written
 	loaded, err := jsm.LoadState("recovery-node")
 	require.NoError(t, err)
-	assert.Len(t, loaded.VMS, 1)
-	assert.NotNil(t, loaded.VMS["i-recover-001"])
+	assert.Len(t, loaded, 1)
+	assert.NotNil(t, loaded["i-recover-001"])
 }
 
 func TestJetStreamManager_LoadState_RecoverAfterStreamLost(t *testing.T) {
@@ -714,7 +696,7 @@ func TestJetStreamManager_LoadState_RecoverAfterStreamLost(t *testing.T) {
 	// LoadState should recover and return empty state
 	loaded, err := jsm.LoadState("any-node")
 	require.NoError(t, err, "LoadState should recover after stream loss")
-	assert.Empty(t, loaded.VMS)
+	assert.Empty(t, loaded)
 }
 
 func TestJetStreamManager_DeleteState_RecoverAfterStreamLost(t *testing.T) {
@@ -843,7 +825,7 @@ func TestJetStreamManager_WriteState_RecoveryFailure(t *testing.T) {
 	deleteInstanceStateBucket(t, nc)
 	swapToNonJSContext(t, jsm)
 
-	testInstances := &vm.Instances{VMS: map[string]*vm.VM{"i-fail": {ID: "i-fail"}}}
+	testInstances := map[string]*vm.VM{"i-fail": {ID: "i-fail"}}
 	err = jsm.WriteState("fail-node", testInstances)
 	assert.Error(t, err, "WriteState should return error when recovery fails")
 }

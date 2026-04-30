@@ -33,10 +33,7 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	instanceID := *input.InstanceId
 
 	// Find the instance on this node
-	d.Instances.Mu.Lock()
-	instance, exists := d.Instances.VMS[instanceID]
-	d.Instances.Mu.Unlock()
-
+	instance, exists := d.vmMgr.Get(instanceID)
 	if !exists {
 		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return

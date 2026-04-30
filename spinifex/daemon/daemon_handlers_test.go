@@ -510,7 +510,7 @@ func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
 	// but RunInstance() will fail with ErrorInvalidInstanceType.
 	emptyTypes := map[string]*ec2.InstanceTypeInfo{}
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(
-		daemon.config, emptyTypes, daemon.natsConn, &daemon.Instances,
+		daemon.config, emptyTypes, daemon.natsConn,
 		objectstore.NewMemoryObjectStore(),
 	)
 
@@ -542,14 +542,14 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
 	instanceID := "i-test-stop-001"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 		AccountID:    testAccountID,
-	}
+	})
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -576,9 +576,8 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 	assert.Equal(t, `{}`, string(reply.Data))
 
 	// State should transition to stopping
-	daemon.Instances.Mu.Lock()
-	status := daemon.Instances.VMS[instanceID].Status
-	daemon.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	daemon.vmMgr.UpdateState(instanceID, func(v *vm.VM) { status = v.Status })
 	assert.Equal(t, vm.StateStopping, status)
 }
 
@@ -588,14 +587,14 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
 	instanceID := "i-test-term-001"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 		AccountID:    testAccountID,
-	}
+	})
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -620,9 +619,8 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 
 	assert.Equal(t, `{}`, string(reply.Data))
 
-	daemon.Instances.Mu.Lock()
-	status := daemon.Instances.VMS[instanceID].Status
-	daemon.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	daemon.vmMgr.UpdateState(instanceID, func(v *vm.VM) { status = v.Status })
 	assert.Equal(t, vm.StateShuttingDown, status)
 }
 
@@ -632,14 +630,14 @@ func TestHandleEC2Events_RebootRunningInstance(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	instanceID := "i-test-reboot-001"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 		AccountID:    testAccountID,
-	}
+	})
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -670,9 +668,8 @@ func TestHandleEC2Events_RebootRunningInstance(t *testing.T) {
 	assert.Contains(t, errResp, "Code")
 
 	// Instance should remain in running state (reboot doesn't change state)
-	daemon.Instances.Mu.Lock()
-	status := daemon.Instances.VMS[instanceID].Status
-	daemon.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	daemon.vmMgr.UpdateState(instanceID, func(v *vm.VM) { status = v.Status })
 	assert.Equal(t, vm.StateRunning, status)
 }
 
@@ -682,14 +679,14 @@ func TestHandleEC2Events_RebootStoppedInstance(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	instanceID := "i-test-reboot-stopped"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateStopped,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 		AccountID:    testAccountID,
-	}
+	})
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -725,14 +722,14 @@ func TestHandleEC2Events_RebootTerminatedInstance(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	instanceID := "i-test-reboot-terminated"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateTerminated,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 		AccountID:    testAccountID,
-	}
+	})
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -1055,8 +1052,7 @@ func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
 	daemon := createFullTestDaemon(t, natsURL)
 
 	// Add an instance in "pending" state (not running or stopped)
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS["i-pending123"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:        "i-pending123",
 		Status:    vm.StatePending,
 		AccountID: testAccountID,
@@ -1070,9 +1066,7 @@ func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
 				},
 			},
 		},
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
@@ -1097,8 +1091,7 @@ func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
 	daemon := createFullTestDaemon(t, natsURL)
 
 	// Add instance with no block device mappings
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS["i-novol123"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:        "i-novol123",
 		Status:    vm.StateRunning,
 		AccountID: testAccountID,
@@ -1107,9 +1100,7 @@ func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
 			ImageId:             aws.String("ami-source"),
 			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{},
 		},
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
@@ -1479,17 +1470,14 @@ func TestHandleEC2GetConsoleOutput(t *testing.T) {
 	require.NoError(t, os.WriteFile(logPath, []byte("Hello from serial console\nBoot complete."), 0644))
 
 	// Add an instance with console log path
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:        instanceID,
 		Status:    vm.StateRunning,
 		AccountID: testAccountID,
 		Config: vm.Config{
 			ConsoleLogPath: logPath,
 		},
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
 	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
 	require.NoError(t, err)
@@ -1523,17 +1511,14 @@ func TestHandleEC2GetConsoleOutput_EmptyLog(t *testing.T) {
 	instanceID := "i-console-empty-001"
 
 	// Instance exists but no log file yet
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:        instanceID,
 		Status:    vm.StateRunning,
 		AccountID: testAccountID,
 		Config: vm.Config{
 			ConsoleLogPath: "/nonexistent/console.log",
 		},
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
 	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
 	require.NoError(t, err)
@@ -1596,7 +1581,7 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Create a volume in a different AZ
 	wrapper := struct {
@@ -1965,13 +1950,9 @@ func TestHandleEC2DescribeInstanceAttribute_RunningInstance_InstanceType(t *test
 		},
 	}
 
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instanceID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 	t.Cleanup(func() {
-		daemon.Instances.Mu.Lock()
-		delete(daemon.Instances.VMS, instanceID)
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Delete(instanceID)
 	})
 
 	input := &ec2.DescribeInstanceAttributeInput{
@@ -2169,13 +2150,9 @@ func TestHandleEC2DescribeInstanceAttribute_GroupSet_WithSecurityGroups(t *testi
 		},
 	}
 
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instanceID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 	t.Cleanup(func() {
-		daemon.Instances.Mu.Lock()
-		delete(daemon.Instances.VMS, instanceID)
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Delete(instanceID)
 	})
 
 	input := &ec2.DescribeInstanceAttributeInput{
@@ -2458,12 +2435,9 @@ func TestHandleNodeStatus(t *testing.T) {
 	daemon.config.Daemon.Host = "10.0.0.5:4432"
 
 	// Add some VMs (2 running, 1 stopped — only running counted)
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS["i-run-1"] = &vm.VM{ID: "i-run-1", Status: vm.StateRunning}
-	daemon.Instances.VMS["i-run-2"] = &vm.VM{ID: "i-run-2", Status: vm.StateRunning}
-	daemon.Instances.VMS["i-stop-1"] = &vm.VM{ID: "i-stop-1", Status: vm.StateStopped}
-	daemon.Instances.Mu.Unlock()
-
+	daemon.vmMgr.Insert(&vm.VM{ID: "i-run-1", Status: vm.StateRunning})
+	daemon.vmMgr.Insert(&vm.VM{ID: "i-run-2", Status: vm.StateRunning})
+	daemon.vmMgr.Insert(&vm.VM{ID: "i-stop-1", Status: vm.StateStopped})
 	sub, err := daemon.natsConn.Subscribe("spinifex.node.status.test", daemon.handleNodeStatus)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
@@ -2520,23 +2494,20 @@ func TestHandleNodeVMs(t *testing.T) {
 	instanceType := getTestInstanceType(t)
 	launchTime := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
 
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS["i-vm-1"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           "i-vm-1",
 		Status:       vm.StateRunning,
 		InstanceType: instanceType,
 		Instance: &ec2.Instance{
 			LaunchTime: &launchTime,
 		},
-	}
-	daemon.Instances.VMS["i-vm-2"] = &vm.VM{
+	})
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           "i-vm-2",
 		Status:       vm.StateStopped,
 		InstanceType: instanceType,
 		Instance:     nil, // no launch time
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	sub, err := daemon.natsConn.Subscribe("spinifex.node.vms.test", daemon.handleNodeVMs)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
@@ -2593,14 +2564,11 @@ func TestHandleNodeVMs_UnknownInstanceType(t *testing.T) {
 	daemon := createTestDaemon(t, sharedNATSURL)
 	daemon.config.Daemon.Host = "10.0.0.5:4432"
 
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS["i-vm-unknown"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           "i-vm-unknown",
 		Status:       vm.StateRunning,
 		InstanceType: "z99.mega", // not in instanceTypes map
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	sub, err := daemon.natsConn.Subscribe("spinifex.node.vms.unknown", daemon.handleNodeVMs)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
@@ -3222,8 +3190,7 @@ func TestHandleEC2CreateImage_RunningInstanceReachesService(t *testing.T) {
 		Body:   strings.NewReader(string(volData)),
 	})
 
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		InstanceType: getTestInstanceType(t),
@@ -3240,9 +3207,7 @@ func TestHandleEC2CreateImage_RunningInstanceReachesService(t *testing.T) {
 				},
 			},
 		},
-	}
-	daemon.Instances.Mu.Unlock()
-
+	})
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.%s.CreateImage", instanceID),
 		daemon.handleEC2CreateImage,
@@ -3281,7 +3246,7 @@ func TestAttachVolume_MissingVolumeData(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3321,7 +3286,7 @@ func TestAttachVolume_InstanceNotRunning(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3362,7 +3327,7 @@ func TestAttachVolume_VolumeNotFound(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3405,7 +3370,7 @@ func TestAttachVolume_VolumeInUse(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Seed a volume that is already in-use
 	wrapper := struct {
@@ -3467,7 +3432,7 @@ func TestDetachVolume_MissingVolumeData(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3506,7 +3471,7 @@ func TestDetachVolume_InstanceNotRunning(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3547,7 +3512,7 @@ func TestDetachVolume_VolumeNotAttached(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3591,7 +3556,7 @@ func TestDetachVolume_BootVolumeRejected(t *testing.T) {
 	instance.EBSRequests.Requests = []types.EBSRequest{
 		{Name: "vol-boot-001", Boot: true, DeviceName: "/dev/sda1"},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3635,7 +3600,7 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 	instance.EBSRequests.Requests = []types.EBSRequest{
 		{Name: "vol-mismatch-001", DeviceName: "/dev/sdf"},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),

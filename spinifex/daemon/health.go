@@ -78,9 +78,8 @@ func classifyCrashReason(waitErr error) string {
 func (d *Daemon) handleInstanceCrash(instance *vm.VM, waitErr error) {
 	// Guard: if instance is not running, this was an expected exit
 	// (stopInstance/terminateInstance set status before QEMU exits)
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Debug("QEMU exited but instance not in running state, skipping crash handler",
@@ -106,16 +105,16 @@ func (d *Daemon) handleInstanceCrash(instance *vm.VM, waitErr error) {
 
 	// Update health tracking
 	now := time.Now()
-	d.Instances.Mu.Lock()
-	instance.Health.CrashCount++
-	instance.Health.LastCrashTime = now
-	instance.Health.LastCrashReason = reason
-	if instance.Health.FirstCrashTime.IsZero() {
-		instance.Health.FirstCrashTime = now
-	}
-	instance.Running = false
-	instance.PID = 0
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		v.Health.CrashCount++
+		v.Health.LastCrashTime = now
+		v.Health.LastCrashReason = reason
+		if v.Health.FirstCrashTime.IsZero() {
+			v.Health.FirstCrashTime = now
+		}
+		v.Running = false
+		v.PID = 0
+	})
 
 	// Deallocate resources to fix phantom reservation
 	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
@@ -184,30 +183,34 @@ func (d *Daemon) maybeRestartInstance(instance *vm.VM) {
 
 	now := time.Now()
 
-	d.Instances.Mu.Lock()
-	health := &instance.Health
-
-	// If crashes are outside the restart window, reset counters
-	if !health.FirstCrashTime.IsZero() && now.Sub(health.FirstCrashTime) > restartWindow {
-		slog.Info("Crash window expired, resetting counters", "instance", instance.ID)
-		health.CrashCount = 1
-		health.FirstCrashTime = now
-		health.RestartCount = 0
-	}
-
-	// Check if we've exceeded the max restarts in the window
-	if health.CrashCount > maxRestartsInWindow {
-		d.Instances.Mu.Unlock()
+	var (
+		crashCount   int
+		restartCount int
+		exceeded     bool
+	)
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		health := &v.Health
+		if !health.FirstCrashTime.IsZero() && now.Sub(health.FirstCrashTime) > restartWindow {
+			slog.Info("Crash window expired, resetting counters", "instance", v.ID)
+			health.CrashCount = 1
+			health.FirstCrashTime = now
+			health.RestartCount = 0
+		}
+		if health.CrashCount > maxRestartsInWindow {
+			exceeded = true
+			crashCount = health.CrashCount
+			return
+		}
+		restartCount = health.RestartCount
+	})
+	if exceeded {
 		slog.Error("Instance exceeded max restarts in window, leaving in error state",
 			"instance", instance.ID,
-			"crashes", health.CrashCount,
+			"crashes", crashCount,
 			"window", restartWindow,
 			"max", maxRestartsInWindow)
 		return
 	}
-
-	restartCount := health.RestartCount
-	d.Instances.Mu.Unlock()
 
 	// Check resource availability
 	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
@@ -238,22 +241,23 @@ func (d *Daemon) maybeRestartInstance(instance *vm.VM) {
 // restartCrashedInstance re-verifies the instance is still in error state
 // and relaunches it via LaunchInstance.
 func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
-	d.Instances.Mu.Lock()
-	if instance.Status != vm.StateError {
-		d.Instances.Mu.Unlock()
-		slog.Info("Instance no longer in error state, skipping restart",
-			"instance", instance.ID, "status", instance.Status)
+	var skipReason string
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		if v.Status != vm.StateError {
+			skipReason = fmt.Sprintf("not in error state (%s)", v.Status)
+			return
+		}
+		if d.shuttingDown.Load() {
+			skipReason = "shutting down"
+			return
+		}
+		v.Health.RestartCount++
+	})
+	if skipReason != "" {
+		slog.Info("Skipping restart of crashed instance",
+			"instance", instance.ID, "reason", skipReason)
 		return
 	}
-
-	if d.shuttingDown.Load() {
-		d.Instances.Mu.Unlock()
-		slog.Info("Daemon shutting down, skipping restart", "instance", instance.ID)
-		return
-	}
-
-	instance.Health.RestartCount++
-	d.Instances.Mu.Unlock()
 
 	slog.Info("Restarting crashed instance",
 		"instance", instance.ID,
