@@ -116,15 +116,6 @@ var predastoreStartCmd = &cobra.Command{
 			return
 		}
 
-		backendType := viper.GetString("backend")
-		var backend s3.BackendType
-
-		if backendType == "distributed" {
-			backend = s3.BackendDistributed
-		} else {
-			backend = s3.BackendFilesystem
-		}
-
 		nodeID := viper.GetInt("node-id")
 		pprofEnabled := viper.GetBool("pprof")
 		pprofOutput := viper.GetString("pprof-output")
@@ -138,8 +129,7 @@ var predastoreStartCmd = &cobra.Command{
 			TlsCert:    tlsCert,
 			TlsKey:     tlsKey,
 
-			Backend: backend,
-			NodeID:  nodeID,
+			NodeID: nodeID,
 
 			PprofEnabled:    pprofEnabled,
 			PprofOutputPath: pprofOutput,
