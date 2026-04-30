@@ -3,45 +3,11 @@ package dhcp
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv4/nclient4"
-	"github.com/mdlayher/packet"
-	"golang.org/x/sys/unix"
 )
-
-// dhcpClientPort is the IANA-assigned UDP port for DHCP clients.
-const dhcpClientPort = 68
-
-// openPromiscBridgeConn opens an AF_PACKET DGRAM socket on iface filtered
-// to IPv4 and enables PACKET_MR_PROMISC on it. Equivalent to nclient4's
-// own NewRawUDPConn but with promisc on.
-//
-// Why promisc: vpcd uses a synthetic per-tenant chaddr (e.g. 02:f3:...)
-// that never matches the bridge's MAC. Many real-world DHCP servers
-// ignore the BOOTP BROADCAST flag and reply with a unicast OFFER addressed
-// to that chaddr. A Linux bridge floods unknown unicast to slave ports
-// but does NOT pass it up to the bridge netdev unless IFF_PROMISC is set,
-// so the AF_PACKET socket misses the OFFER and DORA times out. Promisc
-// flips IFF_PROMISC for the lifetime of the socket (per-DORA), and the
-// kernel refcounts it so it auto-clears on Close.
-func openPromiscBridgeConn(iface string) (net.PacketConn, net.HardwareAddr, error) {
-	ifc, err := net.InterfaceByName(iface)
-	if err != nil {
-		return nil, nil, fmt.Errorf("lookup iface %s: %w", iface, err)
-	}
-	raw, err := packet.Listen(ifc, packet.Datagram, unix.ETH_P_IP, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("packet.Listen on %s: %w", iface, err)
-	}
-	if err := raw.SetPromiscuous(true); err != nil {
-		_ = raw.Close()
-		return nil, nil, fmt.Errorf("set promisc on %s: %w", iface, err)
-	}
-	return nclient4.NewBroadcastUDPConn(raw, &net.UDPAddr{Port: dhcpClientPort}), ifc.HardwareAddr, nil
-}
 
 // NClient4Client is the production DHCP client backed by
 // github.com/insomniacslk/dhcp/dhcpv4/nclient4. Each Acquire/Renew/Release
@@ -73,17 +39,12 @@ func (c *NClient4Client) Acquire(ctx context.Context, req AcquireRequest) (*Leas
 		return nil, fmt.Errorf("dhcp acquire: hw_addr is required")
 	}
 
-	conn, ifaceMAC, err := openPromiscBridgeConn(req.Bridge)
-	if err != nil {
-		return nil, fmt.Errorf("open promisc conn on %s: %w", req.Bridge, err)
-	}
-	client, err := nclient4.NewWithConn(conn, ifaceMAC,
+	client, err := nclient4.New(req.Bridge,
 		nclient4.WithHWAddr(req.HWAddr),
 		nclient4.WithTimeout(c.timeout),
 		nclient4.WithRetry(c.retry),
 	)
 	if err != nil {
-		_ = conn.Close()
 		return nil, fmt.Errorf("open nclient4 on %s: %w", req.Bridge, err)
 	}
 	defer func() { _ = client.Close() }()
@@ -104,17 +65,12 @@ func (c *NClient4Client) Renew(ctx context.Context, lease *Lease) (*Lease, error
 		return nil, fmt.Errorf("dhcp renew: %w", err)
 	}
 
-	conn, ifaceMAC, err := openPromiscBridgeConn(lease.Bridge)
-	if err != nil {
-		return nil, fmt.Errorf("open promisc conn on %s for renew: %w", lease.Bridge, err)
-	}
-	client, err := nclient4.NewWithConn(conn, ifaceMAC,
+	client, err := nclient4.New(lease.Bridge,
 		nclient4.WithHWAddr(lease.HWAddr),
 		nclient4.WithTimeout(c.timeout),
 		nclient4.WithRetry(c.retry),
 	)
 	if err != nil {
-		_ = conn.Close()
 		return nil, fmt.Errorf("open nclient4 on %s for renew: %w", lease.Bridge, err)
 	}
 	defer func() { _ = client.Close() }()
@@ -143,16 +99,11 @@ func (c *NClient4Client) Release(ctx context.Context, lease *Lease) error {
 		return fmt.Errorf("dhcp release: %w", err)
 	}
 
-	conn, ifaceMAC, err := openPromiscBridgeConn(lease.Bridge)
-	if err != nil {
-		return fmt.Errorf("open promisc conn on %s for release: %w", lease.Bridge, err)
-	}
-	client, err := nclient4.NewWithConn(conn, ifaceMAC,
+	client, err := nclient4.New(lease.Bridge,
 		nclient4.WithHWAddr(lease.HWAddr),
 		nclient4.WithTimeout(c.timeout),
 	)
 	if err != nil {
-		_ = conn.Close()
 		return fmt.Errorf("open nclient4 on %s for release: %w", lease.Bridge, err)
 	}
 	defer func() { _ = client.Close() }()
