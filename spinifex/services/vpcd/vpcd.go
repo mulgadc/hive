@@ -363,11 +363,6 @@ func launchService(cfg *Config) error {
 	holder, _ := os.Hostname()
 	releaseLeader, isLeader := AcquireReconcileLeader(nc, holder)
 
-	// Run reconciliation before subscribing (leader only)
-	if isLeader {
-		Reconcile(ctx, topo, cfg.Bootstrap)
-	}
-
 	// Macvlan mode only: align macvlan MAC with the OVN gateway router MAC.
 	// The macvlan only delivers inbound unicast matching its own MAC. With
 	// centralized NAT, OVN uses the router MAC for all external ARP replies.
@@ -396,11 +391,14 @@ func launchService(cfg *Config) error {
 
 	// DHCP manager: services vpc.dhcp.acquire/release requests from the
 	// daemon-side ExternalIPAM handlers and (mulga-siv-38) topology's gw-LRP
-	// allocator. MUST subscribe before ReconcileFromKV / retrofit so those
-	// passes don't fan out vpc.dhcp.acquire requests to "no responders" and
-	// burn the 60-attempt cold-boot retry budget per existing IGW. Started
-	// unconditionally — pools with source="static" never issue acquire
-	// requests, so the Manager sits idle until something actually wants DHCP.
+	// allocator. MUST subscribe before any reconcile pass — bootstrap
+	// reconcile, ReconcileFromKV, and retrofit all call into reconcileIGW /
+	// expectedGatewayPortNetwork which fan out vpc.dhcp.acquire on
+	// source="dhcp" pools. Without a live subscription those requests hit
+	// "no responders" and burn the 60-attempt cold-boot retry budget per
+	// existing IGW. Started unconditionally — pools with source="static"
+	// never issue acquire requests, so the Manager sits idle until
+	// something actually wants DHCP.
 	js, err := nc.JetStream()
 	if err != nil {
 		slog.Error("Failed to get JetStream context for DHCP manager", "err", err)
@@ -427,6 +425,12 @@ func launchService(cfg *Config) error {
 			_ = s.Unsubscribe()
 		}
 	}()
+
+	// Pass 1: Bootstrap-config reconcile. Creates the bootstrap VPC / IGW
+	// topology if missing. Leader-only.
+	if isLeader {
+		Reconcile(ctx, topo, cfg.Bootstrap)
+	}
 
 	// Pass 2: Reconcile from NATS KV (handles reboots, OVN DB loss, missed events).
 	// Runs after subscribing so new events are not missed during reconciliation.
