@@ -1099,6 +1099,97 @@ func TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision(t *testing.T) {
 	}
 }
 
+// TestTopologyHandler_IGWAttach_CentralizedNATAllocatesGwLrpIP guards
+// mulga-siv-36: in centralized NAT (veth/macvlan) the gateway LRP must
+// hold a WAN-subnet IP from pool.GwLrpRange so it can ARP the upstream
+// nexthop. Three VPCs sharing one pool must each get a distinct IP and
+// persist it on external_ids:spinifex:gateway_ip.
+func TestTopologyHandler_IGWAttach_CentralizedNATAllocatesGwLrpIP(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:            "lan",
+			RangeStart:      "192.168.3.100",
+			RangeEnd:        "192.168.3.150",
+			Gateway:         "192.168.3.1",
+			PrefixLen:       24,
+			GwLrpRangeStart: "192.168.3.20",
+			GwLrpRangeEnd:   "192.168.3.29",
+		},
+	}
+	// Default bridge mode is centralized (useCentralizedNAT returns true
+	// when bridgeMode != "direct"). Explicit veth here to be unambiguous.
+	topo := NewTopologyHandler(mock,
+		WithExternalNetwork("pool", pools),
+		WithBridgeMode(BridgeModeVeth),
+	)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	vpcIds := []string{"vpc-cn-a", "vpc-cn-b", "vpc-cn-c"}
+	for _, vpcId := range vpcIds {
+		_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+			Name: "vpc-" + vpcId,
+			ExternalIDs: map[string]string{
+				"spinifex:vpc_id": vpcId,
+				"spinifex:cidr":   "10.0.0.0/16",
+			},
+		})
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		if err != nil {
+			t.Fatalf("request vpc.igw-attach %s: %v", vpcId, err)
+		}
+		assertSuccess(t, resp, "attach IGW "+vpcId)
+	}
+
+	seen := make(map[string]string, len(vpcIds))
+	for _, vpcId := range vpcIds {
+		gwPortName := "gw-" + vpcId
+		gwPort, err := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if err != nil {
+			t.Fatalf("get %s: %v", gwPortName, err)
+		}
+		if len(gwPort.Networks) != 1 {
+			t.Fatalf("%s: expected 1 Network, got %v", gwPortName, gwPort.Networks)
+		}
+		net := gwPort.Networks[0]
+		if !strings.HasPrefix(net, "192.168.3.") || !strings.HasSuffix(net, "/24") {
+			t.Errorf("%s: expected 192.168.3.X/24 from gw_lrp_range, got %s", gwPortName, net)
+		}
+		gwIP := gwPort.ExternalIDs["spinifex:gateway_ip"]
+		if gwIP == "" {
+			t.Errorf("%s: missing spinifex:gateway_ip external_id", gwPortName)
+		}
+		if other, dup := seen[gwIP]; dup {
+			t.Errorf("gw IP collision: %s and %s share %s", gwPortName, other, gwIP)
+		}
+		seen[gwIP] = gwPortName
+
+		// Idempotent: re-attach must not change the assignment.
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		_, _ = nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		gwPort2, _ := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if gwPort2.ExternalIDs["spinifex:gateway_ip"] != gwIP {
+			t.Errorf("%s: re-attach changed gateway_ip from %s to %s",
+				gwPortName, gwIP, gwPort2.ExternalIDs["spinifex:gateway_ip"])
+		}
+	}
+}
+
 func TestTopologyHandler_FindExternalPool(t *testing.T) {
 	pools := []ExternalPoolConfig{
 		{Name: "az-a", Region: "us-east-1", AZ: "us-east-1a", RangeStart: "1.1.1.1"},

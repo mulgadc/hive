@@ -80,15 +80,17 @@ type Config struct {
 
 // ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
 type ExternalPoolConfig struct {
-	Name       string
-	RangeStart string
-	RangeEnd   string
-	Gateway    string
-	GatewayIP  string
-	PrefixLen  int
-	DNSServers []string
-	Region     string
-	AZ         string
+	Name            string
+	RangeStart      string
+	RangeEnd        string
+	Gateway         string
+	GatewayIP       string
+	PrefixLen       int
+	DNSServers      []string
+	Region          string
+	AZ              string
+	GwLrpRangeStart string // Sub-range for OVN gateway LRP IPs in centralized NAT mode (mulga-siv-36).
+	GwLrpRangeEnd   string
 }
 
 // Service implements the Spinifex service interface for vpcd.
