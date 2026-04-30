@@ -248,6 +248,118 @@ func TestManager_ConcurrentSoak(t *testing.T) {
 	writersWG.Wait()
 	close(stop)
 	readersWG.Wait()
+
+	if foreachCount.Load() == 0 {
+		t.Fatal("readers never observed any state — possible reader starvation")
+	}
+}
+
+// TestManager_SlotOccupancyRace simulates the production race the plan calls
+// out at daemon_handlers_instance.go:594-626 and daemon.go:2140/2149: a
+// terminate handler running DeleteIf(id, original) concurrently with a start
+// handler running InsertIfAbsent(replacement) for the same slot, plus the
+// rollback InsertIfAbsent(original) on a write failure. The invariant is that
+// the slot never contains a torn or unexpected pointer — at any moment Get(id)
+// returns either the original, the replacement, or nothing.
+func TestManager_SlotOccupancyRace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping race stress in short mode")
+	}
+
+	m := NewManager()
+	const iters = 5000
+	const id = "i-slot"
+
+	original := &VM{ID: id}
+	replacement := &VM{ID: id}
+
+	// Pre-seed: original is in the slot.
+	m.Insert(original)
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	// Terminator: DeleteIf(original); on the next round, re-Insert original to
+	// reset the slot for the next iteration.
+	go func() {
+		defer wg.Done()
+		for range iters {
+			m.DeleteIf(id, original)
+			m.InsertIfAbsent(original)
+		}
+	}()
+
+	// Starter: tries to occupy the slot with replacement after a delete; rolls
+	// back via DeleteIf to keep the test loop in steady state.
+	go func() {
+		defer wg.Done()
+		for range iters {
+			if m.InsertIfAbsent(replacement) {
+				m.DeleteIf(id, replacement)
+			}
+		}
+	}()
+
+	// Observer: at every observation, Get must return original, replacement,
+	// or nothing. Anything else means the slot is corrupted.
+	go func() {
+		defer wg.Done()
+		for range iters {
+			v, ok := m.Get(id)
+			if !ok {
+				continue
+			}
+			if v != original && v != replacement {
+				t.Errorf("slot held an unexpected pointer: %p", v)
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+// TestManager_ForEachIsRaceSafeForMutableFields documents the safe contract:
+// ForEach holds the lock for the entire iteration, so concurrent mutators
+// using Inspect/UpdateState are serialized against the iteration. This is the
+// race-clean alternative when callers need to read fields like Status that
+// can change concurrently. (Snapshot, by contrast, returns shared *VM
+// pointers — reading mutable fields after release is unsynchronized.)
+func TestManager_ForEachIsRaceSafeForMutableFields(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping race stress in short mode")
+	}
+
+	m := NewManager()
+	v := &VM{ID: "i-1", Status: StatePending}
+	m.Insert(v)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		toggle := true
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if toggle {
+				m.UpdateState("i-1", func(v *VM) { v.Status = StateRunning })
+			} else {
+				m.UpdateState("i-1", func(v *VM) { v.Status = StatePending })
+			}
+			toggle = !toggle
+		}
+	})
+
+	for range 5000 {
+		m.ForEach(func(v *VM) {
+			_ = v.Status
+		})
+	}
+	close(stop)
+	wg.Wait()
 }
 
 func mkID(w, i int) string {

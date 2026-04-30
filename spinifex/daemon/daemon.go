@@ -1052,7 +1052,11 @@ func (d *Daemon) migrateInstanceToKV(instance *vm.VM, writeFn func(string, *vm.V
 			"instance", instance.ID, "bucket", label, "err", err)
 		return false
 	}
-	d.vmMgr.Delete(instance.ID)
+	if !d.vmMgr.DeleteIf(instance.ID, instance) {
+		slog.Info("Slot reclaimed by another handler during migration; skipping local delete",
+			"instance", instance.ID, "bucket", label)
+		return true
+	}
 	slog.Info("Migrated instance to KV", "instance", instance.ID, "bucket", label)
 	return true
 }
@@ -1512,7 +1516,8 @@ func (d *Daemon) ClusterManager() error {
 
 // WriteState writes the instance state to JetStream KV store (required).
 // The marshal+put runs under the manager lock so VM fields can't change
-// mid-encode.
+// mid-encode. Lock-across-Put is a known limitation; splitting marshal from
+// put requires a JetStreamManager API change and is deferred.
 func (d *Daemon) WriteState() error {
 	if d.jsManager == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot write state")

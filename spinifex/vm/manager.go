@@ -1,8 +1,9 @@
 package vm
 
-import "maps"
-
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // Manager owns the in-memory map of running VMs on this node.
 type Manager struct {
