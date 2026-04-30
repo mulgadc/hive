@@ -394,18 +394,13 @@ func launchService(cfg *Config) error {
 		}
 	}()
 
-	// Pass 2: Reconcile from NATS KV (handles reboots, OVN DB loss, missed events).
-	// Runs after subscribing so new events are not missed during reconciliation.
-	// Leader-gated (mulga-siv-29) to avoid concurrent Create races against OVN NB.
-	if isLeader {
-		ReconcileFromKV(ctx, nc, topo, chassisNames)
-	}
-
 	// DHCP manager: services vpc.dhcp.acquire/release requests from the
-	// daemon-side ExternalIPAM handlers, runs a renewal goroutine per lease,
-	// and persists leases in spinifex-dhcp-leases KV. Started unconditionally
-	// — pools with source="static" never issue acquire requests, so the
-	// Manager sits idle until something actually wants DHCP.
+	// daemon-side ExternalIPAM handlers and (mulga-siv-38) topology's gw-LRP
+	// allocator. MUST subscribe before ReconcileFromKV / retrofit so those
+	// passes don't fan out vpc.dhcp.acquire requests to "no responders" and
+	// burn the 60-attempt cold-boot retry budget per existing IGW. Started
+	// unconditionally — pools with source="static" never issue acquire
+	// requests, so the Manager sits idle until something actually wants DHCP.
 	js, err := nc.JetStream()
 	if err != nil {
 		slog.Error("Failed to get JetStream context for DHCP manager", "err", err)
@@ -432,6 +427,13 @@ func launchService(cfg *Config) error {
 			_ = s.Unsubscribe()
 		}
 	}()
+
+	// Pass 2: Reconcile from NATS KV (handles reboots, OVN DB loss, missed events).
+	// Runs after subscribing so new events are not missed during reconciliation.
+	// Leader-gated (mulga-siv-29) to avoid concurrent Create races against OVN NB.
+	if isLeader {
+		ReconcileFromKV(ctx, nc, topo, chassisNames)
+	}
 
 	// Pass 3: Retrofit localnet options on every external switch. Walks OVN
 	// directly so stale/missing KV records can't hide a stale nat-addresses
