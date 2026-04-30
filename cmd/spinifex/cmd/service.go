@@ -22,7 +22,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mulgadc/predastore/s3"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/service"
 	"github.com/mulgadc/spinifex/spinifex/services/awsgw"
