@@ -690,6 +690,14 @@ func (d *Daemon) Start() error {
 			if node, ok := d.clusterConfig.Nodes[d.clusterConfig.Node]; ok {
 				dhcpBindBridge = node.VPCD.DhcpBindBridge
 			}
+			// For DHCP-sourced pools, compute the gateway LRP MAC so per-VM
+			// DORA uses it as chaddr. This makes the upstream DHCP binding
+			// match the MAC OVN GARPs with, preventing ARP table conflicts on
+			// routers that derive their ARP table from DHCP leases.
+			gwMAC := ""
+			if d.clusterConfig.Bootstrap.VpcId != "" {
+				gwMAC = utils.HashMAC("gw-" + d.clusterConfig.Bootstrap.VpcId)
+			}
 			for _, p := range d.clusterConfig.Network.ExternalPools {
 				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
 					Name:           p.Name,
@@ -702,6 +710,7 @@ func (d *Daemon) Start() error {
 					Region:         p.Region,
 					AZ:             p.AZ,
 					DhcpBindBridge: dhcpBindBridge,
+					GatewayMAC:     gwMAC,
 				})
 			}
 			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(d.natsConn, js, pools)

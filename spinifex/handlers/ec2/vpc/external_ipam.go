@@ -62,6 +62,13 @@ type ExternalPoolConfig struct {
 	Region         string
 	AZ             string
 	DhcpBindBridge string // Bridge where the DHCP AF_PACKET socket binds (e.g. "br-wan"). Linux bridge in veth mode; OVS bridge in direct mode. Never "br-ext".
+	// GatewayMAC, when set, is used as the chaddr in per-VM DHCP DORAs so
+	// that the upstream DHCP binding matches the MAC that OVN GARPs use (the
+	// gateway LRP MAC). Without this, the DHCP server binds the public IP to
+	// the generated ENI-derived MAC while OVN announces a different MAC via
+	// GARP, causing home routers that use their DHCP lease table as ARP to
+	// forward traffic to a non-existent interface.
+	GatewayMAC string
 }
 
 // IsDHCP returns true if this pool obtains IPs from router DHCP.
@@ -165,6 +172,7 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 			"gateway-"+pool.Name,
 			"mulga-spinifex-gw",
 			pool.Name,
+			"", // no specific chaddr — this lease is a pool reservation, not a routable VM address
 		)
 		if dhcpErr != nil {
 			return fmt.Errorf("DHCP gateway lease for pool %q: %w", pool.Name, dhcpErr)
@@ -253,7 +261,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 	var dhcpLease *dhcpLeaseResult
 	if pool != nil && pool.IsDHCP() {
 		hostname, vendorClass := dhcpIdentityOptions(eniID, instanceID, poolName)
-		lease, err := ObtainDHCPLease(m.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, poolName)
+		lease, err := ObtainDHCPLease(m.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, poolName, pool.GatewayMAC)
 		if err != nil {
 			return "", fmt.Errorf("DHCP lease for %s: %w", clientID, err)
 		}

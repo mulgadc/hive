@@ -612,7 +612,7 @@ func TestObtainDHCPLease_RequestTimeout(t *testing.T) {
 		dhcpAcquireRetryDelay = prevDelay
 	})
 
-	_, err = ObtainDHCPLease(nc, "br-wan", "eni-timeout", "eni-timeout", "mulga-spinifex", "wan")
+	_, err = ObtainDHCPLease(nc, "br-wan", "eni-timeout", "eni-timeout", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "dhcp acquire NATS request")
 }
 
@@ -638,7 +638,7 @@ func TestObtainDHCPLease_MalformedReply(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
-	_, err = ObtainDHCPLease(nc, "br-wan", "eni-malformed", "eni-malformed", "mulga-spinifex", "wan")
+	_, err = ObtainDHCPLease(nc, "br-wan", "eni-malformed", "eni-malformed", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "unmarshal dhcp acquire reply")
 }
 
@@ -668,14 +668,14 @@ func TestReleaseDHCPLease_ReplyError(t *testing.T) {
 }
 
 func TestObtainDHCPLease_Guards(t *testing.T) {
-	_, err := ObtainDHCPLease(nil, "br-wan", "eni-1", "eni-1", "mulga-spinifex", "wan")
+	_, err := ObtainDHCPLease(nil, "br-wan", "eni-1", "eni-1", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "NATS connection is required")
 
 	_, nc := testutil.StartTestNATS(t)
-	_, err = ObtainDHCPLease(nc, "", "eni-1", "eni-1", "mulga-spinifex", "wan")
+	_, err = ObtainDHCPLease(nc, "", "eni-1", "eni-1", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "bridge name is required")
 
-	_, err = ObtainDHCPLease(nc, "br-wan", "", "eni-1", "mulga-spinifex", "wan")
+	_, err = ObtainDHCPLease(nc, "br-wan", "", "eni-1", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "client ID is required")
 }
 

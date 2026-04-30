@@ -44,12 +44,17 @@ type dhcpLeaseResult struct {
 
 // ObtainDHCPLease asks spinifex-vpcd to acquire a DHCP lease on the given
 // bridge, identifying us with option 61 (client-id), option 12 (hostname)
-// and option 60 (vendor class). Blocks until vpcd replies or
-// dhcpNATSTimeout expires. The Manager-side handler is idempotent: a
-// second call with the same clientID while a live lease exists returns
-// the same lease without a fresh DORA, so CAS retry loops on the caller
-// are safe.
-func ObtainDHCPLease(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poolName string) (dhcpLeaseResult, error) {
+// and option 60 (vendor class). hwAddr, when non-empty, is used as the
+// chaddr (layer-2 MAC) in the DHCP payload; when empty, vpcd derives one
+// from clientID. Pass the OVN gateway LRP MAC here for per-VM allocations
+// so that the upstream DHCP binding matches the MAC OVN GARPs with — without
+// this, routers that use their DHCP lease table as ARP forward traffic to
+// the generated chaddr instead of the gateway LRP, dropping all inbound traffic.
+// Blocks until vpcd replies or dhcpNATSTimeout expires. The Manager-side
+// handler is idempotent: a second call with the same clientID while a live
+// lease exists returns the same lease without a fresh DORA, so CAS retry
+// loops on the caller are safe.
+func ObtainDHCPLease(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poolName, hwAddr string) (dhcpLeaseResult, error) {
 	if nc == nil {
 		return dhcpLeaseResult{}, fmt.Errorf("DHCP lease: NATS connection is required")
 	}
@@ -66,6 +71,7 @@ func ObtainDHCPLease(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poo
 		Hostname:    hostname,
 		VendorClass: vendorClass,
 		PoolName:    poolName,
+		HWAddr:      hwAddr,
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
