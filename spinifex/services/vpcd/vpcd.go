@@ -81,6 +81,7 @@ type Config struct {
 // ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
 type ExternalPoolConfig struct {
 	Name            string
+	Source          string // "static" (default) or "dhcp"
 	RangeStart      string
 	RangeEnd        string
 	Gateway         string
@@ -89,8 +90,14 @@ type ExternalPoolConfig struct {
 	DNSServers      []string
 	Region          string
 	AZ              string
+	DhcpBindBridge  string // Bridge where the DHCP AF_PACKET socket binds (e.g. "br-wan"). Required for source="dhcp".
 	GwLrpRangeStart string // Sub-range for OVN gateway LRP IPs in centralized NAT mode (mulga-siv-36).
 	GwLrpRangeEnd   string
+}
+
+// IsDHCP returns true if this pool obtains IPs from upstream DHCP.
+func (p *ExternalPoolConfig) IsDHCP() bool {
+	return p.Source == "dhcp"
 }
 
 // Service implements the Spinifex service interface for vpcd.
@@ -344,6 +351,7 @@ func launchService(cfg *Config) error {
 	topoOpts = append(topoOpts, WithChassisNames(chassisNames))
 	slog.Info("vpcd: gateway chassis discovered", "chassis", chassisNames)
 	topoOpts = append(topoOpts, WithBridgeMode(bridgeMode))
+	topoOpts = append(topoOpts, WithNATSConn(nc))
 	topo := NewTopologyHandler(liveClient, topoOpts...)
 
 	// Elect a single vpcd to run startup reconcile. Without this, N vpcds in a
