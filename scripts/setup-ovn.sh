@@ -290,6 +290,26 @@ sudo ovs-vsctl set Bridge br-int other-config:disable-in-band=true
 sudo ip link set br-int up
 echo "  br-int: created, fail-mode=secure, up"
 
+# Mark OVS internal netdevs Unmanaged for systemd-networkd. Without this,
+# Trixie's networkd takes ownership of any unconfigured iface and may bring
+# br-int/br-ext admin-down after setup-ovn.sh's `ip link set up` (no Match
+# rule => default management => no carrier => link down). OVS dataplane
+# still forwards, but ovn-controller flow programming and any tooling that
+# probes link state misbehave. Unmanaged=yes keeps OVS in sole control.
+# (mulga-siv-37)
+OVS_INTERNAL_NET=/etc/systemd/network/05-spinifex-ovs-internal.network
+if [ ! -f "$OVS_INTERNAL_NET" ]; then
+    sudo tee "$OVS_INTERNAL_NET" >/dev/null <<'NETWORK'
+[Match]
+Name=br-int br-ext
+
+[Link]
+Unmanaged=yes
+NETWORK
+    sudo networkctl reload 2>/dev/null || true
+    echo "  wrote $OVS_INTERNAL_NET (Unmanaged=yes for br-int br-ext)"
+fi
+
 # --- Step 3b: Configure WAN bridge for public subnet uplink ---
 if [ -n "$WAN_BRIDGE" ]; then
     echo ""
