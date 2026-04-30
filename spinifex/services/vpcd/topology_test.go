@@ -929,10 +929,18 @@ func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected gateway router port: %v", err)
 	}
-	// Gateway LRP always uses link-local, never a pool IP — pool IPs are
-	// reserved for per-VM dnat_and_snat (mulga-siv-26).
-	if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "169.254.0.1/30" {
-		t.Errorf("expected gateway network 169.254.0.1/30, got %v", gwPort.Networks)
+	// Centralized NAT: LRP gets a WAN-subnet IP auto-derived below the
+	// per-VM EIP range (192.168.1.150-250), so somewhere in
+	// 192.168.1.134-149 with /24. Pool range_start - 16 = .134, range_start - 1 = .149.
+	if len(gwPort.Networks) != 1 {
+		t.Fatalf("expected 1 LRP network, got %v", gwPort.Networks)
+	}
+	gotNet := gwPort.Networks[0]
+	if !strings.HasPrefix(gotNet, "192.168.1.1") || !strings.HasSuffix(gotNet, "/24") {
+		t.Errorf("expected gw LRP network in 192.168.1.134-149/24, got %s", gotNet)
+	}
+	if gwPort.ExternalIDs["spinifex:gateway_ip"] == "" {
+		t.Errorf("expected spinifex:gateway_ip on LRP, got empty")
 	}
 
 	// Verify NO blanket SNAT rule (AWS parity)
@@ -966,10 +974,10 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 	pools := []ExternalPoolConfig{
 		{
 			Name:       "dc1",
-			RangeStart: "203.0.113.2",
+			RangeStart: "203.0.113.8",
 			RangeEnd:   "203.0.113.14",
 			Gateway:    "203.0.113.1",
-			GatewayIP:  "203.0.113.2", // Explicit gateway IP
+			GatewayIP:  "203.0.113.8", // Explicit gateway IP
 			PrefixLen:  28,
 		},
 	}
@@ -993,10 +1001,14 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 
 	router, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-gwip")
 	gwPort, _ := mock.GetLogicalRouterPort(ctx, "gw-vpc-gwip")
-	// Even with explicit pool.GatewayIP set, the LRP itself stays link-local
-	// (mulga-siv-26): GatewayIP is parsed for IPAM bookkeeping only.
-	if gwPort.Networks[0] != "169.254.0.1/30" {
-		t.Errorf("expected 169.254.0.1/30, got %s", gwPort.Networks[0])
+	// /28 with full pool .2-.14 + gateway .1 leaves no room in-subnet —
+	// auto-derive shifts below RangeStart and clamps; whatever the result,
+	// it must be a /28 IP carrying spinifex:gateway_ip.
+	if !strings.HasSuffix(gwPort.Networks[0], "/28") {
+		t.Errorf("expected /28 LRP network, got %s", gwPort.Networks[0])
+	}
+	if gwPort.ExternalIDs["spinifex:gateway_ip"] == "" {
+		t.Errorf("expected spinifex:gateway_ip on LRP, got empty")
 	}
 	// No blanket SNAT rule (AWS parity)
 	if len(router.NAT) != 0 {
@@ -1014,9 +1026,9 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 
 // TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision is the regression
 // guard for mulga-siv-26: three VPCs sharing one external pool must produce
-// three gateway LRPs with the same link-local Networks but distinct MACs and
-// distinct default routes. Pre-fix every LRP claimed pool.RangeStart and the
-// VPCs ARP-collided on br-ext.
+// three gateway LRPs with distinct WAN-subnet IPs, distinct MACs and distinct
+// default routes. Pre-fix every LRP claimed pool.RangeStart and the VPCs
+// ARP-collided on br-ext.
 func TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision(t *testing.T) {
 	_, nc := startTestNATS(t)
 	mock := NewMockOVNClient()
@@ -1062,15 +1074,31 @@ func TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision(t *testing.T) {
 	}
 
 	macs := make(map[string]string, len(vpcIds))
+	ips := make(map[string]string, len(vpcIds))
 	for _, vpcId := range vpcIds {
 		gwPortName := "gw-" + vpcId
 		gwPort, err := mock.GetLogicalRouterPort(ctx, gwPortName)
 		if err != nil {
 			t.Fatalf("get %s: %v", gwPortName, err)
 		}
-		if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "169.254.0.1/30" {
-			t.Errorf("%s: expected Networks=[169.254.0.1/30], got %v", gwPortName, gwPort.Networks)
+		if len(gwPort.Networks) != 1 {
+			t.Fatalf("%s: expected 1 network, got %v", gwPortName, gwPort.Networks)
 		}
+		ip, cidr, _ := strings.Cut(gwPort.Networks[0], "/")
+		if cidr != "24" {
+			t.Errorf("%s: expected /24, got /%s", gwPortName, cidr)
+		}
+		if !strings.HasPrefix(ip, "192.168.0.") {
+			t.Errorf("%s: expected 192.168.0.x, got %s", gwPortName, ip)
+		}
+		gwIP := gwPort.ExternalIDs["spinifex:gateway_ip"]
+		if gwIP != ip {
+			t.Errorf("%s: external_ids gateway_ip=%q, expected %q", gwPortName, gwIP, ip)
+		}
+		if other, dup := ips[ip]; dup {
+			t.Errorf("IP collision: %s and %s share %s", gwPortName, other, ip)
+		}
+		ips[ip] = gwPortName
 		if gwPort.MAC == "" {
 			t.Errorf("%s: empty MAC", gwPortName)
 		}
@@ -1096,6 +1124,9 @@ func TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision(t *testing.T) {
 	}
 	if len(macs) != len(vpcIds) {
 		t.Errorf("expected %d distinct MACs, got %d", len(vpcIds), len(macs))
+	}
+	if len(ips) != len(vpcIds) {
+		t.Errorf("expected %d distinct IPs, got %d", len(vpcIds), len(ips))
 	}
 }
 
@@ -2831,5 +2862,163 @@ func TestTopologyHandler_ReconcileIGW_LocalnetPortCreateError(t *testing.T) {
 	// The external switch must have been rolled back.
 	if _, err := mock.GetLogicalSwitch(ctx, "ext-vpc-clash"); err == nil {
 		t.Error("expected external switch to be rolled back after port-create failure")
+	}
+}
+
+// TestGwLrpRange exercises the gateway LRP IP range derivation. mulga-siv-36
+// dropped the link-local fallback in centralized NAT — auto-derive must yield
+// an in-subnet range whenever the operator did not configure one explicitly,
+// or fail loudly so the IGW attach surfaces the misconfiguration.
+func TestGwLrpRange(t *testing.T) {
+	cases := []struct {
+		name      string
+		pool      *ExternalPoolConfig
+		wantOK    bool
+		wantStart string
+		wantEnd   string
+		wantPfx   int
+	}{
+		{
+			name:   "nil pool",
+			pool:   nil,
+			wantOK: false,
+		},
+		{
+			name: "explicit range wins over auto",
+			pool: &ExternalPoolConfig{
+				Gateway:         "192.168.1.1",
+				PrefixLen:       24,
+				RangeStart:      "192.168.1.100",
+				RangeEnd:        "192.168.1.110",
+				GwLrpRangeStart: "192.168.1.50",
+				GwLrpRangeEnd:   "192.168.1.59",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.50",
+			wantEnd:   "192.168.1.59",
+			wantPfx:   24,
+		},
+		{
+			name: "explicit range invalid falls through to auto",
+			pool: &ExternalPoolConfig{
+				Gateway:         "192.168.1.1",
+				PrefixLen:       24,
+				RangeStart:      "192.168.1.100",
+				RangeEnd:        "192.168.1.110",
+				GwLrpRangeStart: "not-an-ip",
+				GwLrpRangeEnd:   "192.168.1.59",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.239",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive /24 default end of subnet",
+			pool: &ExternalPoolConfig{
+				Gateway:    "192.168.1.1",
+				PrefixLen:  24,
+				RangeStart: "192.168.1.100",
+				RangeEnd:   "192.168.1.110",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.239",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive overlap shifts below RangeStart",
+			pool: &ExternalPoolConfig{
+				Gateway:    "192.168.1.1",
+				PrefixLen:  24,
+				RangeStart: "192.168.1.245",
+				RangeEnd:   "192.168.1.254",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.229",
+			wantEnd:   "192.168.1.244",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive guards gateway at start",
+			pool: &ExternalPoolConfig{
+				Gateway:   "192.168.1.240",
+				PrefixLen: 24,
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.241",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive guards gateway at end",
+			pool: &ExternalPoolConfig{
+				Gateway:   "192.168.1.254",
+				PrefixLen: 24,
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.239",
+			wantEnd:   "192.168.1.253",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive guards gateway in middle",
+			pool: &ExternalPoolConfig{
+				Gateway:   "192.168.1.245",
+				PrefixLen: 24,
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.246",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "default prefix 24 when missing",
+			pool: &ExternalPoolConfig{
+				Gateway: "10.0.0.1",
+			},
+			wantOK:    true,
+			wantStart: "10.0.0.239",
+			wantEnd:   "10.0.0.254",
+			wantPfx:   24,
+		},
+		{
+			name: "unparseable gateway returns ok=false",
+			pool: &ExternalPoolConfig{
+				Gateway:   "not-an-ip",
+				PrefixLen: 24,
+			},
+			wantOK: false,
+		},
+		{
+			name: "/28 with full pool exhausts auto range",
+			pool: &ExternalPoolConfig{
+				Gateway:    "203.0.113.1",
+				PrefixLen:  28,
+				RangeStart: "203.0.113.2",
+				RangeEnd:   "203.0.113.14",
+			},
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start, end, pfx, ok := gwLrpRange(tc.pool)
+			if ok != tc.wantOK {
+				t.Fatalf("ok=%v, want %v", ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if start.String() != tc.wantStart {
+				t.Errorf("start=%s, want %s", start, tc.wantStart)
+			}
+			if end.String() != tc.wantEnd {
+				t.Errorf("end=%s, want %s", end, tc.wantEnd)
+			}
+			if pfx != tc.wantPfx {
+				t.Errorf("prefix=%d, want %d", pfx, tc.wantPfx)
+			}
+		})
 	}
 }

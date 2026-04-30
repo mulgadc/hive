@@ -872,41 +872,41 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	// the LRP IP itself never goes on the wire.
 	//
 	// Centralized mode (veth/macvlan): the LRP is the on-wire egress, so it
-	// must hold a WAN-subnet IP. Allocate one from pool.GwLrpRange so each
-	// VPC gets a distinct sender IP (mulga-siv-36). Without this the
-	// upstream router silently drops ARP for the WAN nexthop (RFC 826) and
-	// the default route never resolves.
+	// must hold a WAN-subnet IP. Allocate one from pool.GwLrpRange (or
+	// auto-derive from the WAN subnet) so each VPC gets a distinct sender
+	// IP (mulga-siv-36). Without this the upstream router silently drops
+	// ARP for the WAN nexthop (RFC 826) and the default route never
+	// resolves.
 	// TODO: use VPC's region/AZ once we track it; for now use first matching pool.
 	pool := h.findExternalPool("", "")
 	gatewayNetwork := gatewayPortNetwork
 	wanGateway := "169.254.0.2"
 	gwLrpIP := ""
 
-	if pool != nil {
+	switch {
+	case pool != nil:
 		wanGateway = pool.Gateway
 		if h.useCentralizedNAT() {
 			ip, prefix, allocOK, allocErr := h.allocateGatewayLRPIP(ctx, evt.VpcId, pool)
-			if allocErr != nil {
-				slog.Error("vpcd: failed to allocate gw LRP IP",
+			if allocErr != nil || !allocOK {
+				slog.Error("vpcd: failed to allocate gw LRP IP for centralized NAT",
 					"vpc_id", evt.VpcId, "pool", pool.Name, "err", allocErr)
 				_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+				if allocErr == nil {
+					allocErr = fmt.Errorf("no gw LRP IP available in pool %q (configure gw_lrp_range or fix Gateway/PrefixLen)", pool.Name)
+				}
 				respond(msg, allocErr)
 				return
 			}
-			if allocOK {
-				gwLrpIP = ip
-				gatewayNetwork = fmt.Sprintf("%s/%d", ip, prefix)
-			} else {
-				slog.Warn("vpcd: centralized NAT requires pool.gw_lrp_range; LRP will use link-local and external traffic will not resolve ARP upstream",
-					"vpc_id", evt.VpcId, "pool", pool.Name)
-			}
+			gwLrpIP = ip
+			gatewayNetwork = fmt.Sprintf("%s/%d", ip, prefix)
 		}
 		slog.Info("vpcd: using external pool for IGW",
 			"pool", pool.Name,
 			"lrp_network", gatewayNetwork,
 			"wan_gateway", wanGateway,
 		)
-	} else if h.externalMode == "pool" {
+	case h.externalMode == "pool":
 		slog.Warn("vpcd: external mode is set but no matching pool found, using link-local fallback")
 	}
 
@@ -1294,13 +1294,14 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 		wanGateway = pool.Gateway
 		if h.useCentralizedNAT() {
 			ip, prefix, allocOK, allocErr := h.allocateGatewayLRPIP(ctx, vpcId, pool)
-			if allocErr != nil {
+			if allocErr != nil || !allocOK {
+				if allocErr == nil {
+					allocErr = fmt.Errorf("no gw LRP IP available in pool %q", pool.Name)
+				}
 				return fmt.Errorf("allocate gw LRP IP for %s: %w", vpcId, allocErr)
 			}
-			if allocOK {
-				gwLrpIP = ip
-				gatewayNetwork = fmt.Sprintf("%s/%d", ip, prefix)
-			}
+			gwLrpIP = ip
+			gatewayNetwork = fmt.Sprintf("%s/%d", ip, prefix)
 		}
 	}
 
@@ -1492,30 +1493,104 @@ func (h *TopologyHandler) reconcileGatewayChassis(ctx context.Context, validName
 
 // --- Helpers ---
 
-// gwLrpRange returns the gw LRP IP range configured on the pool.
-// Returns ok=false when GwLrpRangeStart/End are not configured — caller
-// must fall back to link-local in that case.
+// gwLrpRange returns the per-VPC gateway LRP IP range for a pool. Priority:
+//
+//  1. Explicit pool.GwLrpRangeStart/End set in spinifex.toml.
+//  2. Auto-derived from pool.Gateway + pool.PrefixLen — last 16 host IPs of
+//     the WAN subnet (broadcast - 16 .. broadcast - 1). When that range
+//     overlaps the per-VM EIP range (RangeStart..RangeEnd), shift to the
+//     16 IPs immediately below RangeStart instead.
+//
+// Returns ok=false only when the pool is missing or the gateway/prefix is
+// unparseable — link-local has no role here, the WAN-subnet IP is the only
+// thing the upstream router will ARP-resolve.
 func gwLrpRange(pool *ExternalPoolConfig) (start, end net.IP, prefix int, ok bool) {
-	if pool == nil || pool.GwLrpRangeStart == "" || pool.GwLrpRangeEnd == "" {
-		return nil, nil, 0, false
-	}
-	s := net.ParseIP(pool.GwLrpRangeStart).To4()
-	e := net.ParseIP(pool.GwLrpRangeEnd).To4()
-	if s == nil || e == nil {
-		slog.Warn("vpcd: invalid gw_lrp_range, falling back to link-local",
-			"pool", pool.Name, "start", pool.GwLrpRangeStart, "end", pool.GwLrpRangeEnd)
-		return nil, nil, 0, false
-	}
-	if ipv4ToUint32(s) > ipv4ToUint32(e) {
-		slog.Warn("vpcd: gw_lrp_range start > end, falling back to link-local",
-			"pool", pool.Name, "start", pool.GwLrpRangeStart, "end", pool.GwLrpRangeEnd)
+	if pool == nil {
 		return nil, nil, 0, false
 	}
 	prefix = pool.PrefixLen
 	if prefix <= 0 || prefix > 32 {
 		prefix = 24
 	}
-	return s, e, prefix, true
+
+	// 1. Explicit operator config wins.
+	if pool.GwLrpRangeStart != "" || pool.GwLrpRangeEnd != "" {
+		s := net.ParseIP(pool.GwLrpRangeStart).To4()
+		e := net.ParseIP(pool.GwLrpRangeEnd).To4()
+		if s != nil && e != nil && ipv4ToUint32(s) <= ipv4ToUint32(e) {
+			return s, e, prefix, true
+		}
+		slog.Warn("vpcd: invalid explicit gw_lrp_range, attempting auto-derive",
+			"pool", pool.Name, "start", pool.GwLrpRangeStart, "end", pool.GwLrpRangeEnd)
+	}
+
+	// 2. Auto-derive from subnet.
+	gw := net.ParseIP(pool.Gateway).To4()
+	if gw == nil {
+		return nil, nil, 0, false
+	}
+	mask := net.CIDRMask(prefix, 32)
+	network := gw.Mask(mask)
+	bcast := make(net.IP, 4)
+	for i := range 4 {
+		bcast[i] = network[i] | ^mask[i]
+	}
+	bcastU := ipv4ToUint32(bcast)
+	if bcastU < 17 {
+		return nil, nil, 0, false
+	}
+	autoEndU := bcastU - 1    // skip broadcast itself
+	autoStartU := bcastU - 16 // 16-IP range
+
+	// Shift below per-VM EIP range when overlap.
+	if pool.RangeStart != "" && pool.RangeEnd != "" {
+		rs := net.ParseIP(pool.RangeStart).To4()
+		re := net.ParseIP(pool.RangeEnd).To4()
+		if rs != nil && re != nil {
+			rsU := ipv4ToUint32(rs)
+			reU := ipv4ToUint32(re)
+			if autoEndU >= rsU && autoStartU <= reU {
+				if rsU < 17 {
+					return nil, nil, 0, false
+				}
+				autoEndU = rsU - 1
+				autoStartU = rsU - 16
+			}
+		}
+	}
+
+	// Clamp inside the subnet (network+1 .. broadcast-1) — never hand out
+	// the network address, the broadcast, or an off-subnet IP.
+	netU := ipv4ToUint32(network)
+	if autoStartU <= netU {
+		autoStartU = netU + 1
+	}
+	if autoEndU >= bcastU {
+		autoEndU = bcastU - 1
+	}
+	if autoStartU > autoEndU {
+		return nil, nil, 0, false
+	}
+
+	// Guard the gateway IP itself — never give a VPC the upstream nexthop.
+	gwU := ipv4ToUint32(gw)
+	if gwU >= autoStartU && gwU <= autoEndU {
+		// Gateway is inside the auto range — shrink to exclude it.
+		switch gwU {
+		case autoStartU:
+			autoStartU++
+		case autoEndU:
+			autoEndU--
+		default:
+			// Gateway in the middle: prefer the upper half.
+			autoStartU = gwU + 1
+		}
+		if autoStartU > autoEndU {
+			return nil, nil, 0, false
+		}
+	}
+
+	return uint32ToIPv4(autoStartU), uint32ToIPv4(autoEndU), prefix, true
 }
 
 // allocateGatewayLRPIP picks the next free IP in pool.GwLrpRange for the
