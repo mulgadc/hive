@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -357,32 +358,42 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	nodeName := fmt.Sprintf("nbd-%s", volumeID)
 	iothreadID := fmt.Sprintf("ioth-%s", volumeID)
 
-	// Phase 1: QMP device_del (remove guest device)
+	// Phase 1: QMP device_del (remove guest device).
+	// Idempotent: a prior detach may have already removed the device but
+	// failed at blockdev-del, leaving the volume's external state intact.
+	// Treat DeviceNotFound as success so the retry can drive blockdev-del
+	// to completion without bailing on the now-absent guest device.
 	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
 		Execute:   "device_del",
 		Arguments: map[string]any{"id": deviceID},
 	}, instance.ID)
-	if err != nil {
-		if !force {
-			slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
-			respondWithError(msg, awserrors.ErrorServerInternal)
-			return
-		}
+	switch {
+	case err == nil:
+	case isQMPDeviceNotFound(err):
+		slog.Info("DetachVolume: guest device already removed (resuming detach)", "volumeId", volumeID, "err", err)
+	case force:
 		slog.Warn("DetachVolume: QMP device_del failed (force=true, continuing)", "volumeId", volumeID, "err", err)
+	default:
+		slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
 	}
 
 	// Brief pause for guest to acknowledge PCI removal
 	time.Sleep(d.detachDelay)
 
-	// Phase 2: QMP blockdev-del (remove block node)
-	_, blockdevErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
-		Execute:   "blockdev-del",
-		Arguments: map[string]any{"node-name": nodeName},
-	}, instance.ID)
+	// Phase 2: QMP blockdev-del (remove block node).
+	// Poll-retry on "node is in use": after device_del, NBD client teardown
+	// and any in-flight I/O can hold the block node briefly. Bailing here
+	// without retry leaves the guest device gone but the block node intact,
+	// and the next AWS-CLI retry hits DeviceNotFound on device_del with no
+	// path forward (mulga-siv-41).
+	blockdevErr := d.tryBlockdevDel(instance, nodeName)
 	if blockdevErr != nil {
-		// Block node still referenced by QEMU; do not clean up state or unmount —
-		// tearing down the NBD server would crash the VM, and removing metadata
-		// would allow the volume to be double-attached.
+		// Block node still referenced after retry budget exhausted; do not
+		// clean up state or unmount — tearing down the NBD server would
+		// crash the VM, and removing metadata would allow the volume to be
+		// double-attached.
 		slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
@@ -503,4 +514,63 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
 	handleNATSRequest(msg, d.volumeService.DeleteVolume)
+}
+
+// tryBlockdevDel issues blockdev-del with bounded retry on "is in use"
+// errors. After device_del, NBD client teardown and any in-flight guest
+// I/O can briefly hold the block node; QEMU surfaces this as a
+// GenericError carrying "Node <name> is in use". Polling at d.detachDelay
+// gives the I/O drain enough time without a hardcoded long sleep.
+func (d *Daemon) tryBlockdevDel(instance *vm.VM, nodeName string) error {
+	const maxAttempts = 20 // 20 × detachDelay (default 1s) = 20s budget
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+			Execute:   "blockdev-del",
+			Arguments: map[string]any{"node-name": nodeName},
+		}, instance.ID)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("DetachVolume: blockdev-del succeeded after retry",
+					"nodeName", nodeName, "attempts", attempt)
+			}
+			return nil
+		}
+		lastErr = err
+		if !isQMPNodeInUse(err) {
+			return err
+		}
+		if attempt == maxAttempts {
+			break
+		}
+		slog.Debug("DetachVolume: blockdev-del busy, retrying",
+			"nodeName", nodeName, "attempt", attempt, "err", err)
+		time.Sleep(d.detachDelay)
+	}
+	return lastErr
+}
+
+// isQMPDeviceNotFound returns true when err is a QMP DeviceNotFound class
+// error from device_del. Used to make device_del idempotent across detach
+// retries — the second AWS-CLI call must not bail when QEMU reports the
+// device is already gone (mulga-siv-41).
+func isQMPDeviceNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "DeviceNotFound")
+}
+
+// isQMPNodeInUse returns true when err is a QMP GenericError reporting a
+// block node still in use. blockdev-del fails this way while NBD client
+// teardown and queued I/O drain after device_del; the caller polls until
+// the node is released or the budget expires. Match "in use" rather than
+// "is in use" — QEMU phrases this as both "X is in use" and "X is still
+// in use" depending on the path.
+func isQMPNodeInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "in use")
 }
