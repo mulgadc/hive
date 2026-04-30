@@ -13,22 +13,27 @@ import (
 // github.com/insomniacslk/dhcp/dhcpv4/nclient4. Each Acquire/Renew/Release
 // opens an AF_PACKET socket on the target bridge for the duration of the
 // handshake and closes it when done — no long-lived per-lease process.
+//
+// Retransmission lives one layer up in DHCPManager.acquireWithBackoff
+// (RFC 2131 §4.1). This client always does exactly one DISCOVER attempt;
+// the per-attempt window is whatever the caller's context allows.
 type NClient4Client struct {
 	timeout time.Duration
-	retry   int
 }
 
 var _ Client = (*NClient4Client)(nil)
 
-// NewNClient4 creates an NClient4Client with sensible DORA defaults.
-func NewNClient4(timeout time.Duration, retry int) *NClient4Client {
+// NewNClient4 creates an NClient4Client. timeout is the nclient4-internal
+// socket read deadline used as a safety net when the caller supplies no
+// context deadline; in production DHCPManager always wraps each call in a
+// per-attempt ctx so this is rarely hit. The retry argument is accepted
+// for backwards compat and ignored — DHCPManager.acquireWithBackoff owns
+// retransmission.
+func NewNClient4(timeout time.Duration, _ int) *NClient4Client {
 	if timeout <= 0 {
-		timeout = 15 * time.Second
+		timeout = 60 * time.Second
 	}
-	if retry <= 0 {
-		retry = 3
-	}
-	return &NClient4Client{timeout: timeout, retry: retry}
+	return &NClient4Client{timeout: timeout}
 }
 
 func (c *NClient4Client) Acquire(ctx context.Context, req AcquireRequest) (*Lease, error) {
@@ -42,7 +47,9 @@ func (c *NClient4Client) Acquire(ctx context.Context, req AcquireRequest) (*Leas
 	client, err := nclient4.New(req.Bridge,
 		nclient4.WithHWAddr(req.HWAddr),
 		nclient4.WithTimeout(c.timeout),
-		nclient4.WithRetry(c.retry),
+		// Single attempt per call — DHCPManager.acquireWithBackoff drives
+		// retransmission per RFC 2131 §4.1.
+		nclient4.WithRetry(1),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open nclient4 on %s: %w", req.Bridge, err)
@@ -74,7 +81,7 @@ func (c *NClient4Client) Renew(ctx context.Context, lease *Lease) (*Lease, error
 	client, err := nclient4.New(lease.Bridge,
 		nclient4.WithHWAddr(lease.HWAddr),
 		nclient4.WithTimeout(c.timeout),
-		nclient4.WithRetry(c.retry),
+		nclient4.WithRetry(1),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open nclient4 on %s for renew: %w", lease.Bridge, err)

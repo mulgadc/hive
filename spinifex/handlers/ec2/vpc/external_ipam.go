@@ -9,6 +9,7 @@ import (
 	"net"
 
 	"github.com/mulgadc/spinifex/spinifex/migrate"
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -28,7 +29,7 @@ type ExternalIPAllocation struct {
 	Note         string `json:"note,omitempty"`          // Human-readable note
 
 	// DHCP-sourced metadata — set only for allocations whose pool has
-	// source="dhcp" (see ObtainDHCPLease). These fields let describe
+	// source="dhcp" (see dhcp.RequestAcquire). These fields let describe
 	// surfaces and operators trace a given IP back to the upstream lease
 	// without re-querying vpcd.
 	LeaseExpiresUnix int64  `json:"lease_expires_unix,omitempty"` // Absolute expiry from the server's ACK
@@ -173,9 +174,9 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	// For DHCP pools, obtain the gateway IP from router DHCP if not set.
 	// The gateway lease is long-lived: vpcd's renewal goroutine keeps it
 	// refreshed until the pool is torn down.
-	var gatewayLease *dhcpLeaseResult
+	var gatewayLease *dhcp.LeaseResult
 	if gwIP == "" && pool.IsDHCP() {
-		lease, dhcpErr := ObtainDHCPLease(m.nc, pool.DhcpBindBridge,
+		lease, dhcpErr := dhcp.RequestAcquire(m.nc, pool.DhcpBindBridge,
 			"gateway-"+pool.Name,
 			"gateway-"+pool.Name,
 			"mulga-spinifex-gw",
@@ -268,7 +269,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 	// Manager is idempotent on ClientID, so CAS retries below will not
 	// trigger a second DORA — we only release at the end if no CAS
 	// attempt succeeded.
-	var dhcpLease *dhcpLeaseResult
+	var dhcpLease *dhcp.LeaseResult
 	if pool != nil && pool.IsDHCP() {
 		hostname, vendorClass := dhcpIdentityOptions(eniID, instanceID, poolName)
 		lease, err := ObtainDHCPLease(m.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, poolName, pool.GatewayMAC)
@@ -282,7 +283,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 		record, revision, err := m.getRecord(poolName)
 		if err != nil {
 			if dhcpLease != nil {
-				_ = ReleaseDHCPLease(m.nc, clientID)
+				_ = dhcp.RequestRelease(m.nc, clientID)
 			}
 			return "", fmt.Errorf("get external IPAM record: %w", err)
 		}
@@ -314,7 +315,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 		data, err := json.Marshal(record)
 		if err != nil {
 			if dhcpLease != nil {
-				_ = ReleaseDHCPLease(m.nc, clientID)
+				_ = dhcp.RequestRelease(m.nc, clientID)
 			}
 			return "", fmt.Errorf("marshal external IPAM record: %w", err)
 		}
@@ -335,7 +336,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, ins
 	// All CAS attempts exhausted — release any DHCP lease we acquired so
 	// vpcd doesn't hold a binding for an IP we won't use.
 	if dhcpLease != nil {
-		_ = ReleaseDHCPLease(m.nc, clientID)
+		_ = dhcp.RequestRelease(m.nc, clientID)
 	}
 	return "", fmt.Errorf("external IPAM allocation failed after CAS retries for pool %s", poolName)
 }
@@ -390,7 +391,7 @@ func (m *ExternalIPAM) ReleaseIP(poolName, ip string) error {
 			if clientID == "" {
 				clientID = alloc.InstanceId
 			}
-			if releaseErr := ReleaseDHCPLease(m.nc, clientID); releaseErr != nil {
+			if releaseErr := dhcp.RequestRelease(m.nc, clientID); releaseErr != nil {
 				slog.Warn("Failed to release DHCP lease", "pool", poolName, "ip", ip, "err", releaseErr)
 			}
 		}

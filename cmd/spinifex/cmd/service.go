@@ -735,6 +735,7 @@ var vpcdStartCmd = &cobra.Command{
 		for _, p := range clusterConfig.Network.ExternalPools {
 			extPools = append(extPools, vpcd.ExternalPoolConfig{
 				Name:            p.Name,
+				Source:          p.Source,
 				RangeStart:      p.RangeStart,
 				RangeEnd:        p.RangeEnd,
 				Gateway:         p.Gateway,
@@ -743,6 +744,7 @@ var vpcdStartCmd = &cobra.Command{
 				DNSServers:      p.DNSServers,
 				Region:          p.Region,
 				AZ:              p.AZ,
+				DhcpBindBridge:  nodeConfig.VPCD.DhcpBindBridge,
 				GwLrpRangeStart: p.GwLrpRangeStart,
 				GwLrpRangeEnd:   p.GwLrpRangeEnd,
 			})

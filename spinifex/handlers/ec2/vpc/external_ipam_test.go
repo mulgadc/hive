@@ -745,3 +745,88 @@ func TestDHCPIdentityOptions(t *testing.T) {
 		})
 	}
 }
+
+// TestNextAvailableExternalIP_SkipsGwLrpRange verifies the per-VM EIP allocator
+// honors gw_lrp_range by skipping IPs reserved for vpcd's gateway LRPs (siv-36).
+func TestNextAvailableExternalIP_SkipsGwLrpRange(t *testing.T) {
+	rec := &ExternalIPAMRecord{
+		PoolName:        "wan",
+		RangeStart:      "192.168.1.10",
+		RangeEnd:        "192.168.1.14",
+		GwLrpRangeStart: "192.168.1.11",
+		GwLrpRangeEnd:   "192.168.1.13",
+		Allocated:       map[string]ExternalIPAllocation{},
+	}
+	ip, err := nextAvailableExternalIP(rec)
+	require.NoError(t, err)
+	assert.Equal(t, "192.168.1.10", ip)
+	rec.Allocated[ip] = ExternalIPAllocation{}
+	ip, err = nextAvailableExternalIP(rec)
+	require.NoError(t, err)
+	assert.Equal(t, "192.168.1.14", ip)
+	rec.Allocated[ip] = ExternalIPAllocation{}
+	_, err = nextAvailableExternalIP(rec)
+	require.Error(t, err)
+}
+
+func TestValidatePoolConfig(t *testing.T) {
+	base := func() ExternalPoolConfig {
+		return ExternalPoolConfig{
+			Name:       "wan",
+			Gateway:    "192.168.1.1",
+			RangeStart: "192.168.1.100",
+			RangeEnd:   "192.168.1.110",
+			PrefixLen:  24,
+		}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*ExternalPoolConfig)
+		wantErr string
+	}{
+		{name: "ok", mutate: func(p *ExternalPoolConfig) {}},
+		{name: "no name", mutate: func(p *ExternalPoolConfig) { p.Name = "" }, wantErr: "pool name is required"},
+		{name: "no gateway", mutate: func(p *ExternalPoolConfig) { p.Gateway = "" }, wantErr: "gateway is required"},
+		{name: "bad gateway", mutate: func(p *ExternalPoolConfig) { p.Gateway = "x" }, wantErr: "invalid gateway IP"},
+		{name: "bad gateway_ip", mutate: func(p *ExternalPoolConfig) { p.GatewayIP = "x" }, wantErr: "invalid gateway_ip"},
+		{name: "bad range_start", mutate: func(p *ExternalPoolConfig) { p.RangeStart = "x" }, wantErr: "invalid range_start"},
+		{name: "bad range_end", mutate: func(p *ExternalPoolConfig) { p.RangeEnd = "x" }, wantErr: "invalid range_end"},
+		{name: "range reversed", mutate: func(p *ExternalPoolConfig) {
+			p.RangeStart = "192.168.1.200"
+			p.RangeEnd = "192.168.1.100"
+		}, wantErr: "greater than range_end"},
+		{name: "bad gw_lrp_start", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "x"
+			p.GwLrpRangeEnd = "192.168.1.20"
+		}, wantErr: "invalid gw_lrp_range_start"},
+		{name: "bad gw_lrp_end", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.20"
+			p.GwLrpRangeEnd = "x"
+		}, wantErr: "invalid gw_lrp_range_end"},
+		{name: "gw_lrp reversed", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.30"
+			p.GwLrpRangeEnd = "192.168.1.20"
+		}, wantErr: "greater than gw_lrp_range_end"},
+		{name: "gw_lrp overlaps range", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.105"
+			p.GwLrpRangeEnd = "192.168.1.108"
+		}, wantErr: "overlaps range"},
+		{name: "gw_lrp valid below range", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.20"
+			p.GwLrpRangeEnd = "192.168.1.29"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base()
+			tc.mutate(&p)
+			err := ValidatePoolConfig(p)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
