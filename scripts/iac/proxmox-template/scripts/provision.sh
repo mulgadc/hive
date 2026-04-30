@@ -3,11 +3,11 @@
 # and generalizes the VM for use as a Proxmox template.
 #
 # Runs as tf-user via Terraform remote-exec. Uses sudo for system operations.
-# Environment: GIT_BRANCH (default: main)
+# Environment: GIT_BRANCH (default: dev)
 
 set -euo pipefail
 
-GIT_BRANCH="${GIT_BRANCH:-main}"
+GIT_BRANCH="${GIT_BRANCH:-dev}"
 WORK_DIR="$HOME/Development/mulga"
 
 echo "========================================"

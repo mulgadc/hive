@@ -112,6 +112,6 @@ variable "bridge" {
 
 variable "git_branch" {
   type        = string
-  description = "Git branch to clone for hive, viperblock, and predastore"
-  default     = "main"
+  description = "Git branch to clone for spinifex, viperblock, and predastore"
+  default     = "dev"
 }
