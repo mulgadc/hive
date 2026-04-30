@@ -1,5 +1,5 @@
 ---
-title: "Install from Bootable USB"
+title: "Bootable USB Install"
 description: "Install Spinifex on bare-metal hardware by flashing the Spinifex ISO to a USB drive and booting the target device from it."
 category: "Getting Started"
 sections:
@@ -27,27 +27,27 @@ resources:
 
 Spinifex is designed for bare-metal hardware, edge nodes and data-centre use. Follow this guide to install Spinifex from a bootable USB using the Spinifex ISO.
 
-> **Note:** this tutorial is for x86 architecture.
+**Note:** this tutorial is for x86 architecture.
 
-> **Also note:** This procedure COMPLETELY WIPES the target disk. For systems with multiple disks, ensure the correct one is targeted.
+**Warning:** this procedure COMPLETELY WIPES the target disk. For systems with multiple disks, ensure the correct one is targeted.
 
 ### Booting Media
 
 For this tutorial, a USB drive with at least 8GB of memory is required.
 
-> **Note:** Flashing the Spinifex ISO onto the USB completely wipes the USB, so ensure no important data is stored on the USB used.
+**Note:** flashing the Spinifex ISO onto the USB completely wipes the USB, so ensure no important data is stored on the USB used.
 
 ### Balena Etcher Installation
 
 For this tutorial download Balena Etcher to simplify the ISO flash process.
 
-* [Balena Etcher](https://etcher.balena.io)
+- [Balena Etcher](https://etcher.balena.io)
 
 ### Download Spinifex ISO
 
 Download the Spinifex ISO (x86)
 
-* [Spinifex ISO](https://iso.mulgadc.com/spinifex.iso)
+- [Spinifex ISO](https://iso.mulgadc.com/spinifex.iso)
 
 ### Flash Media
 
@@ -99,8 +99,8 @@ Once the USB drive is removed, press enter or wait for the auto-reboot.
 
 The device will reboot and spend ~2-5 minutes configuring the Spinifex node. The user will then be prompted to log in. Use the following credentials for login:
 
-* Login: `spinifex`
-* Password: Set by user during installation
+- Login: `spinifex`
+- Password: Set by user during installation
 
 Both before and after login, a banner will be printed specifying important information, such as details for SSH into the node and accessing the web dashboard for further configuration of the node.
 
@@ -132,4 +132,4 @@ The VM itself never talks to the router's DHCP — it only sees its private VPC 
 
 **Use when:** You don't control a static IP block but the router's DHCP server has enough leases. Homelabs where you don't want to carve out a range. Environments where IPs are managed centrally by the network team's DHCP.
 
-For further troubleshooting suggestions, refer to the [VPC networking](/docs/vpc-networking) guide.
+For further troubleshooting suggestions, refer to the [VPC Networking](/docs/vpc-networking) guide.
