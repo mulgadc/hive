@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
@@ -404,7 +403,9 @@ func launchService(cfg *Config) error {
 		slog.Error("Failed to get JetStream context for DHCP manager", "err", err)
 		return err
 	}
-	dhcpManager, err := NewDHCPManager(nc, js, dhcp.NewNClient4(15*time.Second, 3))
+	// timeout/retry args are legacy no-ops (mulga-siv-39): DHCPManager
+	// owns DORA retransmission via acquireWithBackoff.
+	dhcpManager, err := NewDHCPManager(nc, js, dhcp.NewNClient4(0, 0))
 	if err != nil {
 		slog.Error("Failed to create DHCP manager", "err", err)
 		return err
