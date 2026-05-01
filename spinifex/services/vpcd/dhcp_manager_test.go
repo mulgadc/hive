@@ -412,6 +412,125 @@ func TestDHCPManager_EncodeDecodeLeaseRoundTrip(t *testing.T) {
 	require.Equal(t, in.RawOffer, out.RawOffer)
 }
 
+// --- acquireWithBackoff (mulga-siv-39, RFC 2131 §4.1) ---
+
+func newBackoffManager(t *testing.T, schedule []time.Duration, fake *dhcp.Fake) *DHCPManager {
+	t.Helper()
+	_, nc, js := testutil.StartTestJetStream(t)
+	m, err := NewDHCPManager(nc, js, fake, WithDHCPAcquireBackoff(schedule))
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+	return m
+}
+
+func TestAcquireWithBackoff_FirstAttemptSucceeds(t *testing.T) {
+	fake := dhcp.NewFake()
+	m := newBackoffManager(t, []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, fake)
+
+	lease, err := m.acquireWithBackoff(context.Background(), dhcp.AcquireRequest{
+		Bridge: "br-wan", ClientID: "eni-fast", HWAddr: net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, 1, fake.AcquireCount(), "first-attempt success must not retransmit")
+}
+
+func TestAcquireWithBackoff_RetriesThenSucceeds(t *testing.T) {
+	fake := dhcp.NewFake()
+	var calls atomic.Int32
+	tmpl := dhcp.DefaultLeaseTemplate()
+	fake.AcquireHook = func(req dhcp.AcquireRequest) (*dhcp.Lease, error) {
+		n := calls.Add(1)
+		if n < 3 {
+			return nil, errors.New("simulated OFFER timeout")
+		}
+		return &dhcp.Lease{
+			Bridge: req.Bridge, ClientID: req.ClientID, HWAddr: req.HWAddr,
+			IP: tmpl.IP, ServerID: tmpl.ServerID, LeaseDuration: tmpl.LeaseDuration,
+			AcquiredAt: time.Now(),
+		}, nil
+	}
+	m := newBackoffManager(t, []time.Duration{
+		5 * time.Millisecond, 5 * time.Millisecond, 5 * time.Millisecond, 5 * time.Millisecond,
+	}, fake)
+
+	lease, err := m.acquireWithBackoff(context.Background(), dhcp.AcquireRequest{
+		Bridge: "br-wan", ClientID: "eni-retry", HWAddr: net.HardwareAddr{0x02, 0, 0, 0, 0, 2},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, int32(3), calls.Load())
+}
+
+func TestAcquireWithBackoff_AllAttemptsFail(t *testing.T) {
+	fake := dhcp.NewFake()
+	fake.AcquireHook = func(dhcp.AcquireRequest) (*dhcp.Lease, error) {
+		return nil, errors.New("server silent")
+	}
+	schedule := []time.Duration{
+		2 * time.Millisecond, 2 * time.Millisecond, 2 * time.Millisecond,
+	}
+	m := newBackoffManager(t, schedule, fake)
+
+	lease, err := m.acquireWithBackoff(context.Background(), dhcp.AcquireRequest{
+		Bridge: "br-wan", ClientID: "eni-fail", HWAddr: net.HardwareAddr{0x02, 0, 0, 0, 0, 3},
+	})
+	require.Error(t, err)
+	require.Nil(t, lease)
+	require.ErrorContains(t, err, "server silent")
+	require.Equal(t, len(schedule), fake.AcquireCount(),
+		"every entry in the schedule must run before giving up")
+}
+
+func TestAcquireWithBackoff_ParentCtxCancel(t *testing.T) {
+	fake := dhcp.NewFake()
+	fake.AcquireHook = func(dhcp.AcquireRequest) (*dhcp.Lease, error) {
+		return nil, errors.New("should not be called")
+	}
+	m := newBackoffManager(t, []time.Duration{
+		time.Second, time.Second, time.Second,
+	}, fake)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	lease, err := m.acquireWithBackoff(ctx, dhcp.AcquireRequest{
+		Bridge: "br-wan", ClientID: "eni-cancel", HWAddr: net.HardwareAddr{0x02, 0, 0, 0, 0, 4},
+	})
+	require.Error(t, err)
+	require.Nil(t, lease)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 0, fake.AcquireCount(), "cancelled parent must short-circuit before any attempt")
+}
+
+func TestDHCPAttemptTimeoutJitterBounds(t *testing.T) {
+	_, nc, js := testutil.StartTestJetStream(t)
+	m, err := NewDHCPManager(nc, js, dhcp.NewFake())
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+
+	base := 4 * time.Second
+	for i := range 200 {
+		got := m.dhcpAttemptTimeout(base)
+		if got < base-time.Second || got > base+time.Second {
+			t.Fatalf("iter %d: dhcpAttemptTimeout(%v) = %v, outside ±1s", i, base, got)
+		}
+	}
+	require.Zero(t, m.dhcpAttemptTimeout(0))
+}
+
+func TestNewDHCPManager_DefaultBackoffSchedule(t *testing.T) {
+	_, nc, js := testutil.StartTestJetStream(t)
+	m, err := NewDHCPManager(nc, js, dhcp.NewFake())
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+
+	require.Equal(t, []time.Duration{
+		4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second,
+	}, m.acquireBackoff)
+	require.Equal(t, 90*time.Second, m.acquireTimeout)
+}
+
 func TestResolveHWAddr(t *testing.T) {
 	t.Run("InvalidRawMACReturnsParseError", func(t *testing.T) {
 		mac, err := resolveHWAddr("not-a-mac", "client-1", nil)

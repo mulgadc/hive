@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -35,7 +36,33 @@ const (
 	// change) writes the full LoadBalancerRecord back to KV. State transitions
 	// always persist immediately.
 	heartbeatPersistInterval = 60 * time.Second
+
+	// Health check fields are interpolated verbatim into the HAProxy template
+	// (see haproxy.go); restrict them to characters that cannot terminate a
+	// directive or introduce a new one. Length caps bound abuse and match the
+	// surface AWS exposes for these fields.
+	maxHealthCheckPathLen    = 1024
+	maxHealthCheckMatcherLen = 64
 )
+
+var (
+	healthCheckPathRegex    = regexp.MustCompile(`^[A-Za-z0-9._~/?#%&=+-]+$`)
+	healthCheckMatcherRegex = regexp.MustCompile(`^[0-9,-]+$`)
+)
+
+func validateHealthCheckPath(p string) error {
+	if len(p) == 0 || len(p) > maxHealthCheckPathLen || !healthCheckPathRegex.MatchString(p) {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	return nil
+}
+
+func validateHealthCheckMatcher(m string) error {
+	if len(m) == 0 || len(m) > maxHealthCheckMatcherLen || !healthCheckMatcherRegex.MatchString(m) {
+		return errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	return nil
+}
 
 // lbVMUserData generates cloud-config user data for a load balancer VM.
 // Uses write_files to populate /etc/conf.d/lb-agent with the lb-id, gateway
@@ -938,6 +965,9 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 		hc.Port = *input.HealthCheckPort
 	}
 	if input.HealthCheckPath != nil {
+		if err := validateHealthCheckPath(*input.HealthCheckPath); err != nil {
+			return nil, err
+		}
 		hc.Path = *input.HealthCheckPath
 	}
 	if input.HealthCheckIntervalSeconds != nil {
@@ -953,6 +983,9 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 		hc.UnhealthyThreshold = *input.UnhealthyThresholdCount
 	}
 	if input.Matcher != nil && input.Matcher.HttpCode != nil {
+		if err := validateHealthCheckMatcher(*input.Matcher.HttpCode); err != nil {
+			return nil, err
+		}
 		hc.Matcher = *input.Matcher.HttpCode
 	}
 

@@ -208,29 +208,31 @@ install_apt_deps() {
     stage "installing apt dependencies"
     if [ "${INSTALL_SPINIFEX_SKIP_APT}" = "1" ]; then
         info "Skipping apt dependencies (INSTALL_SPINIFEX_SKIP_APT=1)"
-        return
+    else
+        info "Installing system dependencies..."
+        $SUDO apt-get update -qq
+
+        DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq \
+            nbdkit \
+            $QEMU_PACKAGES qemu-utils qemu-kvm ovmf less \
+            libvirt-daemon-system libvirt-clients \
+            pciutils \
+            jq curl iproute2 netcat-openbsd wget unzip xz-utils file \
+            ovn-central ovn-host openvswitch-switch dhcpcd-base \
+            > /dev/null
+
+        info "System dependencies installed"
     fi
 
-    info "Installing system dependencies..."
-    $SUDO apt-get update -qq
-
-    DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq \
-        nbdkit \
-        $QEMU_PACKAGES qemu-utils qemu-kvm ovmf less \
-        libvirt-daemon-system libvirt-clients \
-        pciutils \
-        jq curl iproute2 netcat-openbsd wget unzip xz-utils file \
-        ovn-central ovn-host openvswitch-switch dhcpcd-base \
-        > /dev/null
-
-    # Mask the standalone dhcpcd.service auto-enabled on Debian Trixie. It
-    # binds br-wan and competes with vpcd's nclient4 for OFFERs, draining
-    # the upstream pool and causing intermittent DORA failures. The ISO
-    # installer does the same mask (cmd/installer/install/install.go).
+    # Mask the standalone dhcpcd.service auto-enabled on Debian Trixie when
+    # dhcpcd-base is present. It binds br-wan and competes with vpcd's
+    # nclient4 for OFFERs, draining the upstream pool and causing
+    # intermittent DORA failures. Must run even when apt is skipped (CI
+    # bootstrap runs with INSTALL_SPINIFEX_SKIP_APT=1 against runners that
+    # already have dhcpcd-base preinstalled). The ISO installer does the
+    # same mask (cmd/installer/install/install.go).
     $SUDO systemctl disable --now dhcpcd.service 2>/dev/null || true
     $SUDO systemctl mask dhcpcd.service 2>/dev/null || true
-
-    info "System dependencies installed"
 }
 
 # --- Install AWS CLI ---

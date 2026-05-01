@@ -1,0 +1,90 @@
+---
+# Production layout (per spinifex/scripts/setup.sh).
+spinifex_etc_dir: /etc/spinifex
+spinifex_data_dir: /var/lib/spinifex
+spinifex_log_dir: /var/log/spinifex
+spinifex_run_dir: /run/spinifex
+spinifex_config_file: "{{ spinifex_etc_dir }}/spinifex.toml"
+spinifex_ca_trust_path: /usr/local/share/ca-certificates/spinifex-ca.crt
+spinifex_ca_src: "{{ spinifex_etc_dir }}/ca.pem"
+
+# Legacy $HOME layout (still present on older dev boxes).
+spinifex_legacy_home_dir: "{{ lookup('env','HOME') }}/spinifex"
+
+# OVN state.
+ovn_db_dir: /var/lib/ovn
+ovn_nb_db: "{{ ovn_db_dir }}/ovnnb_db.db"
+ovn_sb_db: "{{ ovn_db_dir }}/ovnsb_db.db"
+
+# Region / init.
+spinifex_region: ap-southeast-2
+spinifex_az: "{{ spinifex_region }}a"
+spinifex_node_name: node1
+spinifex_node_count: 1
+
+# External network.
+spinifex_external_mode: pool
+spinifex_external_pool_start: ""
+spinifex_external_pool_end: ""
+spinifex_external_gateway: ""
+spinifex_external_prefix_len: ""
+spinifex_nat_gateway_ip: ""
+
+# Preflight checks.
+spinifex_ports:
+  - { port: 4222, service: NATS }
+  - { port: 8443, service: Predastore }
+  - { port: 9999, service: "Spinifex Gateway" }
+
+spinifex_required_commands:
+  - go
+  - make
+  - nbdkit
+spinifex_optional_commands:
+  - air
+spinifex_ovn_commands:
+  - ovs-vsctl
+  - ovn-controller
+  - ovn-nbctl
+
+spinifex_components:
+  - viperblock
+  - predastore
+
+# Process patterns for teardown.
+# Bracket trick ([b]in/spx etc.) prevents the pattern literal from matching
+# our own pgrep/shell cmdline. Exclude filter drops benign log followers and
+# ansible's own wrappers that also mention these service names.
+spinifex_process_pattern: '([b]in/spx|spinifex-[u]i|nats-[s]erver|[p]redastore|[v]iperblock|[v]pcd)'
+spinifex_process_exclude: '(journalctl|ansible|/bin/sh|pgrep|pkill|tail -[fF])'
+spinifex_qemu_processes:
+  - qemu-system-x86_64
+  - qemu-system-aarch64
+
+# Invoking user (when run under sudo).
+spinifex_invoking_user: "{{ lookup('env','SUDO_USER') | default(ansible_facts['user_id'], true) }}"
+
+# Opt-in wipes.
+spinifex_wipe_ssh_keys: false
+spinifex_wipe_aws_creds: false
+spinifex_wipe_legacy_home: true
+
+# Timeouts.
+teardown_process_wait_seconds: 30
+
+# Path resolution — playbook_dir is scripts/ansible/playbooks/ at runtime.
+spinifex_root: "{{ lookup('pipe', 'readlink -f ' ~ playbook_dir ~ '/../../..') }}"
+mulga_root: "{{ lookup('pipe', 'readlink -f ' ~ playbook_dir ~ '/../../../..') }}"
+
+# Build output.
+build_tarball_path: /tmp/spinifex-local.tar.gz
+
+# LB system image (built + imported at end of init).
+spinifex_build_lb_image: true
+spinifex_lb_image_conf: "{{ spinifex_root }}/scripts/images/lb.conf"
+
+# Smoketest image — parameterised so tofu examples can share the same base.
+spinifex_smoketest_distro: debian
+spinifex_smoketest_version: "12"
+# Local image file path (if present, imported directly; otherwise fall back to --name).
+spinifex_smoketest_local_image: "~/images/{{ spinifex_smoketest_distro }}-{{ spinifex_smoketest_version }}.img"

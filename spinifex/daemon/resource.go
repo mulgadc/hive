@@ -25,7 +25,7 @@ type hostReserve struct {
 
 // defaultHostReserve is sized to cover predastore + viperblock under load;
 // the daemon itself needs little.
-var defaultHostReserve = hostReserve{vCPU: 2, memGB: 4.0}
+var defaultHostReserve = hostReserve{vCPU: 2, memGB: 2.0}
 
 // minHostMemHeadroomGB is the minimum schedulable memory we require above
 // the reserve, so a host that just meets the reserve still has a small

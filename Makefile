@@ -224,8 +224,23 @@ distro-arm64:
 distro-clean:
 	rm -rf dist/
 
+# Ansible dev lifecycle (experimental, parallel to dev-*.sh / reset-dev-env.sh).
+# See scripts/ansible/README.md and docs/development/improvements/ansible-dev-lifecycle.md.
+ansible-dev-preflight:
+	cd scripts/ansible && ansible-playbook playbooks/dev-preflight.yml
+
+ansible-dev-teardown:
+	cd scripts/ansible && ansible-playbook playbooks/dev-teardown.yml
+
+ansible-dev-install:
+	cd scripts/ansible && ansible-playbook playbooks/dev-install.yml
+
+ansible-dev-reset:
+	cd scripts/ansible && ansible-playbook playbooks/dev-reset.yml
+
 .PHONY: build build-ui build-installer build-lb-agent build-system-image build-lb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
 	deploy reinstall clean \
 	install-system install-go install-aws quickinstall \
 	lint fix govulncheck \
-	distro distro-amd64 distro-arm64 distro-clean
+	distro distro-amd64 distro-arm64 distro-clean \
+	ansible-dev-preflight ansible-dev-teardown ansible-dev-install ansible-dev-reset

@@ -172,7 +172,6 @@ func copyRootfs() error {
 		"--exclude=/etc/openvswitch/",
 		"--exclude=/var/lib/openvswitch/",
 		"--exclude=/var/lib/dhcpcd/",
-		"--exclude=/etc/ssh/ssh_host_*",
 		"--exclude=/lost+found",
 		"--exclude=/boot/efi",
 		"/", mountRoot+"/",
@@ -301,41 +300,71 @@ func installSpinifex(cfg *Config) error {
 		return err
 	}
 
-	if err := systemd.EnableNetworkd(mountRoot); err != nil {
-		return err
+	// dhcpcd-base is present on the installed system (used by setup-ovn.sh for
+	// macvlan mode). Mask the standalone dhcpcd.service so it never auto-starts
+	// and races with systemd-networkd's built-in DHCP client on br-wan.
+	if err := maskSystemdUnit(mountRoot, "dhcpcd.service"); err != nil {
+		slog.Warn("installSpinifex: failed to mask dhcpcd.service", "err", err)
 	}
-	return systemd.EnableUnit(mountRoot, "regenerate-ssh-host-keys.service")
+
+	return nil
 }
 
 func writeNetworkConfig(cfg *Config) error {
 	// IPs live on Linux bridges (br-wan, br-lan), not on the physical NICs.
-	// systemd-networkd manages both bridges and NICs via .netdev/.network files,
-	// matching the Debian genericcloud bootstrap path so setup-ovn.sh's veth
-	// .netdev persistence works identically on both.
+	// systemd-networkd owns the full lifecycle: it creates the bridge NetDevs,
+	// enslaves the physical NICs, and runs the DHCP client. This means the
+	// veth pair that setup-ovn.sh adds later (veth-wan-br) is a port of a
+	// networkd-known bridge, so a networkctl reload or reboot never orphans it.
 	netdDir := filepath.Join(mountRoot, "etc/systemd/network")
 	if err := os.MkdirAll(netdDir, 0o755); err != nil {
 		return err
 	}
 
-	// WAN bridge — required for network-online.target (firstboot waits for it).
-	if err := writeNetworkdBridge(netdDir, "10", cfg.WANInterface, "br-wan",
+	if err := writeNetworkdBridge(netdDir, cfg.WANInterface, "br-wan", false,
 		cfg.WANDHCPMode, cfg.WANAddress, cfg.WANMask, cfg.WANGateway, cfg.WANDNS,
-		cfg.WANWiFiSSID, cfg.WANWiFiPass, true); err != nil {
+		cfg.WANWiFiSSID, cfg.WANWiFiPass); err != nil {
 		return err
 	}
 
-	// LAN bridge — optional; networkd brings it up opportunistically without
-	// blocking network-online.target. No separate service needed.
 	if cfg.LANInterface != "" {
-		if err := writeNetworkdBridge(netdDir, "20", cfg.LANInterface, "br-lan",
+		if err := writeNetworkdBridge(netdDir, cfg.LANInterface, "br-lan", true,
 			cfg.LANDHCPMode, cfg.LANAddress, cfg.LANMask, "", cfg.LANDNS,
-			cfg.LANWiFiSSID, cfg.LANWiFiPass, false); err != nil {
+			cfg.LANWiFiSSID, cfg.LANWiFiPass); err != nil {
 			return err
+		}
+		// br-lan timing is controlled by spinifex-lan-bridge.service, not
+		// networkd auto-activation — ActivationPolicy=manual in the .network
+		// file ensures networkd creates the bridge but does not bring it up.
+		if err := systemd.WriteLANBridgeUnit(mountRoot); err != nil {
+			return fmt.Errorf("lan bridge unit: %w", err)
 		}
 	}
 
-	// Disable IPv6 on the bridge interfaces via sysctl (belt-and-braces alongside
-	// IPv6AcceptRA=no in the .network files).
+	// Unmask systemd-networkd-wait-online on the installed system and scope
+	// it to br-wan only. The live ISO masks this service (build-rootfs.sh) to
+	// avoid blocking the installer environment (which has no br-wan). The mask
+	// is copied to the installed system by copyRootfs and must be removed here
+	// so that network-online.target — and therefore spinifex-firstboot.service
+	// (After=network-online.target) — does not fire before br-wan has its
+	// DHCP lease and default route. Without this, setup-ovn.sh finds no default
+	// route and exits early, creating no veth pair.
+	//
+	// The --interface=br-wan scope means br-lan (ActivationPolicy=manual) never
+	// blocks the wait; --timeout=60 caps the delay on a cold switch.
+	waitOnlineMask := filepath.Join(mountRoot, "etc/systemd/system/systemd-networkd-wait-online.service")
+	_ = os.Remove(waitOnlineMask)
+	waitOnlineDir := filepath.Join(mountRoot, "etc/systemd/system/systemd-networkd-wait-online.service.d")
+	if err := os.MkdirAll(waitOnlineDir, 0o755); err != nil {
+		return err
+	}
+	waitOnlineConf := "[Service]\nExecStart=\nExecStart=/lib/systemd/systemd-networkd-wait-online --interface=br-wan --timeout=60\n"
+	if err := os.WriteFile(filepath.Join(waitOnlineDir, "spinifex-wan-only.conf"), []byte(waitOnlineConf), 0o644); err != nil {
+		return err
+	}
+
+	// Disable IPv6 via sysctl — belt-and-suspenders alongside IPv6AcceptRA=no
+	// in the networkd .network files.
 	bridges := []string{"br-wan"}
 	if cfg.LANInterface != "" {
 		bridges = append(bridges, "br-lan")
@@ -378,83 +407,122 @@ func writeNetworkConfig(cfg *Config) error {
 	return nil
 }
 
-// writeNetworkdBridge writes the three systemd-networkd files that create a
-// Linux bridge, attach a NIC (or WiFi NIC via wpa_supplicant) to it, and
-// configure its IP. prefix controls sort order ("10" for WAN, "20" for LAN).
-// requiredForOnline=true makes networkd-wait-online block until the bridge is
-// routable, so firstboot doesn't run before br-wan has an IP address.
-func writeNetworkdBridge(dir, prefix, nicIface, bridgeName string, dhcp bool, addr, mask, gw string, dns []string, wifiSSID, wifiPass string, requiredForOnline bool) error {
-	// 1. NetDev: create the bridge device.
-	netdev := fmt.Sprintf("[NetDev]\nName=%s\nKind=bridge\n\n[Bridge]\nSTP=false\nForwardDelaySec=0\n", bridgeName)
-	if err := os.WriteFile(filepath.Join(dir, prefix+"-spinifex-"+bridgeName+".netdev"), []byte(netdev), 0o644); err != nil {
-		return err
+// writeNetworkdBridge writes the three systemd-networkd files that configure a
+// physical NIC enslaved to a Linux bridge:
+//
+//   - {prio}-spinifex-{suffix}-nic.network  enslaves the NIC to the bridge
+//   - {prio+1}-spinifex-{suffix}.netdev     declares the bridge device
+//   - {prio+1}-spinifex-{suffix}.network    configures IP on the bridge
+//
+// manual=true sets ActivationPolicy=manual so networkd creates the bridge but
+// does not auto-activate it — used for br-lan, which spinifex-lan-bridge.service
+// activates after network-online.target.
+func writeNetworkdBridge(dir, nicIface, bridgeName string, manual, dhcp bool,
+	addr, mask, gw string, dns []string, wifiSSID, wifiPass string) error {
+	suffix := strings.TrimPrefix(bridgeName, "br-")
+	nicPrio, brPrio := 10, 11
+	if manual {
+		nicPrio, brPrio = 12, 13
 	}
 
-	// 2. Network: attach the NIC to the bridge.
+	// NIC .network — enslaves the physical NIC to the bridge.
 	nicNet := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nBridge=%s\n", nicIface, bridgeName)
-	if err := os.WriteFile(filepath.Join(dir, prefix+"-spinifex-"+nicIface+".network"), []byte(nicNet), 0o644); err != nil {
+	nicFile := fmt.Sprintf("%02d-spinifex-%s-nic.network", nicPrio, suffix)
+	if err := os.WriteFile(filepath.Join(dir, nicFile), []byte(nicNet), 0o644); err != nil {
 		return err
 	}
 
-	// 3. Network: configure the bridge IP.
-	var brNet strings.Builder
-	fmt.Fprintf(&brNet, "[Match]\nName=%s\n\n", bridgeName)
-	fmt.Fprintf(&brNet, "[Link]\nRequiredForOnline=%s\n\n", map[bool]string{true: "routable", false: "no"}[requiredForOnline])
-	brNet.WriteString("[Network]\n")
-	brNet.WriteString("IPv6AcceptRA=no\nLinkLocalAddressing=no\n")
+	// Bridge .netdev — declares the bridge device.
+	brNetdev := fmt.Sprintf("[NetDev]\nName=%s\nKind=bridge\n\n[Bridge]\nSTP=no\n", bridgeName)
+	brNetdevFile := fmt.Sprintf("%02d-spinifex-%s.netdev", brPrio, suffix)
+	if err := os.WriteFile(filepath.Join(dir, brNetdevFile), []byte(brNetdev), 0o644); err != nil {
+		return err
+	}
+
+	// Bridge .network — IP configuration.
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Match]\nName=%s\n\n", bridgeName)
+	if manual {
+		b.WriteString("[Link]\nActivationPolicy=manual\nRequiredForOnline=no\n\n")
+	}
+	b.WriteString("[Network]\n")
 	if dhcp {
-		brNet.WriteString("DHCP=ipv4\n")
+		b.WriteString("DHCP=ipv4\n")
 	} else {
-		fmt.Fprintf(&brNet, "Address=%s\n", toCIDR(addr, mask))
+		cidr, err := addrCIDR(addr, mask)
+		if err != nil {
+			return fmt.Errorf("bridge %s: %w", bridgeName, err)
+		}
+		fmt.Fprintf(&b, "Address=%s\n", cidr)
 		if gw != "" {
-			fmt.Fprintf(&brNet, "Gateway=%s\n", gw)
+			fmt.Fprintf(&b, "Gateway=%s\n", gw)
 		}
 		for _, ns := range dns {
-			ns = strings.TrimSpace(ns)
-			if ns != "" {
-				fmt.Fprintf(&brNet, "DNS=%s\n", ns)
+			if ns = strings.TrimSpace(ns); ns != "" {
+				fmt.Fprintf(&b, "DNS=%s\n", ns)
 			}
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, prefix+"1-spinifex-"+bridgeName+".network"), []byte(brNet.String()), 0o644); err != nil {
+	b.WriteString("IPv6AcceptRA=no\nConfigureWithoutCarrier=yes\n")
+	if manual && dhcp {
+		// br-lan is non-critical; fail fast on DHCP so a missing LAN cable
+		// does not stall spinifex-lan-bridge.service indefinitely.
+		b.WriteString("\n[DHCP]\nTimeout=10\n")
+	}
+	brNetFile := fmt.Sprintf("%02d-spinifex-%s.network", brPrio, suffix)
+	if err := os.WriteFile(filepath.Join(dir, brNetFile), []byte(b.String()), 0o644); err != nil {
 		return err
 	}
 
-	// 4. WiFi: write wpa_supplicant config and enable the per-interface service.
 	if wifiSSID != "" {
-		wpaCfg := fmt.Sprintf("ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\nupdate_config=1\n\nnetwork={\n\tssid=%q\n\tpsk=%q\n}\n", wifiSSID, wifiPass)
-		wpaDir := filepath.Join(mountRoot, "etc/wpa_supplicant")
-		if err := os.MkdirAll(wpaDir, 0o755); err != nil {
+		if err := writeWPASupplicant(nicIface, wifiSSID, wifiPass); err != nil {
 			return err
-		}
-		wpaConf := filepath.Join(wpaDir, "wpa_supplicant-"+nicIface+".conf")
-		if err := os.WriteFile(wpaConf, []byte(wpaCfg), 0o600); err != nil {
-			return err
-		}
-		// Enable wpa_supplicant@<iface>.service via a multi-user.target.wants symlink.
-		wantsDir := filepath.Join(mountRoot, "etc/systemd/system/multi-user.target.wants")
-		if err := os.MkdirAll(wantsDir, 0o755); err != nil {
-			return err
-		}
-		link := filepath.Join(wantsDir, "wpa_supplicant@"+nicIface+".service")
-		_ = os.Remove(link)
-		if err := os.Symlink("/lib/systemd/system/wpa_supplicant@.service", link); err != nil {
-			return fmt.Errorf("enable wpa_supplicant@%s: %w", nicIface, err)
 		}
 	}
 	return nil
 }
 
-// toCIDR converts a dotted-decimal address + mask pair to CIDR notation.
-// Falls back to addr/32 if the mask cannot be parsed.
-func toCIDR(addr, mask string) string {
-	ip := net.ParseIP(addr)
-	m := net.IPMask(net.ParseIP(mask).To4())
-	if ip == nil || m == nil {
-		return addr + "/32"
+// addrCIDR converts a dotted-decimal address + subnet mask to CIDR notation.
+func addrCIDR(addr, dotMask string) (string, error) {
+	if net.ParseIP(addr) == nil {
+		return "", fmt.Errorf("invalid IP: %s", addr)
 	}
-	ones, _ := m.Size()
-	return fmt.Sprintf("%s/%d", ip.String(), ones)
+	maskIP := net.ParseIP(dotMask)
+	if maskIP == nil {
+		return "", fmt.Errorf("invalid mask: %s", dotMask)
+	}
+	m := net.IPMask(maskIP.To4())
+	ones, bits := m.Size()
+	if bits == 0 {
+		return "", fmt.Errorf("non-contiguous or zero subnet mask: %s", dotMask)
+	}
+	return fmt.Sprintf("%s/%d", addr, ones), nil
+}
+
+// writeWPASupplicant writes a wpa_supplicant config for nicIface and enables
+// the per-interface wpa_supplicant@{iface}.service so authentication completes
+// before networkd enslaves the NIC to the bridge.
+func writeWPASupplicant(nicIface, ssid, psk string) error {
+	conf := fmt.Sprintf(
+		"ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\nupdate_config=1\n\nnetwork={\n\tssid=%q\n\tpsk=%q\n}\n",
+		ssid, psk,
+	)
+	wpaDir := filepath.Join(mountRoot, "etc/wpa_supplicant")
+	if err := os.MkdirAll(wpaDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(wpaDir, "wpa_supplicant-"+nicIface+".conf"), []byte(conf), 0o600); err != nil {
+		return err
+	}
+	// Enable via symlink into multi-user.target.wants pointing at the
+	// package-provided template unit.
+	wantsDir := filepath.Join(mountRoot, "etc/systemd/system/multi-user.target.wants")
+	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
+		return err
+	}
+	link := filepath.Join(wantsDir, "wpa_supplicant@"+nicIface+".service")
+	_ = os.Remove(link)
+	return os.Symlink("/lib/systemd/system/wpa_supplicant@.service", link)
 }
 
 func installBootloader(disk string) error {
@@ -487,23 +555,19 @@ func installBootloader(disk string) error {
 		}
 		return biosErr
 	}
-	// Copy splash image and unicode font from the ISO (mounted at /cdrom) so the
-	// installed GRUB shows the same branded background as the installer GRUB.
-	// The font must be at /boot/grub/fonts/unicode.pf2 so update-grub finds it
-	// there and emits the same loadfont path as the ISO's grub.cfg — GRUB 2.12
-	// (trixie) needs the font in the boot partition, not just /usr/share/grub/.
 	copySplashImage(mountRoot)
 	copyGrubFont(mountRoot)
 
-	// Kernel cmdline and basic defaults only — graphics/serial handled by 05_spinifex below.
-	// Confirm requirement
-	// console=ttyS0,115200n8
-
+	// Both consoles listed: tty0 stays primary for local install, ttyS0 mirrors
+	// kernel output to serial so headless installs (CI, racks with serial-only
+	// IPMI, remote-dev SSH-to-QEMU) see boot messages. The last `console=` on
+	// the cmdline becomes the system console, so ttyS0 wins on serial-only
+	// hardware while tty0 still receives output for local display.
 	grubDefault := `GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Spinifex
 GRUB_CMDLINE_LINUX_DEFAULT=""
-GRUB_CMDLINE_LINUX="console=tty0 systemd.show_status=1"
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 systemd.show_status=1"
 `
 
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
@@ -598,12 +662,11 @@ func (c *Config) toFirstbootConfig() firstboot.Config {
 		encapIP = c.LANAddress
 	}
 	return firstboot.Config{
-		Hostname:       c.Hostname,
-		EncapIP:        encapIP,
-		ClusterRole:    c.ClusterRole,
-		JoinAddr:       c.JoinAddr,
-		Email:          c.Email,
-		GPUPassthrough: c.GPUPassthrough,
+		Hostname:    c.Hostname,
+		EncapIP:     encapIP,
+		ClusterRole: c.ClusterRole,
+		JoinAddr:    c.JoinAddr,
+		Email:       c.Email,
 	}
 }
 
@@ -649,46 +712,9 @@ func partitionPaths(disk string) (efi, root string) {
 	return disk + "2", disk + "3"
 }
 
-// copyGrubFont copies the unicode.pf2 GRUB font into the installed system's
-// /boot/grub/fonts/ directory. This ensures update-grub finds the font at
-// /boot/grub/fonts/unicode.pf2 — the same path the ISO's grub.cfg uses —
-// so the generated grub.cfg enables gfxterm and the background image.
-// Without this, grub-mkconfig falls back to /usr/share/grub/unicode.pf2,
-// a path that GRUB 2.12 (trixie) may fail to resolve at boot time.
-// Non-fatal — a missing source is logged and skipped.
-func copyGrubFont(root string) {
-	candidates := []string{
-		"/cdrom/boot/grub/fonts/unicode.pf2", // ISO tree (preferred)
-		"/usr/share/grub/unicode.pf2",        // live system grub-common fallback
-	}
-	for _, src := range candidates {
-		in, err := os.Open(src)
-		if err != nil {
-			continue
-		}
-		defer in.Close()
-		dstDir := filepath.Join(root, "boot/grub/fonts")
-		if err := os.MkdirAll(dstDir, 0o755); err != nil {
-			slog.Warn("copyGrubFont: cannot create fonts dir", "err", err)
-			return
-		}
-		out, err := os.OpenFile(filepath.Join(dstDir, "unicode.pf2"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-		if err != nil {
-			slog.Warn("copyGrubFont: cannot open destination", "err", err)
-			return
-		}
-		defer out.Close()
-		if _, err := io.Copy(out, in); err != nil {
-			slog.Warn("copyGrubFont: copy failed", "err", err)
-		}
-		return
-	}
-	slog.Warn("copyGrubFont: no unicode.pf2 found, splash may not display")
-}
-
-// copySplashImage copies the GRUB splash from the live ISO (/cdrom/boot/grub/splash.png)
-// into the installed system so the post-install GRUB shows the same branded background
-// as the installer. Non-fatal — a missing or unreadable source is logged and skipped.
+// copySplashImage copies the GRUB splash (embedded in the squashfs at build time by
+// inject-bins.sh) into the installed system so the post-install GRUB shows the same
+// branded background as the installer GRUB. Non-fatal — missing source is logged and skipped.
 func copySplashImage(root string) {
 	const src = "/usr/share/spinifex/grub-splash.png"
 	in, err := os.Open(src)
@@ -714,8 +740,42 @@ func copySplashImage(root string) {
 	}
 }
 
+// copyGrubFont copies the unicode font into the installed system's
+// /boot/grub/fonts/ so the loadfont path in 05_spinifex resolves at boot.
+// grub-install does not copy fonts; we mirror what build-iso.sh does.
+func copyGrubFont(root string) {
+	const src = "/usr/share/grub/unicode.pf2"
+	in, err := os.Open(src)
+	if err != nil {
+		slog.Warn("copyGrubFont: font not found, graphical GRUB may not work", "path", src)
+		return
+	}
+	defer in.Close()
+
+	dstDir := filepath.Join(root, "boot/grub/fonts")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		slog.Warn("copyGrubFont: cannot create fonts dir", "err", err)
+		return
+	}
+	out, err := os.OpenFile(filepath.Join(dstDir, "unicode.pf2"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		slog.Warn("copyGrubFont: cannot open destination", "err", err)
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		slog.Warn("copyGrubFont: copy failed", "err", err)
+	}
+}
+
 // maskSystemdUnit creates a symlink to /dev/null for the given unit, which is
 // the standard way to permanently disable a unit so systemd will never start it.
+func maskSystemdUnit(root, unit string) error {
+	unitPath := filepath.Join(root, "etc/systemd/system", unit)
+	_ = os.Remove(unitPath)
+	return os.Symlink("/dev/null", unitPath)
+}
+
 // setShadowPassword sets a Unix password on the installed system without
 // going through PAM. See the long comment in installSpinifex for the
 // rationale.

@@ -25,50 +25,42 @@ import (
 	"path/filepath"
 )
 
-// EnableNetworkd enables systemd-networkd on the installed system by creating
-// the standard wants/socket symlinks. This makes the ISO-installed system use
-// the same network backend as the Debian genericcloud bootstrap path, which
-// means setup-ovn.sh's veth .netdev persistence works identically on both.
-func EnableNetworkd(root string) error {
-	multiUserWants := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
-	if err := os.MkdirAll(multiUserWants, 0o755); err != nil {
-		return err
-	}
-	networkdService := filepath.Join(multiUserWants, "systemd-networkd.service")
-	if err := os.Remove(networkdService); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale symlink %s: %w", networkdService, err)
-	}
-	if err := os.Symlink("/lib/systemd/system/systemd-networkd.service", networkdService); err != nil {
-		return fmt.Errorf("enable systemd-networkd.service: %w", err)
-	}
+// WriteLANBridgeUnit installs a non-critical oneshot service that activates
+// br-lan via networkctl *after* network-online.target. br-lan has
+// ActivationPolicy=manual in its networkd .network file, so networkd creates
+// the bridge at boot but does not bring it up automatically. This service
+// triggers the activation once the WAN path is confirmed online, ensuring a
+// missing LAN cable or DHCP timeout on the secondary bridge never stalls
+// the management interface or firstboot.
+func WriteLANBridgeUnit(root string) error {
+	unit := `[Unit]
+Description=Spinifex LAN bridge (non-critical)
+After=network-online.target
+Wants=network-online.target
 
-	socketsWants := filepath.Join(root, "etc/systemd/system/sockets.target.wants")
-	if err := os.MkdirAll(socketsWants, 0o755); err != nil {
-		return err
-	}
-	networkdSocket := filepath.Join(socketsWants, "systemd-networkd.socket")
-	if err := os.Remove(networkdSocket); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale symlink %s: %w", networkdSocket, err)
-	}
-	if err := os.Symlink("/lib/systemd/system/systemd-networkd.socket", networkdSocket); err != nil {
-		return fmt.Errorf("enable systemd-networkd.socket: %w", err)
-	}
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/networkctl up br-lan
+RemainAfterExit=yes
+# Failure is non-critical — cable unplugged or switch not ready at boot.
+SuccessExitStatus=0 1
 
-	// networkd-wait-online drives network-online.target, which firstboot
-	// depends on. Without this symlink, network-online.target is satisfied
-	// immediately (no waiters) before br-wan has an IP.
-	networkWants := filepath.Join(root, "etc/systemd/system/network-online.target.wants")
-	if err := os.MkdirAll(networkWants, 0o755); err != nil {
+[Install]
+WantedBy=multi-user.target
+`
+	unitPath := filepath.Join(root, "etc/systemd/system/spinifex-lan-bridge.service")
+	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return err
 	}
-	waitOnline := filepath.Join(networkWants, "systemd-networkd-wait-online.service")
-	if err := os.Remove(waitOnline); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale symlink %s: %w", waitOnline, err)
+	wantsDir := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
+	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
+		return err
 	}
-	if err := os.Symlink("/lib/systemd/system/systemd-networkd-wait-online.service", waitOnline); err != nil {
-		return fmt.Errorf("enable systemd-networkd-wait-online.service: %w", err)
+	link := filepath.Join(wantsDir, "spinifex-lan-bridge.service")
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale symlink %s: %w", link, err)
 	}
-	return nil
+	return os.Symlink("/etc/systemd/system/spinifex-lan-bridge.service", link)
 }
 
 // WriteFirstbootUnit writes the spinifex-firstboot.service oneshot unit that
