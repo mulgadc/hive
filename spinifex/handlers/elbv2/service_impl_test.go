@@ -3,6 +3,7 @@ package handlers_elbv2
 import (
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -414,6 +415,68 @@ func TestCreateTargetGroup_TCPWithCustomHealthCheck(t *testing.T) {
 	assert.Equal(t, "/health", *tg.HealthCheckPath)
 	assert.Equal(t, "200", *tg.Matcher.HttpCode)
 	assert.Equal(t, int64(15), *tg.HealthCheckIntervalSeconds)
+}
+
+func TestCreateTargetGroup_RejectsHealthCheckPathInjection(t *testing.T) {
+	svc := setupTestService(t)
+
+	cases := map[string]string{
+		"newline_haproxy_directive": "/x\nbind 0.0.0.0:9999",
+		"trailing_directive":        "/x\n    use_backend other",
+		"semicolon_drop":            "/x; drop",
+		"jndi":                      "${jndi:ldap://x}",
+		"space":                     "/path with space",
+		"empty":                     "",
+		"too_long":                  strings.Repeat("a", maxHealthCheckPathLen+1),
+		"control_byte":              "/x\x00",
+	}
+
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+				Name:            aws.String("inj-" + name),
+				HealthCheckPath: aws.String(payload),
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "InvalidParameterValue")
+		})
+	}
+}
+
+func TestCreateTargetGroup_RejectsMatcherInjection(t *testing.T) {
+	svc := setupTestService(t)
+
+	cases := map[string]string{
+		"newline_use_backend": "200\nuse_backend other",
+		"alpha":               "abc",
+		"empty":               "",
+		"too_long":            strings.Repeat("9", maxHealthCheckMatcherLen+1),
+		"with_space":          "200 ,201",
+	}
+
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+				Name:    aws.String("matcher-" + name),
+				Matcher: &elbv2.Matcher{HttpCode: aws.String(payload)},
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "InvalidParameterValue")
+		})
+	}
+}
+
+func TestCreateTargetGroup_AcceptsValidHealthCheckInputs(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:            aws.String("ok-tg"),
+		HealthCheckPath: aws.String("/healthz?probe=lb#frag"),
+		Matcher:         &elbv2.Matcher{HttpCode: aws.String("200-299,301")},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "/healthz?probe=lb#frag", *out.TargetGroups[0].HealthCheckPath)
+	assert.Equal(t, "200-299,301", *out.TargetGroups[0].Matcher.HttpCode)
 }
 
 func TestCreateTargetGroup_DuplicateName(t *testing.T) {
