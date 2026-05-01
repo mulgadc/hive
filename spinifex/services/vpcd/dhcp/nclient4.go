@@ -56,7 +56,13 @@ func (c *NClient4Client) Acquire(ctx context.Context, req AcquireRequest) (*Leas
 	}
 	defer func() { _ = client.Close() }()
 
-	lease, err := client.Request(ctx, identityModifiers(req.ClientID, req.Hostname, req.VendorClass)...)
+	// Without the broadcast flag, the server sends a unicast OFFER to the
+	// generated chaddr MAC. The physical NIC drops it in hardware (not its MAC),
+	// so the AF_PACKET socket on the bridge never sees the frame. Setting the
+	// broadcast flag forces the server to respond with ff:ff:ff:ff:ff:ff, which
+	// all NICs accept unconditionally.
+	mods := append(identityModifiers(req.ClientID, req.Hostname, req.VendorClass), dhcpv4.WithBroadcast(true))
+	lease, err := client.Request(ctx, mods...)
 	if err != nil {
 		return nil, fmt.Errorf("dhcp DORA on %s (client=%s): %w", req.Bridge, req.ClientID, err)
 	}

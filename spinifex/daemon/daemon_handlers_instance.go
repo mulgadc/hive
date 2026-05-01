@@ -1496,7 +1496,7 @@ func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, 
 
 	if topic == "vpc.add-nat" {
 		if err := utils.RequestEvent(d.natsConn, topic, evt, 10*time.Second); err != nil {
-			slog.Warn("publishNATEvent: failed to add NAT rule (will retry via reconciliation)",
+			slog.Warn("publishNATEvent: failed to add NAT rule — OVN dnat_and_snat rule not created; restart vpcd or re-associate EIP to recover",
 				"topic", topic, "externalIP", externalIP, "logicalIP", logicalIP, "err", err)
 		}
 		return

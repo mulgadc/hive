@@ -30,7 +30,7 @@ func TestRequestAcquire_RequestTimeout(t *testing.T) {
 		AcquireRetryDelay = prevDelay
 	})
 
-	_, err = RequestAcquire(nc, "br-wan", "eni-timeout", "eni-timeout", "mulga-spinifex", "wan")
+	_, err = RequestAcquire(nc, "br-wan", "eni-timeout", "eni-timeout", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "dhcp acquire NATS request")
 }
 
@@ -56,7 +56,7 @@ func TestRequestAcquire_MalformedReply(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
-	_, err = RequestAcquire(nc, "br-wan", "eni-malformed", "eni-malformed", "mulga-spinifex", "wan")
+	_, err = RequestAcquire(nc, "br-wan", "eni-malformed", "eni-malformed", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "unmarshal dhcp acquire reply")
 }
 
@@ -86,14 +86,14 @@ func TestRequestRelease_ReplyError(t *testing.T) {
 }
 
 func TestRequestAcquire_Guards(t *testing.T) {
-	_, err := RequestAcquire(nil, "br-wan", "eni-1", "eni-1", "mulga-spinifex", "wan")
+	_, err := RequestAcquire(nil, "br-wan", "eni-1", "eni-1", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "NATS connection is required")
 
 	_, nc := testutil.StartTestNATS(t)
-	_, err = RequestAcquire(nc, "", "eni-1", "eni-1", "mulga-spinifex", "wan")
+	_, err = RequestAcquire(nc, "", "eni-1", "eni-1", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "bridge name is required")
 
-	_, err = RequestAcquire(nc, "br-wan", "", "eni-1", "mulga-spinifex", "wan")
+	_, err = RequestAcquire(nc, "br-wan", "", "eni-1", "mulga-spinifex", "wan", "")
 	assert.ErrorContains(t, err, "client ID is required")
 }
 
