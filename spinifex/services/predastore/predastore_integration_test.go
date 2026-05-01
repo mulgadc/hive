@@ -132,19 +132,6 @@ func startPredastoreServer(t *testing.T) *Config {
 	}
 	sharedTestDir = testDir
 
-	// Create bucket directories
-	testBucketDir := filepath.Join(testDir, "test-bucket")
-	publicBucketDir := filepath.Join(testDir, "public-bucket")
-
-	err = os.MkdirAll(testBucketDir, 0755)
-	if err != nil {
-		t.Fatalf("Failed to create test-bucket dir: %v", err)
-	}
-	err = os.MkdirAll(publicBucketDir, 0755)
-	if err != nil {
-		t.Fatalf("Failed to create public-bucket dir: %v", err)
-	}
-
 	// Create TLS cert directory
 	certDir := filepath.Join(testDir, "certs")
 	err = os.MkdirAll(certDir, 0755)
@@ -160,7 +147,10 @@ func startPredastoreServer(t *testing.T) *Config {
 		t.Fatalf("Failed to generate certificate: %v", err)
 	}
 
-	// Create config file
+	// Create config file. Five storage nodes are declared so predastore's dev-mode
+	// path launches all QUIC servers locally as goroutines (server.go:629). Buckets
+	// are created via the S3 API after startup — config buckets are no longer
+	// surfaced by ListBuckets (predastore commit 0711e7d, account-scoped auth).
 	configPath := filepath.Join(testDir, "predastore_test.toml")
 	configContent := `version = "1.0"
 region = "us-east-1"
@@ -170,29 +160,43 @@ debug = false
 disable_logging = false
 base_path = "` + testDir + `/"
 
-[[buckets]]
-name = "test-bucket"
-region = "us-east-1"
-type = "fs"
-pathname = "` + testBucketDir + `"
-public = false
-encryption = ""
+[rs]
+data = 3
+parity = 2
 
-[[buckets]]
-name = "public-bucket"
-region = "us-east-1"
-type = "fs"
-pathname = "` + publicBucketDir + `"
-public = true
-encryption = ""
+[[nodes]]
+id = 1
+host = "127.0.0.1"
+port = 19991
+path = "store/node-1/"
+
+[[nodes]]
+id = 2
+host = "127.0.0.1"
+port = 19992
+path = "store/node-2/"
+
+[[nodes]]
+id = 3
+host = "127.0.0.1"
+port = 19993
+path = "store/node-3/"
+
+[[nodes]]
+id = 4
+host = "127.0.0.1"
+port = 19994
+path = "store/node-4/"
+
+[[nodes]]
+id = 5
+host = "127.0.0.1"
+port = 19995
+path = "store/node-5/"
 
 [[auth]]
 access_key_id = "AKIAIOSFODNN7EXAMPLE"
 secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-policy = [
-  { bucket = "test-bucket", actions = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
-  { bucket = "public-bucket", actions = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"] },
-]
 `
 
 	err = os.WriteFile(configPath, []byte(configContent), 0644)
@@ -222,19 +226,19 @@ policy = [
 		t.Fatal("Failed to start predastore server")
 	}
 
+	// Create the test buckets via the S3 API so they're registered in
+	// distributed globalState (config buckets aren't visible to ListBuckets).
+	setupClient := createS3Client(validAccessKey, validSecretKey)
+	for _, bucket := range []string{testBucket, publicBucket} {
+		if _, err := setupClient.CreateBucket(&s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+			t.Fatalf("Failed to create bucket %s: %v", bucket, err)
+		}
+	}
+
 	serverStarted = true
 	t.Logf("Predastore server started successfully")
 	t.Logf("Test directory: %s", testDir)
-	t.Logf("Bucket directories created: %s, %s", testBucketDir, publicBucketDir)
-
-	// Verify directories exist
-	if _, err := os.Stat(testBucketDir); os.IsNotExist(err) {
-		t.Fatalf("test-bucket directory does not exist: %s", testBucketDir)
-	}
-	if _, err := os.Stat(publicBucketDir); os.IsNotExist(err) {
-		t.Fatalf("public-bucket directory does not exist: %s", publicBucketDir)
-	}
-	t.Logf("Verified bucket directories exist")
+	t.Logf("Created buckets: %s, %s", testBucket, publicBucket)
 
 	// NOTE: Cleanup will happen automatically when test process exits
 	// Don't use t.Cleanup() as it runs after each test, not at the end
