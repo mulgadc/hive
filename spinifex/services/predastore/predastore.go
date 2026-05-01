@@ -11,9 +11,6 @@ import (
 
 	"github.com/mulgadc/predastore/s3"
 	"github.com/mulgadc/spinifex/spinifex/utils"
-
-	// Import backends to trigger their init() registration
-	_ "github.com/mulgadc/predastore/backend/filesystem"
 )
 
 var serviceName = "predastore"
@@ -28,8 +25,7 @@ type Config struct {
 	TlsCert    string
 	TlsKey     string
 
-	Backend s3.BackendType
-	NodeID  int
+	NodeID int
 
 	// Profiling
 	PprofEnabled    bool
@@ -66,7 +62,6 @@ func (svc *Service) Start() (int, error) {
 		s3.WithTLS(svc.Config.TlsCert, svc.Config.TlsKey),
 		s3.WithBasePath(svc.Config.BasePath),
 		s3.WithDebug(svc.Config.Debug),
-		s3.WithBackend(svc.Config.Backend),
 		s3.WithNodeID(svc.Config.NodeID),
 		s3.WithPprof(svc.Config.PprofEnabled, svc.Config.PprofOutputPath),
 	)
