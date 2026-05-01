@@ -123,9 +123,10 @@ printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" > /etc/resolvconf/resolv.conf.
 resolvconf -u
 
 # Configure OVN networking.
-# br-wan (and br-lan if present) are Linux bridges created by the installer.
-# setup-ovn.sh auto-detects br-wan as the default route device (Linux bridge)
-# and wires it to OVS via a veth pair — non-destructive, SSH-safe.
+# br-wan (and br-lan if present) are Linux bridges managed by systemd-networkd
+# (declared in /etc/systemd/network/ by the installer). setup-ovn.sh
+# auto-detects br-wan as the default route device and wires it to OVS via a
+# veth pair — non-destructive, SSH-safe.
 %s
 
 # Write the banner (first time, spinifex-banner service will do this on reboot)

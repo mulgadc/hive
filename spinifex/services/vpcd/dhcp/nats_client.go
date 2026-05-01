@@ -46,7 +46,7 @@ type LeaseResult struct {
 // clientID: a second call with the same clientID while a live lease exists
 // returns the same lease without a fresh DORA, so CAS retry loops on the
 // caller are safe.
-func RequestAcquire(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poolName string) (LeaseResult, error) {
+func RequestAcquire(nc *nats.Conn, bridge, clientID, hostname, vendorClass, poolName, hwAddr string) (LeaseResult, error) {
 	if nc == nil {
 		return LeaseResult{}, fmt.Errorf("DHCP lease: NATS connection is required")
 	}
@@ -63,6 +63,7 @@ func RequestAcquire(nc *nats.Conn, bridge, clientID, hostname, vendorClass, pool
 		Hostname:    hostname,
 		VendorClass: vendorClass,
 		PoolName:    poolName,
+		HWAddr:      hwAddr,
 	}
 	data, err := json.Marshal(req)
 	if err != nil {

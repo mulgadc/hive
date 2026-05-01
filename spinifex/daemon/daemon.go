@@ -690,6 +690,10 @@ func (d *Daemon) Start() error {
 			if node, ok := d.clusterConfig.Nodes[d.clusterConfig.Node]; ok {
 				dhcpBindBridge = node.VPCD.DhcpBindBridge
 			}
+			gwMAC := ""
+			if d.clusterConfig.Bootstrap.VpcId != "" {
+				gwMAC = utils.HashMAC("gw-" + d.clusterConfig.Bootstrap.VpcId)
+			}
 			for _, p := range d.clusterConfig.Network.ExternalPools {
 				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
 					Name:            p.Name,
@@ -702,6 +706,7 @@ func (d *Daemon) Start() error {
 					Region:          p.Region,
 					AZ:              p.AZ,
 					DhcpBindBridge:  dhcpBindBridge,
+					GatewayMAC:      gwMAC,
 					GwLrpRangeStart: p.GwLrpRangeStart,
 					GwLrpRangeEnd:   p.GwLrpRangeEnd,
 				})
