@@ -1,0 +1,8 @@
+---
+- name: Dev preflight — validate host dependencies
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../vars/defaults.yml
+  roles:
+    - preflight
