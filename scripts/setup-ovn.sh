@@ -388,20 +388,20 @@ if [ -n "$WAN_BRIDGE" ]; then
             # starts with the OVS port pointing at a nonexistent peer and
             # silently falls back to direct mode (Fix 1, mulga-998.b).
             #
-            # Declare the Linux bridge as a NetDev too (even though it's
-            # already created by ifupdown) so networkd recognises it and the
-            # `Bridge=$LINUX_BRIDGE` directive below resolves. Without this,
-            # networkd logs `br-wan NetDev could not be found, ignoring
-            # assignment` and veth-wan-br ends up orphaned with no master,
-            # which crashes vpcd's veth bridge mode sanity check on reboot.
+            # networkd's Bridge= directive requires the target bridge to be a
+            # known NetDev. On ISO-installed nodes the installer writes
+            # 11-spinifex-br-wan.netdev, which the gate below detects and
+            # skips this write. On binary-installed nodes where the operator
+            # manages br-wan outside networkd (e.g. cloud-init), this file
+            # fills the gap so veth-wan-br resolves its bridge on reboot.
             # `Failed to create netdev: File exists` is harmless — networkd
-            # then matches the existing kernel bridge by name+kind.
+            # matches the existing kernel bridge by name+kind.
             #
-            # Gate: skip the write if any operator-managed .netdev (cloud-init,
-            # netplan, manual op) already declares this bridge — don't clobber
-            # custom networkd config. networkd searches /etc, /run, /usr/lib in
-            # that priority order; check all three. Our own file is excluded so
-            # idempotent re-runs still rewrite when needed.
+            # Gate: skip the write if any .netdev (installer, cloud-init,
+            # netplan, manual) already declares this bridge — don't clobber
+            # existing networkd config. networkd searches /etc, /run, /usr/lib;
+            # check all three. Our own file is excluded so idempotent re-runs
+            # still rewrite when needed.
             BR_WAN_NETDEV="/etc/systemd/network/14-spinifex-br-wan.netdev"
             VETH_NETDEV="/etc/systemd/network/15-spinifex-veth-wan.netdev"
             VETH_NETWORK="/etc/systemd/network/15-spinifex-veth-wan.network"

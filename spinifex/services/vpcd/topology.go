@@ -1634,7 +1634,7 @@ func (h *TopologyHandler) allocateGatewayLRPIPViaDHCP(ctx context.Context, vpcId
 	clientID := gwLrpClientID(vpcId)
 	hostname := "spinifex-gw-" + vpcId
 	vendorClass := "mulga-spinifex-gw-lrp"
-	lease, dhcpErr := dhcp.RequestAcquire(h.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, pool.Name)
+	lease, dhcpErr := dhcp.RequestAcquire(h.nc, pool.DhcpBindBridge, clientID, hostname, vendorClass, pool.Name, "")
 	if dhcpErr != nil {
 		return "", 0, fmt.Errorf("dhcp acquire gw LRP IP for vpc %s: %w", vpcId, dhcpErr)
 	}

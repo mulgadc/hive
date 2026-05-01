@@ -171,7 +171,7 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(cfg *Config) (err error) {
 	// Connect to NATS
-	nc, err := utils.ConnectNATS(admin.DialTarget(cfg.NatsHost), cfg.NatsToken, cfg.NatsCACert)
+	nc, err := utils.ConnectNATSWithRetry(admin.DialTarget(cfg.NatsHost), cfg.NatsToken, cfg.NatsCACert)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err
