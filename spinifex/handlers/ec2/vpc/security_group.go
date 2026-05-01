@@ -23,8 +23,10 @@ import (
 var sgIDRegex = regexp.MustCompile(`^sg-[0-9a-f]{17}$`)
 
 // validateSGRule rejects values that could break out of an OVN ACL match-expression token.
-// CidrIp must round-trip to canonical form (so "10.0.0.5/8" with host bits set is rejected,
-// as is anything containing operators/whitespace that net.ParseCIDR would not accept).
+// CidrIp must be IPv4 and round-trip to canonical form (so "10.0.0.5/8" with host bits set is
+// rejected, as is anything containing operators/whitespace that net.ParseCIDR would not accept).
+// IPv6 is rejected because the ACL builder in vpcd/acl.go is IPv4-only — accepting an IPv6 CIDR
+// would persist a rule that OVN can never program.
 // SourceSG must match the spinifex SG-ID format. At least one source must be specified.
 func validateSGRule(r SGRule) error {
 	if r.CidrIp == "" && r.SourceSG == "" {
@@ -34,6 +36,9 @@ func validateSGRule(r SGRule) error {
 		_, ipnet, err := net.ParseCIDR(r.CidrIp)
 		if err != nil {
 			return fmt.Errorf("invalid CidrIp %q: %w", r.CidrIp, err)
+		}
+		if ipnet.IP.To4() == nil {
+			return fmt.Errorf("invalid CidrIp %q: IPv6 not supported", r.CidrIp)
 		}
 		if ipnet.String() != r.CidrIp {
 			return fmt.Errorf("invalid CidrIp %q: not canonical (expected %q)", r.CidrIp, ipnet.String())
