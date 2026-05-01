@@ -25,10 +25,13 @@ import (
 	"path/filepath"
 )
 
-// WriteLANBridgeUnit installs a non-critical oneshot service that brings up
-// br-lan *after* network-online.target. This keeps br-lan out of
-// networking.service entirely — a missing LAN cable or DHCP timeout on the
-// secondary bridge can never stall the management interface or firstboot.
+// WriteLANBridgeUnit installs a non-critical oneshot service that activates
+// br-lan via networkctl *after* network-online.target. br-lan has
+// ActivationPolicy=manual in its networkd .network file, so networkd creates
+// the bridge at boot but does not bring it up automatically. This service
+// triggers the activation once the WAN path is confirmed online, ensuring a
+// missing LAN cable or DHCP timeout on the secondary bridge never stalls
+// the management interface or firstboot.
 func WriteLANBridgeUnit(root string) error {
 	unit := `[Unit]
 Description=Spinifex LAN bridge (non-critical)
@@ -37,7 +40,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/sbin/ifup br-lan
+ExecStart=/usr/bin/networkctl up br-lan
 RemainAfterExit=yes
 # Failure is non-critical — cable unplugged or switch not ready at boot.
 SuccessExitStatus=0 1
@@ -58,19 +61,6 @@ WantedBy=multi-user.target
 		return fmt.Errorf("remove stale symlink %s: %w", link, err)
 	}
 	return os.Symlink("/etc/systemd/system/spinifex-lan-bridge.service", link)
-}
-
-// WriteNetworkingDropIn writes a networking.service drop-in that treats exit
-// code 1 as success. This prevents a secondary interface failure (e.g. br-lan
-// DHCP timeout when no cable is plugged in) from blocking network-online.target
-// and therefore spinifex-firstboot.service.
-func WriteNetworkingDropIn(root string) error {
-	dir := filepath.Join(root, "etc/systemd/system/networking.service.d")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	dropIn := "[Service]\nSuccessExitStatus=0 1\n"
-	return os.WriteFile(filepath.Join(dir, "spinifex-optional-ifaces.conf"), []byte(dropIn), 0o644)
 }
 
 // WriteFirstbootUnit writes the spinifex-firstboot.service oneshot unit that

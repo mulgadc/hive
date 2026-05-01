@@ -22,7 +22,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mulgadc/predastore/s3"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/service"
 	"github.com/mulgadc/spinifex/spinifex/services/awsgw"
@@ -116,15 +115,6 @@ var predastoreStartCmd = &cobra.Command{
 			return
 		}
 
-		backendType := viper.GetString("backend")
-		var backend s3.BackendType
-
-		if backendType == "distributed" {
-			backend = s3.BackendDistributed
-		} else {
-			backend = s3.BackendFilesystem
-		}
-
 		nodeID := viper.GetInt("node-id")
 		pprofEnabled := viper.GetBool("pprof")
 		pprofOutput := viper.GetString("pprof-output")
@@ -138,8 +128,7 @@ var predastoreStartCmd = &cobra.Command{
 			TlsCert:    tlsCert,
 			TlsKey:     tlsKey,
 
-			Backend: backend,
-			NodeID:  nodeID,
+			NodeID: nodeID,
 
 			PprofEnabled:    pprofEnabled,
 			PprofOutputPath: pprofOutput,
@@ -734,15 +723,19 @@ var vpcdStartCmd = &cobra.Command{
 		var extPools []vpcd.ExternalPoolConfig
 		for _, p := range clusterConfig.Network.ExternalPools {
 			extPools = append(extPools, vpcd.ExternalPoolConfig{
-				Name:       p.Name,
-				RangeStart: p.RangeStart,
-				RangeEnd:   p.RangeEnd,
-				Gateway:    p.Gateway,
-				GatewayIP:  p.GatewayIP,
-				PrefixLen:  p.PrefixLen,
-				DNSServers: p.DNSServers,
-				Region:     p.Region,
-				AZ:         p.AZ,
+				Name:            p.Name,
+				Source:          p.Source,
+				RangeStart:      p.RangeStart,
+				RangeEnd:        p.RangeEnd,
+				Gateway:         p.Gateway,
+				GatewayIP:       p.GatewayIP,
+				PrefixLen:       p.PrefixLen,
+				DNSServers:      p.DNSServers,
+				Region:          p.Region,
+				AZ:              p.AZ,
+				DhcpBindBridge:  nodeConfig.VPCD.DhcpBindBridge,
+				GwLrpRangeStart: p.GwLrpRangeStart,
+				GwLrpRangeEnd:   p.GwLrpRangeEnd,
 			})
 		}
 

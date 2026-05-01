@@ -1593,6 +1593,7 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 				SizeGiB:          10,
 				State:            "available",
 				AvailabilityZone: "us-west-2a",
+				TenantID:         testAccountID,
 			},
 		},
 	}
@@ -3381,6 +3382,7 @@ func TestAttachVolume_VolumeInUse(t *testing.T) {
 				VolumeID: volumeID,
 				SizeGiB:  10,
 				State:    "in-use",
+				TenantID: testAccountID,
 			},
 		},
 	}

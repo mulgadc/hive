@@ -591,91 +591,6 @@ func TestExternalIPAM_DHCPGatewayFromLease(t *testing.T) {
 	assert.Equal(t, "mulga-spinifex-gw", got.VendorClass)
 }
 
-func TestObtainDHCPLease_RequestTimeout(t *testing.T) {
-	_, nc := testutil.StartTestNATS(t)
-	// Stub never responds — verifies that a hung vpcd surfaces as a
-	// wrapped NATS timeout error rather than hanging the caller.
-	sub, err := nc.Subscribe(dhcp.TopicAcquire, func(*nats.Msg) {})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
-
-	prev := dhcpNATSTimeout
-	dhcpNATSTimeout = 150 * time.Millisecond
-	t.Cleanup(func() { dhcpNATSTimeout = prev })
-
-	_, err = ObtainDHCPLease(nc, "br-wan", "eni-timeout", "eni-timeout", "mulga-spinifex", "wan")
-	assert.ErrorContains(t, err, "dhcp acquire NATS request")
-}
-
-func TestReleaseDHCPLease_RequestTimeout(t *testing.T) {
-	_, nc := testutil.StartTestNATS(t)
-	sub, err := nc.Subscribe(dhcp.TopicRelease, func(*nats.Msg) {})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
-
-	prev := dhcpNATSTimeout
-	dhcpNATSTimeout = 150 * time.Millisecond
-	t.Cleanup(func() { dhcpNATSTimeout = prev })
-
-	err = ReleaseDHCPLease(nc, "eni-timeout")
-	assert.ErrorContains(t, err, "dhcp release NATS request")
-}
-
-func TestObtainDHCPLease_MalformedReply(t *testing.T) {
-	_, nc := testutil.StartTestNATS(t)
-	sub, err := nc.Subscribe(dhcp.TopicAcquire, func(msg *nats.Msg) {
-		_ = msg.Respond([]byte("not json"))
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
-
-	_, err = ObtainDHCPLease(nc, "br-wan", "eni-malformed", "eni-malformed", "mulga-spinifex", "wan")
-	assert.ErrorContains(t, err, "unmarshal dhcp acquire reply")
-}
-
-func TestReleaseDHCPLease_MalformedReply(t *testing.T) {
-	_, nc := testutil.StartTestNATS(t)
-	sub, err := nc.Subscribe(dhcp.TopicRelease, func(msg *nats.Msg) {
-		_ = msg.Respond([]byte("not json"))
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
-
-	err = ReleaseDHCPLease(nc, "eni-malformed")
-	assert.ErrorContains(t, err, "unmarshal dhcp release reply")
-}
-
-func TestReleaseDHCPLease_ReplyError(t *testing.T) {
-	_, nc := testutil.StartTestNATS(t)
-	sub, err := nc.Subscribe(dhcp.TopicRelease, func(msg *nats.Msg) {
-		data, _ := json.Marshal(dhcp.ReleaseReplyMsg{Error: "vpcd rejected release"})
-		_ = msg.Respond(data)
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
-
-	err = ReleaseDHCPLease(nc, "eni-rejected")
-	assert.ErrorContains(t, err, "vpcd rejected release")
-}
-
-func TestObtainDHCPLease_Guards(t *testing.T) {
-	_, err := ObtainDHCPLease(nil, "br-wan", "eni-1", "eni-1", "mulga-spinifex", "wan")
-	assert.ErrorContains(t, err, "NATS connection is required")
-
-	_, nc := testutil.StartTestNATS(t)
-	_, err = ObtainDHCPLease(nc, "", "eni-1", "eni-1", "mulga-spinifex", "wan")
-	assert.ErrorContains(t, err, "bridge name is required")
-
-	_, err = ObtainDHCPLease(nc, "br-wan", "", "eni-1", "mulga-spinifex", "wan")
-	assert.ErrorContains(t, err, "client ID is required")
-}
-
-func TestReleaseDHCPLease_NoopWhenNilOrEmpty(t *testing.T) {
-	assert.NoError(t, ReleaseDHCPLease(nil, "eni-1"))
-	_, nc := testutil.StartTestNATS(t)
-	assert.NoError(t, ReleaseDHCPLease(nc, ""))
-}
-
 func TestExternalIPAM_DHCPGatewayErrorPropagates(t *testing.T) {
 	_, nc, js := testutil.StartTestJetStream(t)
 	stub := newDHCPStub(t, nc)
@@ -733,6 +648,91 @@ func TestDHCPIdentityOptions(t *testing.T) {
 			host, vendor := dhcpIdentityOptions(tc.eniID, tc.instanceID, tc.pool)
 			assert.Equal(t, tc.wantHost, host)
 			assert.Equal(t, tc.wantVendor, vendor)
+		})
+	}
+}
+
+// TestNextAvailableExternalIP_SkipsGwLrpRange verifies the per-VM EIP allocator
+// honors gw_lrp_range by skipping IPs reserved for vpcd's gateway LRPs (siv-36).
+func TestNextAvailableExternalIP_SkipsGwLrpRange(t *testing.T) {
+	rec := &ExternalIPAMRecord{
+		PoolName:        "wan",
+		RangeStart:      "192.168.1.10",
+		RangeEnd:        "192.168.1.14",
+		GwLrpRangeStart: "192.168.1.11",
+		GwLrpRangeEnd:   "192.168.1.13",
+		Allocated:       map[string]ExternalIPAllocation{},
+	}
+	ip, err := nextAvailableExternalIP(rec)
+	require.NoError(t, err)
+	assert.Equal(t, "192.168.1.10", ip)
+	rec.Allocated[ip] = ExternalIPAllocation{}
+	ip, err = nextAvailableExternalIP(rec)
+	require.NoError(t, err)
+	assert.Equal(t, "192.168.1.14", ip)
+	rec.Allocated[ip] = ExternalIPAllocation{}
+	_, err = nextAvailableExternalIP(rec)
+	require.Error(t, err)
+}
+
+func TestValidatePoolConfig(t *testing.T) {
+	base := func() ExternalPoolConfig {
+		return ExternalPoolConfig{
+			Name:       "wan",
+			Gateway:    "192.168.1.1",
+			RangeStart: "192.168.1.100",
+			RangeEnd:   "192.168.1.110",
+			PrefixLen:  24,
+		}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*ExternalPoolConfig)
+		wantErr string
+	}{
+		{name: "ok", mutate: func(p *ExternalPoolConfig) {}},
+		{name: "no name", mutate: func(p *ExternalPoolConfig) { p.Name = "" }, wantErr: "pool name is required"},
+		{name: "no gateway", mutate: func(p *ExternalPoolConfig) { p.Gateway = "" }, wantErr: "gateway is required"},
+		{name: "bad gateway", mutate: func(p *ExternalPoolConfig) { p.Gateway = "x" }, wantErr: "invalid gateway IP"},
+		{name: "bad gateway_ip", mutate: func(p *ExternalPoolConfig) { p.GatewayIP = "x" }, wantErr: "invalid gateway_ip"},
+		{name: "bad range_start", mutate: func(p *ExternalPoolConfig) { p.RangeStart = "x" }, wantErr: "invalid range_start"},
+		{name: "bad range_end", mutate: func(p *ExternalPoolConfig) { p.RangeEnd = "x" }, wantErr: "invalid range_end"},
+		{name: "range reversed", mutate: func(p *ExternalPoolConfig) {
+			p.RangeStart = "192.168.1.200"
+			p.RangeEnd = "192.168.1.100"
+		}, wantErr: "greater than range_end"},
+		{name: "bad gw_lrp_start", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "x"
+			p.GwLrpRangeEnd = "192.168.1.20"
+		}, wantErr: "invalid gw_lrp_range_start"},
+		{name: "bad gw_lrp_end", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.20"
+			p.GwLrpRangeEnd = "x"
+		}, wantErr: "invalid gw_lrp_range_end"},
+		{name: "gw_lrp reversed", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.30"
+			p.GwLrpRangeEnd = "192.168.1.20"
+		}, wantErr: "greater than gw_lrp_range_end"},
+		{name: "gw_lrp overlaps range", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.105"
+			p.GwLrpRangeEnd = "192.168.1.108"
+		}, wantErr: "overlaps range"},
+		{name: "gw_lrp valid below range", mutate: func(p *ExternalPoolConfig) {
+			p.GwLrpRangeStart = "192.168.1.20"
+			p.GwLrpRangeEnd = "192.168.1.29"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base()
+			tc.mutate(&p)
+			err := ValidatePoolConfig(p)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }

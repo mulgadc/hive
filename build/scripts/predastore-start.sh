@@ -5,7 +5,6 @@
 
 CONF=/etc/spinifex/spinifex.toml
 BIND="0.0.0.0:8443"
-BACKEND="filesystem"
 NODE_ID="0"
 
 if [ -f "$CONF" ]; then
@@ -23,7 +22,6 @@ fi
 
 export SPINIFEX_PREDASTORE_HOST="${BIND%%:*}"
 export SPINIFEX_PREDASTORE_PORT="${BIND##*:}"
-export SPINIFEX_PREDASTORE_BACKEND="$BACKEND"
 export SPINIFEX_PREDASTORE_NODE_ID="$NODE_ID"
 
 exec /usr/local/bin/spx service predastore start
