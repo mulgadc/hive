@@ -318,11 +318,6 @@ func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) error {
 		return fmt.Errorf("generate config: %w", err)
 	}
 
-	if err := validateHAProxyConfigText(configContent); err != nil {
-		slog.Error("updateStoredConfig: rendered config rejected by haproxy validator", "lbId", lb.LoadBalancerID, "err", err)
-		return fmt.Errorf("validate config: %w", err)
-	}
-
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(configContent)))
 	lb.ConfigText = configContent
 	lb.ConfigHash = hash
