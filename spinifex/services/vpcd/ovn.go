@@ -76,6 +76,8 @@ type OVNClient interface {
 	CreateLogicalRouterPort(ctx context.Context, routerName string, lrp *nbdb.LogicalRouterPort) error
 	DeleteLogicalRouterPort(ctx context.Context, routerName string, portName string) error
 	GetLogicalRouterPort(ctx context.Context, name string) (*nbdb.LogicalRouterPort, error)
+	UpdateLogicalRouterPort(ctx context.Context, lrp *nbdb.LogicalRouterPort) error
+	ListLogicalRouterPorts(ctx context.Context) ([]nbdb.LogicalRouterPort, error)
 
 	// DHCP Options
 	CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOptions) (string, error)
@@ -105,6 +107,9 @@ type OVNClient interface {
 
 	// Gateway Chassis (HA scheduling for gateway router ports)
 	SetGatewayChassis(ctx context.Context, lrpName string, chassisName string, priority int) error
+	GetGatewayChassisByName(ctx context.Context, name string) (*nbdb.GatewayChassis, error)
+	ListGatewayChassis(ctx context.Context) ([]nbdb.GatewayChassis, error)
+	DeleteGatewayChassis(ctx context.Context, lrpName string, gcUUID string) error
 }
 
 // namedUUID generates a valid OVSDB named-uuid from a prefix and name.
@@ -128,6 +133,8 @@ type LiveOVNClient struct {
 	endpoint string
 	client   client.Client
 }
+
+var _ OVNClient = (*LiveOVNClient)(nil)
 
 // NewLiveOVNClient creates a new LiveOVNClient targeting the given OVN NB DB endpoint.
 // The endpoint should be in the format "tcp:host:port" or "unix:/path/to/socket".
@@ -464,14 +471,51 @@ func (c *LiveOVNClient) GetLogicalRouterPort(ctx context.Context, name string) (
 	return &ports[0], nil
 }
 
+// UpdateLogicalRouterPort rewrites mutable columns on an existing LRP.
+// Used by ensureGatewayPortNetworks to retrofit the link-local Networks
+// CIDR onto gateway ports created by older code that used pool IPs
+// (mulga-siv-26 D8). Mirrors UpdateLogicalSwitchPort.
+func (c *LiveOVNClient) UpdateLogicalRouterPort(ctx context.Context, lrp *nbdb.LogicalRouterPort) error {
+	if lrp.UUID == "" {
+		existing, err := c.GetLogicalRouterPort(ctx, lrp.Name)
+		if err != nil {
+			return fmt.Errorf("get logical router port for update: %w", err)
+		}
+		lrp.UUID = existing.UUID
+	}
+	ops, err := c.client.Where(lrp).Update(lrp)
+	if err != nil {
+		return fmt.Errorf("update logical router port ops: %w", err)
+	}
+	if err := c.transactOps(ctx, ops); err != nil {
+		return fmt.Errorf("update logical router port transact: %w", err)
+	}
+	return nil
+}
+
+// SetGatewayChassis binds a chassis to an LRP for HA gateway scheduling. Read-
+// then-decide so it tolerates re-runs of reconcile/IGW-attach: absent → create
+// + LRP-mutate; present + same priority → no-op; present + different priority
+// → mutate priority on the existing row. Required for the reconcile-time
+// rebind step that recovers from chassis_name drift (mulga-999).
 func (c *LiveOVNClient) SetGatewayChassis(ctx context.Context, lrpName string, chassisName string, priority int) error {
+	gcName := lrpName + "-" + chassisName
+	existing, err := c.GetGatewayChassisByName(ctx, gcName)
+	if err != nil {
+		return fmt.Errorf("get existing gateway chassis: %w", err)
+	}
+	if existing != nil {
+		if existing.Priority == priority {
+			return nil
+		}
+		return c.updateGatewayChassisPriority(ctx, existing, priority)
+	}
+
 	lrp, err := c.GetLogicalRouterPort(ctx, lrpName)
 	if err != nil {
 		return fmt.Errorf("get logical router port for gateway chassis: %w", err)
 	}
 
-	// Create the Gateway_Chassis row with a deterministic name
-	gcName := lrpName + "-" + chassisName
 	gc := &nbdb.GatewayChassis{
 		UUID:        namedUUID("gc_", gcName),
 		Name:        gcName,
@@ -486,7 +530,6 @@ func (c *LiveOVNClient) SetGatewayChassis(ctx context.Context, lrpName string, c
 		return fmt.Errorf("create gateway chassis ops: %w", err)
 	}
 
-	// Add the Gateway_Chassis UUID to the router port's gateway_chassis set
 	mutateOps, err := c.client.Where(lrp).Mutate(lrp, model.Mutation{
 		Field:   &lrp.GatewayChassis,
 		Mutator: "insert",
@@ -501,6 +544,90 @@ func (c *LiveOVNClient) SetGatewayChassis(ctx context.Context, lrpName string, c
 		return fmt.Errorf("set gateway chassis transact: %w", err)
 	}
 	return nil
+}
+
+func (c *LiveOVNClient) updateGatewayChassisPriority(ctx context.Context, gc *nbdb.GatewayChassis, priority int) error {
+	gc.Priority = priority
+	ops, err := c.client.Where(gc).Update(gc, &gc.Priority)
+	if err != nil {
+		return fmt.Errorf("update gateway_chassis priority ops: %w", err)
+	}
+	if err := c.transactOps(ctx, ops); err != nil {
+		return fmt.Errorf("update gateway_chassis priority transact: %w", err)
+	}
+	return nil
+}
+
+// GetGatewayChassisByName looks up a Gateway_Chassis row by its `name` column
+// (the deterministic "lrpName-chassisName" form). Returns (nil, nil) when no
+// row matches — matches the cache-lookup convention used by GetLogicalSwitch
+// et al.
+func (c *LiveOVNClient) GetGatewayChassisByName(ctx context.Context, name string) (*nbdb.GatewayChassis, error) {
+	var rows []nbdb.GatewayChassis
+	err := c.client.WhereCache(func(gc *nbdb.GatewayChassis) bool {
+		return gc.Name == name
+	}).List(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("list gateway_chassis by name: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// ListGatewayChassis returns every Gateway_Chassis row. The reconcile loop
+// uses this to find rows referencing chassis names that no longer exist in
+// the SBDB (e.g. because the OVS system-id changed across a reboot —
+// mulga-999).
+func (c *LiveOVNClient) ListGatewayChassis(ctx context.Context) ([]nbdb.GatewayChassis, error) {
+	var rows []nbdb.GatewayChassis
+	if err := c.client.List(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("list gateway_chassis: %w", err)
+	}
+	return rows, nil
+}
+
+// DeleteGatewayChassis removes a Gateway_Chassis row and detaches it from the
+// owning LRP in one transaction. lrpName is required so the mutation targets
+// the correct router port; gcUUID identifies the row to remove.
+func (c *LiveOVNClient) DeleteGatewayChassis(ctx context.Context, lrpName string, gcUUID string) error {
+	lrp, err := c.GetLogicalRouterPort(ctx, lrpName)
+	if err != nil {
+		return fmt.Errorf("get logical router port for gateway chassis delete: %w", err)
+	}
+
+	mutateOps, err := c.client.Where(lrp).Mutate(lrp, model.Mutation{
+		Field:   &lrp.GatewayChassis,
+		Mutator: "delete",
+		Value:   []string{gcUUID},
+	})
+	if err != nil {
+		return fmt.Errorf("mutate logical router port gateway_chassis (delete) ops: %w", err)
+	}
+
+	gc := &nbdb.GatewayChassis{UUID: gcUUID}
+	deleteOps, err := c.client.Where(gc).Delete()
+	if err != nil {
+		return fmt.Errorf("delete gateway_chassis ops: %w", err)
+	}
+
+	ops := append(mutateOps, deleteOps...)
+	if err := c.transactOps(ctx, ops); err != nil {
+		return fmt.Errorf("delete gateway_chassis transact: %w", err)
+	}
+	return nil
+}
+
+// ListLogicalRouterPorts returns every LRP across all routers. Used by the
+// reconcile-time gateway-chassis rebind to find every LRP tagged
+// external_ids:spinifex:role=gateway (mulga-999).
+func (c *LiveOVNClient) ListLogicalRouterPorts(ctx context.Context) ([]nbdb.LogicalRouterPort, error) {
+	var rows []nbdb.LogicalRouterPort
+	if err := c.client.List(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("list logical_router_port: %w", err)
+	}
+	return rows, nil
 }
 
 func (c *LiveOVNClient) CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOptions) (string, error) {

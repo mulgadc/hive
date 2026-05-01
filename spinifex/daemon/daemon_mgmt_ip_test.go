@@ -41,40 +41,51 @@ func TestNewMgmtIPAllocator(t *testing.T) {
 }
 
 func TestMgmtIPAllocator_Allocate(t *testing.T) {
-	a, err := NewMgmtIPAllocator("10.15.8.1")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		bridgeIP string
+		firstIP  string
+		secondIP string
+	}{
+		{"primary subnet", "10.15.8.1", "10.15.8.10", "10.15.8.11"},
+		{"different subnet", "192.168.1.33", "192.168.1.10", "192.168.1.11"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := NewMgmtIPAllocator(tt.bridgeIP)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	// First allocation gets .10
-	ip, err := a.Allocate("i-first")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ip != "10.15.8.10" {
-		t.Errorf("first IP = %q, want 10.15.8.10", ip)
-	}
+			ip, err := a.Allocate("i-first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ip != tt.firstIP {
+				t.Errorf("first IP = %q, want %q", ip, tt.firstIP)
+			}
 
-	// Second allocation gets .11
-	ip, err = a.Allocate("i-second")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ip != "10.15.8.11" {
-		t.Errorf("second IP = %q, want 10.15.8.11", ip)
-	}
+			ip, err = a.Allocate("i-second")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ip != tt.secondIP {
+				t.Errorf("second IP = %q, want %q", ip, tt.secondIP)
+			}
 
-	// Re-allocating same instance returns same IP
-	ip, err = a.Allocate("i-first")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ip != "10.15.8.10" {
-		t.Errorf("re-allocate = %q, want 10.15.8.10", ip)
-	}
+			// Re-allocating same instance returns same IP
+			ip, err = a.Allocate("i-first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ip != tt.firstIP {
+				t.Errorf("re-allocate = %q, want %q", ip, tt.firstIP)
+			}
 
-	if a.AllocatedCount() != 2 {
-		t.Errorf("count = %d, want 2", a.AllocatedCount())
+			if a.AllocatedCount() != 2 {
+				t.Errorf("count = %d, want 2", a.AllocatedCount())
+			}
+		})
 	}
 }
 
@@ -168,21 +179,6 @@ func TestMgmtIPAllocator_Rebuild(t *testing.T) {
 	}
 	if ip != "10.15.8.11" {
 		t.Errorf("next IP after rebuild = %q, want 10.15.8.11", ip)
-	}
-}
-
-func TestMgmtIPAllocator_DifferentSubnet(t *testing.T) {
-	a, err := NewMgmtIPAllocator("192.168.1.33")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ip, err := a.Allocate("i-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ip != "192.168.1.10" {
-		t.Errorf("IP = %q, want 192.168.1.10", ip)
 	}
 }
 

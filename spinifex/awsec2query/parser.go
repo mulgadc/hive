@@ -2,11 +2,16 @@ package awsec2query
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 )
+
+// ErrSliceTooLarge is returned when a list exceeds maxSliceLen entries.
+// Callers should map this to AWS's MalformedQueryString error code.
+var ErrSliceTooLarge = errors.New("list parameter exceeds maximum entries")
 
 /*
 
@@ -185,6 +190,10 @@ func setFieldValue(field reflect.Value, value string) error {
 	return nil
 }
 
+// maxSliceLen caps list materialisation to prevent unbounded allocation
+// from adversarial indexes like `Filter.999999`.
+const maxSliceLen = 1024
+
 func setSliceField(field reflect.Value, params map[string]string, prefix string) error {
 	// Find all indexed items for this slice.
 	// Supports both EC2-style (Prefix.N) and IAM/ELBv2-style (Prefix.member.N) formats.
@@ -213,23 +222,23 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 		return nil
 	}
 
-	// Create slice with appropriate size
-	maxIdx := 0
-	for idx := range indices {
-		if idx > maxIdx {
-			maxIdx = idx
+	// AWS stops at the first gap: Filter.1, Filter.3 yields one entry, not three.
+	denseLen := 0
+	for indices[denseLen+1] {
+		denseLen++
+		if denseLen > maxSliceLen {
+			return fmt.Errorf("%w: %q (max %d)", ErrSliceTooLarge, prefix, maxSliceLen)
 		}
+	}
+	if denseLen == 0 {
+		return nil
 	}
 
 	elemType := field.Type().Elem()
-	slice := reflect.MakeSlice(field.Type(), maxIdx, maxIdx)
+	slice := reflect.MakeSlice(field.Type(), denseLen, denseLen)
 
 	// Process each index
-	for idx := 1; idx <= maxIdx; idx++ {
-		if !indices[idx] {
-			continue
-		}
-
+	for idx := 1; idx <= denseLen; idx++ {
 		elem := slice.Index(idx - 1)
 		var indexPrefix string
 		if useMember {

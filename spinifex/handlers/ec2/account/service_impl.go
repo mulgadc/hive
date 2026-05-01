@@ -34,6 +34,8 @@ type AccountSettingsServiceImpl struct {
 	settingsKV nats.KeyValue
 }
 
+var _ AccountSettingsService = (*AccountSettingsServiceImpl)(nil)
+
 // NewAccountSettingsServiceImplWithNATS creates an account settings service with NATS JetStream for persistence
 func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*AccountSettingsServiceImpl, error) {
 	js, err := natsConn.JetStream()

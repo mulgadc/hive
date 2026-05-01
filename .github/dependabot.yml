@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: gomod
-    target-branch: main
+    target-branch: dev
     directory: /
     schedule:
       interval: weekly
@@ -15,7 +15,7 @@ updates:
           - "*"
 
   - package-ecosystem: github-actions
-    target-branch: main
+    target-branch: dev
     directory: /
     schedule:
       interval: weekly
@@ -34,7 +34,7 @@ updates:
           - "*"
 
   - package-ecosystem: npm
-    target-branch: main
+    target-branch: dev
     directory: /spinifex/services/spinifexui/frontend
     schedule:
       interval: weekly

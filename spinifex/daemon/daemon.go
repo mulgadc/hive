@@ -81,9 +81,17 @@ type EBS struct {
 // is available for a type, the node subscribes to ec2.RunInstances.{type};
 // when full, it unsubscribes so NATS routes requests to other nodes.
 type ResourceManager struct {
-	mu            sync.RWMutex
-	availableVCPU int
-	availableMem  float64
+	mu sync.RWMutex
+	// hostVCPU / hostMemGB are the raw figures reported by the host
+	// (runtime.NumCPU, /proc/meminfo). Schedulable capacity for guest VMs
+	// is host - reserved - allocated.
+	hostVCPU  int
+	hostMemGB float64
+	// reservedVCPU / reservedMem are held back from guest scheduling for
+	// the spinifex daemon and co-located services (NATS, predastore,
+	// viperblock, vpcd, awsgw, ui). See hostReserve / defaultHostReserve.
+	reservedVCPU  int
+	reservedMem   float64
 	allocatedVCPU int
 	allocatedMem  float64
 	instanceTypes map[string]*ec2.InstanceTypeInfo
@@ -216,6 +224,9 @@ func getSystemMemory() (float64, error) {
 // NewResourceManager creates a new resource manager with system capabilities.
 // Returns an error if system memory cannot be detected, since an incorrect
 // default would either under-provision (large servers) or over-commit (small devices).
+// Also returns an error if the host is too small to satisfy the daemon's
+// reserve — clamping silently would defeat the reserve and look like a
+// runtime bug.
 func NewResourceManager() (*ResourceManager, error) {
 	// Get system CPU cores
 	numCPU := runtime.NumCPU()
@@ -224,6 +235,14 @@ func NewResourceManager() (*ResourceManager, error) {
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
 		return nil, fmt.Errorf("detect system memory: %w", err)
+	}
+
+	reservedVCPU, reservedMem, err := applyHostReserve(defaultHostReserve, numCPU, totalMemGB)
+	if err != nil {
+		slog.Error("host below minimum reserve — daemon refuses to start",
+			"err", err, "hostVCPU", numCPU, "hostMemGB", totalMemGB,
+			"reserveVCPU", defaultHostReserve.vCPU, "reserveMemGB", defaultHostReserve.memGB)
+		return nil, fmt.Errorf("validate host reserve: %w", err)
 	}
 
 	// Determine architecture
@@ -236,12 +255,16 @@ func NewResourceManager() (*ResourceManager, error) {
 	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch)
 
 	slog.Info("System resources detected",
-		"vCPUs", numCPU, "memGB", totalMemGB,
+		"hostVCPU", numCPU, "hostMemGB", totalMemGB,
+		"reservedVCPU", reservedVCPU, "reservedMemGB", reservedMem,
+		"schedulableVCPU", numCPU-reservedVCPU, "schedulableMemGB", totalMemGB-reservedMem,
 		"instanceTypes", len(instanceTypes))
 
 	return &ResourceManager{
-		availableVCPU: numCPU,
-		availableMem:  totalMemGB,
+		hostVCPU:      numCPU,
+		hostMemGB:     totalMemGB,
+		reservedVCPU:  reservedVCPU,
+		reservedMem:   reservedMem,
 		instanceTypes: instanceTypes,
 	}, nil
 }
@@ -299,8 +322,8 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 		}
 
 		count := canAllocateCount(
-			rm.availableVCPU, rm.allocatedVCPU,
-			rm.availableMem, rm.allocatedMem,
+			rm.hostVCPU-rm.reservedVCPU, rm.allocatedVCPU,
+			rm.hostMemGB-rm.reservedMem, rm.allocatedMem,
 			vCPUs, memMiB,
 			1<<30, // effectively unlimited — let resources be the constraint
 		)
@@ -315,23 +338,36 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 	}
 
 	slog.Info("GetAvailableInstanceTypeInfos", "total_types", len(rm.instanceTypes), "total_available_slots", len(infos),
-		"hostVCPU", rm.availableVCPU, "hostMem", rm.availableMem, "showCapacity", showCapacity)
+		"hostVCPU", rm.hostVCPU, "hostMem", rm.hostMemGB,
+		"reservedVCPU", rm.reservedVCPU, "reservedMem", rm.reservedMem,
+		"showCapacity", showCapacity)
 
 	return infos
 }
 
 // GetResourceStats returns current resource allocation stats for the node status response.
-func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
+// totalVCPU / totalMemGB are the raw host figures; reservedVCPU / reservedMemGB are
+// held back from guest scheduling. Per-type caps reflect host - reserved - allocated,
+// matching what the admission path will actually permit.
+func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, reservedVCPU int, reservedMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	totalVCPU = rm.availableVCPU
-	totalMemGB = rm.availableMem
+	totalVCPU = rm.hostVCPU
+	totalMemGB = rm.hostMemGB
+	reservedVCPU = rm.reservedVCPU
+	reservedMemGB = rm.reservedMem
 	allocVCPU = rm.allocatedVCPU
 	allocMemGB = rm.allocatedMem
 
-	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-	remainingMem := rm.availableMem - rm.allocatedMem
+	remainingVCPU := rm.hostVCPU - rm.reservedVCPU - rm.allocatedVCPU
+	remainingMem := rm.hostMemGB - rm.reservedMem - rm.allocatedMem
+	if remainingVCPU < 0 || remainingMem < 0 {
+		slog.Error("schedulable capacity negative — reserve misconfigured or allocation drift",
+			"hostVCPU", rm.hostVCPU, "reservedVCPU", rm.reservedVCPU, "allocatedVCPU", rm.allocatedVCPU,
+			"hostMemGB", rm.hostMemGB, "reservedMem", rm.reservedMem, "allocatedMem", rm.allocatedMem,
+			"remainingVCPU", remainingVCPU, "remainingMem", remainingMem)
+	}
 
 	for name, it := range rm.instanceTypes {
 		if instancetypes.IsSystemType(name) {
@@ -343,7 +379,7 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 		}
 		caps = append(caps, typeCap)
 	}
-	return totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps
+	return totalVCPU, totalMemGB, reservedVCPU, reservedMemGB, allocVCPU, allocMemGB, caps
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -412,6 +448,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "spinifex-workers"},
 		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "spinifex-workers"},
 		{"ec2.DescribeVolumeStatus", d.handleEC2DescribeVolumeStatus, "spinifex-workers"},
+		{"ec2.DescribeVolumesModifications", d.handleEC2DescribeVolumesModifications, "spinifex-workers"},
 		{"ec2.CreateSnapshot", d.handleEC2CreateSnapshot, "spinifex-workers"},
 		{"ec2.DescribeSnapshots", d.handleEC2DescribeSnapshots, "spinifex-workers"},
 		{"ec2.DeleteSnapshot", d.handleEC2DeleteSnapshot, "spinifex-workers"},
@@ -648,26 +685,28 @@ func (d *Daemon) Start() error {
 			slog.Warn("Failed to get JetStream for external IPAM", "err", jsErr)
 		} else {
 			var pools []handlers_ec2_vpc.ExternalPoolConfig
-			// Resolve WAN bridge name for DHCP pools
-			wanBridge := ""
+			// Resolve DHCP bind bridge name for DHCP pools (where AF_PACKET binds).
+			dhcpBindBridge := ""
 			if node, ok := d.clusterConfig.Nodes[d.clusterConfig.Node]; ok {
-				wanBridge = node.VPCD.WanBridge
+				dhcpBindBridge = node.VPCD.DhcpBindBridge
 			}
 			for _, p := range d.clusterConfig.Network.ExternalPools {
 				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
-					Name:       p.Name,
-					Source:     p.Source,
-					RangeStart: p.RangeStart,
-					RangeEnd:   p.RangeEnd,
-					Gateway:    p.Gateway,
-					GatewayIP:  p.GatewayIP,
-					PrefixLen:  p.PrefixLen,
-					Region:     p.Region,
-					AZ:         p.AZ,
-					WanBridge:  wanBridge,
+					Name:            p.Name,
+					Source:          p.Source,
+					RangeStart:      p.RangeStart,
+					RangeEnd:        p.RangeEnd,
+					Gateway:         p.Gateway,
+					GatewayIP:       p.GatewayIP,
+					PrefixLen:       p.PrefixLen,
+					Region:          p.Region,
+					AZ:              p.AZ,
+					DhcpBindBridge:  dhcpBindBridge,
+					GwLrpRangeStart: p.GwLrpRangeStart,
+					GwLrpRangeEnd:   p.GwLrpRangeEnd,
 				})
 			}
-			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(js, pools)
+			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(d.natsConn, js, pools)
 			if err != nil {
 				slog.Warn("Failed to initialize external IPAM", "err", err)
 			} else {
@@ -1677,14 +1716,18 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				d.cleanupExtraENITaps(instance)
 			}
 
-			// Clean up management TAP and release IP
-			if instance.MgmtTap != "" {
-				if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
-					slog.Warn("Failed to clean up mgmt tap device", "tap", instance.MgmtTap, "instanceId", instance.ID, "err", err)
-				}
-				if d.mgmtIPAllocator != nil {
-					d.mgmtIPAllocator.Release(instance.ID)
-				}
+			// Clean up management TAP and release IP. Derive the name from
+			// instance.ID rather than reading instance.MgmtTap — the field
+			// is set only after SetupMgmtTapDevice returns, so a terminate
+			// that races mid-launch would skip cleanup and leak the OVS
+			// port. CleanupMgmtTapDevice is idempotent for instances that
+			// never reached the setup step.
+			mgmtTap := MgmtTapName(instance.ID)
+			if err := CleanupMgmtTapDevice(mgmtTap); err != nil {
+				slog.Warn("Failed to clean up mgmt tap device", "tap", mgmtTap, "instanceId", instance.ID, "err", err)
+			}
+			if d.mgmtIPAllocator != nil {
+				d.mgmtIPAllocator.Release(instance.ID)
 			}
 
 			// Release public IP before deleting ENI
@@ -1894,14 +1937,31 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	return nil
 }
 
-func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
-	// Abort if instance is no longer in a launchable state (e.g., terminated
-	// by a concurrent request while waiting in the launch queue).
+// launchStillValid returns true while LaunchInstance may continue setting up
+// resources for instance. Returns false if a concurrent terminate has flipped
+// status out of pending/stopped/provisioning — at that point the terminate
+// goroutine owns cleanup and LaunchInstance must bail without further side
+// effects. Logs the abort reason at Info so it's visible without polluting
+// error logs (terminate-during-pending is an expected user-driven race).
+func (d *Daemon) launchStillValid(instance *vm.VM) bool {
 	d.Instances.Mu.Lock()
 	status := instance.Status
 	d.Instances.Mu.Unlock()
-	if status != vm.StatePending && status != vm.StateStopped && status != vm.StateProvisioning {
-		return fmt.Errorf("instance %s in %s state, not launchable", instance.ID, status)
+	if status == vm.StatePending || status == vm.StateStopped || status == vm.StateProvisioning {
+		return true
+	}
+	slog.Info("Launch aborted by concurrent terminate", "instanceId", instance.ID, "status", string(status))
+	return false
+}
+
+func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
+	// Abort if instance is no longer in a launchable state. A concurrent
+	// terminate request that flipped status to shutting-down/terminated
+	// owns the cleanup lifecycle; this path is an expected race outcome,
+	// not an error, so return nil to avoid the spurious
+	// "Failed to transition instance to running" ERROR log.
+	if !d.launchStillValid(instance) {
+		return nil
 	}
 
 	// First, confirm if the instance is already running
@@ -1927,6 +1987,15 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	if err != nil {
 		slog.Error("Failed to mount volumes", "err", err)
 		return err
+	}
+
+	// Re-check status — MountVolumes can take 30+s on cold AMIs (NBD
+	// clone), and a terminate can race in during that window. Skip the
+	// remaining setup so the concurrent terminate goroutine doesn't fight
+	// SetupTapDevice and leak resources. PR1b.1's idempotency safety net
+	// catches anything that does slip through.
+	if !d.launchStillValid(instance) {
+		return nil
 	}
 
 	// Step 6: Launch the instance via QEMU/KVM
@@ -1974,6 +2043,14 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.Instances.Mu.Lock()
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
+
+	// Final race check — QEMU is up, but if a terminate fired during
+	// StartInstance/CreateQMPClient, the concurrent goroutine has already
+	// transitioned status to shutting-down. Attempting StateRunning here
+	// would log a spurious error; let the terminate cleanup own teardown.
+	if !d.launchStillValid(instance) {
+		return nil
+	}
 
 	if err := d.TransitionState(instance, vm.StateRunning); err != nil {
 		slog.Error("Failed to transition instance to running", "instanceId", instance.ID, "err", err)
@@ -2648,8 +2725,8 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 	defer rm.mu.RUnlock()
 
 	return canAllocateCount(
-		rm.availableVCPU, rm.allocatedVCPU,
-		rm.availableMem, rm.allocatedMem,
+		rm.hostVCPU-rm.reservedVCPU, rm.allocatedVCPU,
+		rm.hostMemGB-rm.reservedMem, rm.allocatedMem,
 		instanceTypeVCPUs(instanceType),
 		instanceTypeMemoryMiB(instanceType),
 		count,
@@ -2783,11 +2860,21 @@ func (d *Daemon) wireLBAgentConfig() {
 
 	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
 	// Precedence:
-	//   1. AWSGW listens on a specific WAN IP + br-mgmt present → use WAN IP
-	//      and add host route via br-mgmt for internal LBs.
-	//   2. br-mgmt present + AWSGW on 0.0.0.0 → br-mgmt IP (both LB flavours
+	//   1. br-mgmt present + AWSGW on a dedicated IP distinct from AdvertiseIP
+	//      (multi-node: AWSGW on a mgmt-only IP, VPC path can't reach it) →
+	//      gateway URL is the AWSGW bind IP and lb-agent gets a bootcmd host
+	//      route via br-mgmt.
+	//   2. AdvertiseIP set (single-node, or multi-node where AWSGW binds to
+	//      the advertised IP) → AdvertiseIP. VMs reach it via VPC → external
+	//      (OVN's own dnat_and_snat SNATs their reply back to the ALB EIP).
+	//      Critically, we do NOT add the mgmt host route here: when host IPs
+	//      on the WAN share the advertiseIP, the /32 route would steal the
+	//      return path for host-initiated ALB connections — replies would
+	//      egress via mgmt with the VM's 10.x source IP, bypass OVN's SNAT,
+	//      and arrive at the host with a source that doesn't match the open
+	//      TCP socket (the client dialed the EIP, not the VM IP).
+	//   3. br-mgmt present + AWSGW on 0.0.0.0 → br-mgmt IP (both LB flavours
 	//      reach the daemon via mgmt).
-	//   3. This node's AdvertiseIP (single-node default install) → AdvertiseIP.
 	//   4. DevNetworking shim → 10.0.2.2.
 	//   5. AWSGW bound to specific IP (no br-mgmt, no advertise) → that IP.
 	//   6. Else: error and skip assignment — no silent empty URL.
@@ -2802,17 +2889,20 @@ func (d *Daemon) wireLBAgentConfig() {
 	advertiseIP := d.config.AdvertiseIP
 
 	switch {
-	case d.mgmtBridgeIP != "" && awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback():
-		// Multi-node: AWSGW listens on a specific WAN IP. Use that IP as the
-		// gateway URL; internal LBs get a host route via br-mgmt.
+	case d.mgmtBridgeIP != "" && awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" &&
+		!net.ParseIP(awsgwBindIP).IsLoopback() && awsgwBindIP != advertiseIP:
+		// Multi-node: AWSGW on a dedicated mgmt IP. VMs can't reach it via
+		// VPC → external, so add a bootcmd host route via br-mgmt.
 		gatewayHost = awsgwBindIP
 		d.mgmtRouteVia = awsgwBindIP
-	case d.mgmtBridgeIP != "":
-		// Multi-node with AWSGW on 0.0.0.0 — br-mgmt reaches all LBs.
-		gatewayHost = d.mgmtBridgeIP
 	case advertiseIP != "" && advertiseIP != "0.0.0.0":
-		// Single-node default install — off-host clients dial the advertised IP.
+		// Single-node, or multi-node where AWSGW binds to AdvertiseIP: VMs
+		// reach AWSGW via the normal VPC → external path. No mgmt host route.
 		gatewayHost = advertiseIP
+	case d.mgmtBridgeIP != "":
+		// br-mgmt present + AWSGW on 0.0.0.0 and no advertiseIP — br-mgmt IP
+		// is the only reachable address.
+		gatewayHost = d.mgmtBridgeIP
 	case d.config.Daemon.DevNetworking:
 		gatewayHost = "10.0.2.2"
 	case awsgwBindIP != "" && awsgwBindIP != "0.0.0.0":
@@ -2842,4 +2932,13 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.MgmtRouteGateway = d.mgmtBridgeIP
 		d.elbv2Service.MgmtRouteTarget = d.mgmtRouteVia
 	}
+
+	// Always expose mgmtBridgeIP and advertiseIP so lbVMUserData can synthesize
+	// a mgmt-NIC fallback route for internal-scheme LBs on single-node setups
+	// (where MgmtRoute{Gateway,Target} stay empty because internet-facing LBs
+	// reach AWSGW via VPC + EIP SNAT). Internal LBs have no EIP, so without
+	// this fallback the agent has no return path and the LB stays in
+	// provisioning forever.
+	d.elbv2Service.MgmtBridgeIP = d.mgmtBridgeIP
+	d.elbv2Service.AdvertiseIP = advertiseIP
 }

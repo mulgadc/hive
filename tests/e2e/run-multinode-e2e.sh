@@ -91,6 +91,101 @@ aws_via_retry() {
 # Default AWS CLI shorthand (via local node)
 AWS_EC2="aws --endpoint-url https://${LOCAL_IP}:${AWSGW_PORT} ec2"
 
+# Dump SSH-related diagnostics when a guest SSH attempt fails.
+# Args: <instance_id> <host_ip> <ssh_host> [ssh_port]
+# ssh_host is the address we tried (EIP or node IP), ssh_port is hostfwd port if applicable.
+dump_guest_ssh_diagnostics() {
+    local instance_id="$1" host_ip="$2" ssh_host="$3" ssh_port="${4:-}"
+    echo ""
+    echo "  === Diagnostics for ${instance_id} (host=${host_ip}, target=${ssh_host}:${ssh_port:-22}) ==="
+
+    echo "  --- describe-instances ---"
+    $AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].[InstanceId,State.Name,PrivateIpAddress,PublicIpAddress,SecurityGroups[].GroupId,NetworkInterfaces[0].MacAddress,VpcId,SubnetId]' \
+        --output json 2>&1 || true
+
+    local sg_ids priv_ip mac vpc_id
+    sg_ids=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text 2>/dev/null || true)
+    priv_ip=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null || true)
+    mac=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].NetworkInterfaces[0].MacAddress' --output text 2>/dev/null || true)
+    vpc_id=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].VpcId' --output text 2>/dev/null || true)
+
+    if [ -n "$sg_ids" ] && [ "$sg_ids" != "None" ]; then
+        echo "  --- describe-security-groups (${sg_ids}) ---"
+        # shellcheck disable=SC2086
+        $AWS_EC2 describe-security-groups --group-ids $sg_ids \
+            --query 'SecurityGroups[].[GroupId,GroupName,IpPermissions]' --output json 2>&1 || true
+    fi
+
+    echo "  --- local ARP for ${ssh_host} ---"
+    ip neigh show "$ssh_host" 2>&1 || true
+
+    echo "  --- local ping ${ssh_host} (2 pkts) ---"
+    ping -c 2 -W 2 "$ssh_host" 2>&1 || true
+
+    if [ -n "$host_ip" ] && [ "$host_ip" != "unknown" ]; then
+        echo "  --- on hosting node ${host_ip}: QEMU process ---"
+        peer_ssh "$host_ip" "pgrep -af 'qemu.*${instance_id}' || echo '(no qemu process)'" 2>&1 || true
+
+        if [ -n "$priv_ip" ] && [ "$priv_ip" != "None" ]; then
+            echo "  --- on hosting node ${host_ip}: ping VM private IP ${priv_ip} ---"
+            peer_ssh "$host_ip" "ping -c 2 -W 2 ${priv_ip}" 2>&1 || true
+        fi
+
+        echo "  --- on hosting node ${host_ip}: OVN chassis + port bindings ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl get open_vswitch . external_ids:system-id 2>/dev/null || true" 2>&1 || true
+    fi
+
+    if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
+        echo "  --- OVN NAT rules for vpc-${vpc_id} (from primary) ---"
+        peer_ssh "$LOCAL_IP" "sudo ovn-nbctl lr-nat-list vpc-${vpc_id} 2>&1 || true" 2>&1 || true
+    fi
+
+    if [ -n "$mac" ] && [ "$mac" != "None" ]; then
+        echo "  --- OVN port binding for MAC ${mac} (from primary) ---"
+        peer_ssh "$LOCAL_IP" "sudo ovn-sbctl --columns=logical_port,chassis,mac find port_binding mac~='${mac}' 2>&1 || true" 2>&1 || true
+    fi
+
+    # ----- Cross-chassis dataplane diagnostics (mulga-siv-27 follow-up) -----
+    echo "  --- OVN SB chassis registrations (from primary) ---"
+    peer_ssh "$LOCAL_IP" "sudo ovn-sbctl show 2>&1 || true" 2>&1 || true
+
+    echo "  --- OVN SB port_binding chassis claims (from primary) ---"
+    peer_ssh "$LOCAL_IP" "sudo ovn-sbctl --bare --columns=logical_port,chassis,up list Port_Binding 2>&1 | head -80 || true" 2>&1 || true
+
+    echo "  --- OVN NB gateway_chassis (from primary) ---"
+    peer_ssh "$LOCAL_IP" "sudo ovn-nbctl --bare --columns=name,chassis_name,priority list Gateway_Chassis 2>&1 || true" 2>&1 || true
+
+    if [ -n "$host_ip" ] && [ "$host_ip" != "unknown" ]; then
+        echo "  --- on hosting node ${host_ip}: ovs-vsctl show (taps + geneve) ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl show 2>&1 | grep -E 'Bridge|Port|Interface|tap-|geneve|external_ids|iface-id|attached-mac|remote_ip' | head -80 || true" 2>&1 || true
+
+        echo "  --- on hosting node ${host_ip}: ovn-controller status + system-id ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl get open_vswitch . external_ids:system-id 2>&1; \
+            sudo ovs-vsctl get open_vswitch . external_ids:ovn-encap-ip 2>&1; \
+            sudo systemctl is-active ovn-controller 2>&1 || true" 2>&1 || true
+
+        echo "  --- on hosting node ${host_ip}: Geneve tunnel ports (br-int) ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl --columns=name,type,options find Interface type=geneve 2>&1 || true" 2>&1 || true
+
+        echo "  --- on hosting node ${host_ip}: br-int output flows (tunnel) ---"
+        peer_ssh "$host_ip" "sudo ovs-ofctl dump-flows br-int 2>/dev/null | grep -E 'tun_dst|output:.*tun|table=33|table=37' | head -40 || true" 2>&1 || true
+    fi
+
+    echo "  --- cloud-init / sshd from hosting node (via QEMU console log if available) ---"
+    peer_ssh "$host_ip" "ls -la /var/log/libvirt/qemu/ 2>/dev/null | head -20; \
+        for f in /tmp/spinifex/vms/${instance_id}/console.log /var/log/libvirt/qemu/${instance_id}.log; do \
+          [ -f \"\$f\" ] && echo \"--- \$f (tail 50) ---\" && sudo tail -50 \"\$f\"; \
+        done" 2>&1 || true
+
+    echo "  === end diagnostics for ${instance_id} ==="
+    echo ""
+}
+
 # Dump logs from ALL nodes on failure
 dump_all_node_logs() {
     echo ""
@@ -559,6 +654,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
 
     if [ "$SSH_READY" = false ]; then
         echo "  ERROR: SSH not ready after 60 attempts"
+        dump_guest_ssh_diagnostics "$instance_id" "$host_ip" "$SSH_HOST" "$SSH_PORT"
         fail_test "Guest SSH ($instance_id)"
         continue
     fi

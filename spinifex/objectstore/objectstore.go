@@ -70,6 +70,8 @@ type S3ObjectStore struct {
 	client *s3.S3
 }
 
+var _ ObjectStore = (*S3ObjectStore)(nil)
+
 // NewS3ObjectStore creates an ObjectStore backed by AWS S3 or S3-compatible storage
 func NewS3ObjectStore(client *s3.S3) *S3ObjectStore {
 	return &S3ObjectStore{client: client}
@@ -104,6 +106,8 @@ type MemoryObjectStore struct {
 	objects map[string][]byte // key: bucket/key -> value: object data
 	mu      sync.RWMutex
 }
+
+var _ ObjectStore = (*MemoryObjectStore)(nil)
 
 // NewMemoryObjectStore creates an in-memory ObjectStore for testing
 func NewMemoryObjectStore() *MemoryObjectStore {

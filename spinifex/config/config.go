@@ -31,6 +31,14 @@ type ExternalPool struct {
 	DNSServers []string `mapstructure:"dns_servers"` // DNS servers for VM DHCP (auto-detected from host; fallback: 8.8.8.8, 1.1.1.1)
 	Region     string   `mapstructure:"region"`      // Scope to region (optional — empty means any region)
 	AZ         string   `mapstructure:"az"`          // Scope to AZ (optional — empty means any AZ in region)
+	// GwLrpRangeStart/End reserve a sub-range of the LAN for OVN gateway LRP IPs
+	// in centralized NAT mode (veth/macvlan). Each VPC consumes one IP from this
+	// range so its gateway router port can ARP with a sender IP on the LAN
+	// subnet — link-local 169.254.0.1/30 makes upstream routers reject ARP per
+	// RFC 826 (mulga-siv-36). Must NOT overlap [RangeStart, RangeEnd] or IPAM
+	// and vpcd will fight over the same IP.
+	GwLrpRangeStart string `mapstructure:"gw_lrp_range_start"`
+	GwLrpRangeEnd   string `mapstructure:"gw_lrp_range_end"`
 }
 
 // NetworkConfig holds cluster-wide external network settings.
@@ -95,8 +103,14 @@ type VPCDConfig struct {
 	OVNNBAddr         string `json:"OVNNBAddr" mapstructure:"ovn_nb_addr"`                // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
 	OVNSBAddr         string `json:"OVNSBAddr" mapstructure:"ovn_sb_addr"`                // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
 	ExternalInterface string `json:"ExternalInterface" mapstructure:"external_interface"` // WAN NIC name (e.g., "eth1", "enp0s3") — the physical NIC on the WAN bridge
-	WanBridge         string `json:"WanBridge" mapstructure:"wan_bridge"`                 // OVS bridge for WAN traffic (default "br-wan", maps to OVN "external" network)
-	BridgeMode        string `json:"BridgeMode" mapstructure:"bridge_mode"`               // "direct" or "macvlan" (auto-detected if empty)
+	// DhcpBindBridge is the bridge where the DHCP client binds its AF_PACKET
+	// socket — the interface that physically sees LAN DHCP traffic. On hosts
+	// where the WAN NIC is enslaved to a Linux bridge (netplan default), this
+	// is the Linux bridge name (e.g. "br-wan"). On direct-OVS hosts, it is
+	// the OVS bridge holding the WAN NIC. Never set to the OVN-side bridge
+	// ("br-ext") — that never sees LAN DHCP traffic.
+	DhcpBindBridge string `json:"DhcpBindBridge" mapstructure:"dhcp_bind_bridge"`
+	BridgeMode     string `json:"BridgeMode" mapstructure:"bridge_mode"` // "direct" or "veth" (auto-detected if empty)
 }
 
 type PredastoreConfig struct {

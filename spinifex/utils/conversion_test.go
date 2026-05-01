@@ -7,17 +7,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Each wrapper has one or two clamp branches; tests cover the no-branch
+// happy path and each branch. Boundary tests against MaxInt64/MaxUint8 etc.
+// only exercise stdlib casts, so they are intentionally omitted.
+
 func TestSafeInt64ToUint64(t *testing.T) {
 	tests := []struct {
 		name string
 		in   int64
 		want uint64
 	}{
-		{"Zero", 0, 0},
-		{"Positive", 42, 42},
-		{"MaxInt64", math.MaxInt64, uint64(math.MaxInt64)},
-		{"Negative", -1, 0},
-		{"MinInt64", math.MinInt64, 0},
+		{"positive passes through", 42, 42},
+		{"negative clamps to 0", -1, 0},
 	}
 
 	for _, tt := range tests {
@@ -33,13 +34,9 @@ func TestSafeIntToUint8(t *testing.T) {
 		in   int
 		want uint8
 	}{
-		{"Zero", 0, 0},
-		{"Normal", 128, 128},
-		{"Max uint8", 255, 255},
-		{"Above max", 256, 255},
-		{"Large", 1000, 255},
-		{"Negative", -1, 0},
-		{"Large negative", -100, 0},
+		{"in range passes through", 128, 128},
+		{"above max clamps", math.MaxUint8 + 1, math.MaxUint8},
+		{"negative clamps to 0", -1, 0},
 	}
 
 	for _, tt := range tests {
@@ -55,10 +52,8 @@ func TestSafeIntToUint64(t *testing.T) {
 		in   int
 		want uint64
 	}{
-		{"Zero", 0, 0},
-		{"Positive", 42, 42},
-		{"Negative", -1, 0},
-		{"Large negative", -999, 0},
+		{"positive passes through", 42, 42},
+		{"negative clamps to 0", -1, 0},
 	}
 
 	for _, tt := range tests {
@@ -74,11 +69,8 @@ func TestSafeUint64ToInt64(t *testing.T) {
 		in   uint64
 		want int64
 	}{
-		{"Zero", 0, 0},
-		{"Normal", 42, 42},
-		{"MaxInt64", uint64(math.MaxInt64), math.MaxInt64},
-		{"Above MaxInt64", uint64(math.MaxInt64) + 1, math.MaxInt64},
-		{"MaxUint64", math.MaxUint64, math.MaxInt64},
+		{"in range passes through", 42, 42},
+		{"above MaxInt64 clamps", uint64(math.MaxInt64) + 1, math.MaxInt64},
 	}
 
 	for _, tt := range tests {

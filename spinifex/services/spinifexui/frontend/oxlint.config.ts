@@ -43,7 +43,6 @@ export default defineConfig({
     "typescript/no-floating-promises": "off",
     "typescript/no-misused-promises": "off",
     "typescript/only-throw-error": "off",
-    "typescript/prefer-readonly-parameter-types": "off",
     "typescript/promise-function-async": "off",
     "typescript/return-await": "off",
     "typescript/strict-boolean-expressions": "off",

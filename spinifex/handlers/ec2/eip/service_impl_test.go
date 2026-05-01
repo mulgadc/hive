@@ -3,6 +3,7 @@ package handlers_ec2_eip
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -29,7 +30,7 @@ func setupTestEIP(t *testing.T) (*EIPServiceImpl, *handlers_ec2_vpc.ExternalIPAM
 	_, nc, js := testutil.StartTestJetStream(t)
 
 	pool := testPool()
-	ipam, err := handlers_ec2_vpc.NewExternalIPAM(js, []handlers_ec2_vpc.ExternalPoolConfig{pool})
+	ipam, err := handlers_ec2_vpc.NewExternalIPAM(nc, js, []handlers_ec2_vpc.ExternalPoolConfig{pool})
 	require.NoError(t, err)
 
 	svc, err := NewEIPServiceImpl(nc, ipam, nil)
@@ -554,4 +555,33 @@ func TestEIP_DescribeAddresses_FilterByTag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, desc.Addresses, 1)
 	assert.Equal(t, *out.AllocationId, *desc.Addresses[0].AllocationId)
+}
+
+// TestEIP_PublishNATEvent_PortNameHasPortPrefix is a regression test for a bug
+// where EIPServiceImpl.publishNATEvent sent the raw ENI id as PortName. vpcd
+// writes PortName into NAT.LogicalPort in distributed NAT mode (direct bridge),
+// so a mismatch with the OVN logical switch port name ("port-<eni>") produces
+// a dnat_and_snat row pointing at a nonexistent port — OVN never programs the
+// flow and the EIP black-holes. See mulga-js-17.
+func TestEIP_PublishNATEvent_PortNameHasPortPrefix(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	sub, err := svc.natsConn.SubscribeSync("vpc.add-nat")
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	const eniID = "eni-abc123"
+	svc.publishNATEvent("vpc.add-nat", "vpc-1", "198.51.100.10", "10.0.0.5", eniID, "02:00:00:00:00:01")
+
+	msg, err := sub.NextMsg(2 * time.Second)
+	require.NoError(t, err)
+
+	var got natEvent
+	require.NoError(t, json.Unmarshal(msg.Data, &got))
+	assert.Equal(t, "port-"+eniID, got.PortName,
+		"PortName must match the OVN logical switch port name (port-<eni>); "+
+			"otherwise vpcd's distributed NAT creates a dnat_and_snat rule "+
+			"pointing at a nonexistent logical port and the flow is never programmed")
+	assert.Equal(t, "10.0.0.5", got.LogicalIP)
+	assert.Equal(t, "198.51.100.10", got.ExternalIP)
 }

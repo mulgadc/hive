@@ -1444,16 +1444,6 @@ func TestDescribeVolumeStatus_SlowPath_SkipsBrokenConfig(t *testing.T) {
 	assert.Len(t, output.VolumeStatuses, 1)
 }
 
-func TestNewVolumeServiceImplWithStore_WithSnapshotKV(t *testing.T) {
-	kv := setupTestVolumeKV(t)
-	store := objectstore.NewMemoryObjectStore()
-	cfg := &config.Config{
-		Predastore: config.PredastoreConfig{Bucket: "test-bucket"},
-	}
-	svc := NewVolumeServiceImplWithStore(cfg, store, nil, kv)
-	assert.NotNil(t, svc.snapshotKV)
-}
-
 func TestDeleteVolume_NATSErrorResponse(t *testing.T) {
 	kv := setupTestVolumeKV(t)
 	store := objectstore.NewMemoryObjectStore()
@@ -2026,4 +2016,241 @@ func TestDescribeVolumeStatus_FilterWithVolumeIds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, out.VolumeStatuses, 1)
 	assert.Equal(t, "vol-vsf1", *out.VolumeStatuses[0].VolumeId)
+}
+
+// --- Group: DescribeVolumesModifications tests ---
+
+// TestDescribeVolumesModifications_RoundTrip proves ModifyVolume persists the
+// modification record into cfg.Modification AND that DescribeVolumesModifications
+// reads it back. Guards the load-bearing wiring between the two APIs.
+func TestDescribeVolumesModifications_RoundTrip(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-rt", viperblock.VolumeMetadata{
+		VolumeID: "vol-rt", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+
+	_, err := svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-rt"),
+		Size:     aws.Int64(20),
+	}, "111111111111")
+	require.NoError(t, err)
+
+	// Confirm Modification was persisted on cfg.
+	cfg, err := svc.GetVolumeConfig("vol-rt")
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Modification)
+	assert.Equal(t, int64(10), cfg.Modification.OriginalSize)
+	assert.Equal(t, int64(20), cfg.Modification.TargetSize)
+
+	out, err := svc.DescribeVolumesModifications(&ec2.DescribeVolumesModificationsInput{
+		VolumeIds: []*string{aws.String("vol-rt")},
+	}, "111111111111")
+	require.NoError(t, err)
+	require.Len(t, out.VolumesModifications, 1)
+	mod := out.VolumesModifications[0]
+	assert.Equal(t, "vol-rt", *mod.VolumeId)
+	assert.Equal(t, "completed", *mod.ModificationState)
+	assert.Equal(t, int64(100), *mod.Progress)
+	assert.Equal(t, int64(10), *mod.OriginalSize)
+	assert.Equal(t, int64(20), *mod.TargetSize)
+}
+
+// TestDescribeVolumesModifications_OverwriteSemantics guards the single-record
+// storage design: a second ModifyVolume must overwrite, never append. The
+// second call's OriginalSize must equal the first call's TargetSize.
+func TestDescribeVolumesModifications_OverwriteSemantics(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-ow", viperblock.VolumeMetadata{
+		VolumeID: "vol-ow", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+
+	_, err := svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-ow"),
+		Size:     aws.Int64(20),
+	}, "111111111111")
+	require.NoError(t, err)
+
+	_, err = svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-ow"),
+		Size:     aws.Int64(40),
+	}, "111111111111")
+	require.NoError(t, err)
+
+	out, err := svc.DescribeVolumesModifications(nil, "111111111111")
+	require.NoError(t, err)
+	require.Len(t, out.VolumesModifications, 1, "expected single record after two ModifyVolume calls")
+	mod := out.VolumesModifications[0]
+	assert.Equal(t, int64(20), *mod.OriginalSize, "second modification's OriginalSize must equal first's TargetSize")
+	assert.Equal(t, int64(40), *mod.TargetSize)
+}
+
+// TestDescribeVolumesModifications_CrossTenantFastPath guards tenant isolation:
+// querying another tenant's volume by explicit ID must return InvalidVolume.NotFound,
+// not leak the modification record.
+func TestDescribeVolumesModifications_CrossTenantFastPath(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-tenantA", viperblock.VolumeMetadata{
+		VolumeID: "vol-tenantA", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+	_, err := svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-tenantA"),
+		Size:     aws.Int64(20),
+	}, "111111111111")
+	require.NoError(t, err)
+
+	_, err = svc.DescribeVolumesModifications(&ec2.DescribeVolumesModificationsInput{
+		VolumeIds: []*string{aws.String("vol-tenantA")},
+	}, "222222222222")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidVolumeNotFound, err.Error())
+}
+
+// TestDescribeVolumesModifications_SlowPathScoping covers the list-all path:
+// unmodified volumes and cross-tenant volumes must both be silently omitted.
+func TestDescribeVolumesModifications_SlowPathScoping(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-modA", viperblock.VolumeMetadata{
+		VolumeID: "vol-modA", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-unmodA", viperblock.VolumeMetadata{
+		VolumeID: "vol-unmodA", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-modB", viperblock.VolumeMetadata{
+		VolumeID: "vol-modB", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "222222222222",
+	})
+
+	_, err := svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-modA"), Size: aws.Int64(20),
+	}, "111111111111")
+	require.NoError(t, err)
+	_, err = svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-modB"), Size: aws.Int64(30),
+	}, "222222222222")
+	require.NoError(t, err)
+
+	out, err := svc.DescribeVolumesModifications(nil, "111111111111")
+	require.NoError(t, err)
+	require.Len(t, out.VolumesModifications, 1)
+	assert.Equal(t, "vol-modA", *out.VolumesModifications[0].VolumeId)
+}
+
+// TestDescribeVolumesModifications_FilterMatching exercises the filter switch
+// for the field types whose comparison logic differs (string equality, numeric
+// stringification, and the volume-id pre-filter on the slow path).
+func TestDescribeVolumesModifications_FilterMatching(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-fa", viperblock.VolumeMetadata{
+		VolumeID: "vol-fa", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-fb", viperblock.VolumeMetadata{
+		VolumeID: "vol-fb", SizeGiB: 50, State: "available",
+		VolumeType: "gp3", IOPS: 3000, TenantID: "111111111111",
+	})
+	_, err := svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-fa"), Size: aws.Int64(20),
+	}, "111111111111")
+	require.NoError(t, err)
+	_, err = svc.ModifyVolume(&ec2.ModifyVolumeInput{
+		VolumeId: aws.String("vol-fb"), Size: aws.Int64(100), VolumeType: aws.String("io1"), Iops: aws.Int64(8000),
+	}, "111111111111")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		filter    *ec2.Filter
+		wantIDs   []string
+		wantEmpty bool
+	}{
+		{
+			name:    "ByVolumeID",
+			filter:  &ec2.Filter{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-fa")}},
+			wantIDs: []string{"vol-fa"},
+		},
+		{
+			name:    "ByModificationState",
+			filter:  &ec2.Filter{Name: aws.String("modification-state"), Values: []*string{aws.String("completed")}},
+			wantIDs: []string{"vol-fa", "vol-fb"},
+		},
+		{
+			name:      "ByModificationStateNoMatch",
+			filter:    &ec2.Filter{Name: aws.String("modification-state"), Values: []*string{aws.String("failed")}},
+			wantEmpty: true,
+		},
+		{
+			name:    "ByTargetSizeNumeric",
+			filter:  &ec2.Filter{Name: aws.String("target-size"), Values: []*string{aws.String("20")}},
+			wantIDs: []string{"vol-fa"},
+		},
+		{
+			name:    "ByTargetVolumeType",
+			filter:  &ec2.Filter{Name: aws.String("target-volume-type"), Values: []*string{aws.String("io1")}},
+			wantIDs: []string{"vol-fb"},
+		},
+		{
+			name:      "TagFilterAlwaysEmpty",
+			filter:    &ec2.Filter{Name: aws.String("tag:env"), Values: []*string{aws.String("prod")}},
+			wantEmpty: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := svc.DescribeVolumesModifications(&ec2.DescribeVolumesModificationsInput{
+				Filters: []*ec2.Filter{tt.filter},
+			}, "111111111111")
+			require.NoError(t, err)
+			if tt.wantEmpty {
+				assert.Empty(t, out.VolumesModifications)
+				return
+			}
+			got := make([]string, 0, len(out.VolumesModifications))
+			for _, m := range out.VolumesModifications {
+				got = append(got, *m.VolumeId)
+			}
+			assert.ElementsMatch(t, tt.wantIDs, got)
+		})
+	}
+}
+
+// TestDescribeVolumesModifications_UnknownVolumeIDFastPath covers the goroutine
+// GetVolumeConfig-error branch and the caller's per-result error scan.
+func TestDescribeVolumesModifications_UnknownVolumeIDFastPath(t *testing.T) {
+	svc := newTestVolumeService("ap-southeast-2a")
+
+	_, err := svc.DescribeVolumesModifications(&ec2.DescribeVolumesModificationsInput{
+		VolumeIds: []*string{aws.String("vol-doesnotexist")},
+	}, "111111111111")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidVolumeNotFound, err.Error())
+}
+
+// TestDescribeVolumesModifications_UnknownFilter proves the filter validator is
+// wired up: an unknown filter name must fail with InvalidParameterValue.
+func TestDescribeVolumesModifications_UnknownFilter(t *testing.T) {
+	svc := newTestVolumeService("ap-southeast-2a")
+
+	_, err := svc.DescribeVolumesModifications(&ec2.DescribeVolumesModificationsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("not-a-real-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, "")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
 }

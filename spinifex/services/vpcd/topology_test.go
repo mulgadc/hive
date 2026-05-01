@@ -3,8 +3,12 @@ package vpcd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"strings"
 	"testing"
 
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/dhcp"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
 	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -408,9 +412,14 @@ func TestGenerateMAC(t *testing.T) {
 	mac1 := generateMAC("subnet-aaa")
 	mac2 := generateMAC("subnet-bbb")
 
-	// Must start with locally-administered unicast prefix
-	if mac1[:8] != "02:00:00" {
-		t.Errorf("expected prefix 02:00:00, got %s", mac1[:8])
+	// Must be a valid locally-administered unicast MAC. First octet is
+	// hash-derived, not the literal "02:00:00" of the old 24-bit impl.
+	hw, err := net.ParseMAC(mac1)
+	if err != nil {
+		t.Fatalf("invalid MAC %q: %v", mac1, err)
+	}
+	if hw[0]&0x03 != 0x02 {
+		t.Errorf("expected unicast+LAA bits on first octet, got %#x", hw[0])
 	}
 
 	// Different inputs produce different MACs
@@ -422,6 +431,21 @@ func TestGenerateMAC(t *testing.T) {
 	mac1b := generateMAC("subnet-aaa")
 	if mac1 != mac1b {
 		t.Error("expected deterministic MAC")
+	}
+
+	// Output must use full 46-bit hash space, not the old 24-bit space that
+	// pinned the top 3 octets to "02:00:00". Sweep many inputs and assert
+	// the second octet varies — old impl always emitted 0x00 there.
+	seen := map[byte]struct{}{}
+	for i := range 1000 {
+		hw, err := net.ParseMAC(generateMAC(fmt.Sprintf("subnet-%d", i)))
+		if err != nil {
+			t.Fatalf("invalid MAC: %v", err)
+		}
+		seen[hw[1]] = struct{}{}
+	}
+	if len(seen) <= 1 {
+		t.Errorf("expected second octet to vary across inputs, got %d distinct values", len(seen))
 	}
 }
 
@@ -906,8 +930,18 @@ func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected gateway router port: %v", err)
 	}
-	if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "192.168.1.150/24" {
-		t.Errorf("expected gateway network 192.168.1.150/24, got %v", gwPort.Networks)
+	// Centralized NAT: LRP gets a WAN-subnet IP auto-derived below the
+	// per-VM EIP range (192.168.1.150-250), so somewhere in
+	// 192.168.1.134-149 with /24. Pool range_start - 16 = .134, range_start - 1 = .149.
+	if len(gwPort.Networks) != 1 {
+		t.Fatalf("expected 1 LRP network, got %v", gwPort.Networks)
+	}
+	gotNet := gwPort.Networks[0]
+	if !strings.HasPrefix(gotNet, "192.168.1.1") || !strings.HasSuffix(gotNet, "/24") {
+		t.Errorf("expected gw LRP network in 192.168.1.134-149/24, got %s", gotNet)
+	}
+	if gwPort.ExternalIDs["spinifex:gateway_ip"] == "" {
+		t.Errorf("expected spinifex:gateway_ip on LRP, got empty")
 	}
 
 	// Verify NO blanket SNAT rule (AWS parity)
@@ -926,6 +960,10 @@ func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
 	if route.Nexthop != "192.168.1.1" {
 		t.Errorf("expected nexthop 192.168.1.1, got %s", route.Nexthop)
 	}
+	gwPortName := "gw-vpc-extpool"
+	if route.OutputPort == nil || *route.OutputPort != gwPortName {
+		t.Errorf("expected OutputPort=%s, got %v", gwPortName, route.OutputPort)
+	}
 }
 
 func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
@@ -937,10 +975,10 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 	pools := []ExternalPoolConfig{
 		{
 			Name:       "dc1",
-			RangeStart: "203.0.113.2",
+			RangeStart: "203.0.113.8",
 			RangeEnd:   "203.0.113.14",
 			Gateway:    "203.0.113.1",
-			GatewayIP:  "203.0.113.2", // Explicit gateway IP
+			GatewayIP:  "203.0.113.8", // Explicit gateway IP
 			PrefixLen:  28,
 		},
 	}
@@ -964,8 +1002,14 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 
 	router, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-gwip")
 	gwPort, _ := mock.GetLogicalRouterPort(ctx, "gw-vpc-gwip")
-	if gwPort.Networks[0] != "203.0.113.2/28" {
-		t.Errorf("expected 203.0.113.2/28, got %s", gwPort.Networks[0])
+	// /28 with full pool .2-.14 + gateway .1 leaves no room in-subnet —
+	// auto-derive shifts below RangeStart and clamps; whatever the result,
+	// it must be a /28 IP carrying spinifex:gateway_ip.
+	if !strings.HasSuffix(gwPort.Networks[0], "/28") {
+		t.Errorf("expected /28 LRP network, got %s", gwPort.Networks[0])
+	}
+	if gwPort.ExternalIDs["spinifex:gateway_ip"] == "" {
+		t.Errorf("expected spinifex:gateway_ip on LRP, got empty")
 	}
 	// No blanket SNAT rule (AWS parity)
 	if len(router.NAT) != 0 {
@@ -974,6 +1018,466 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 	route := mock.staticRoutes[router.StaticRoutes[0]]
 	if route.Nexthop != "203.0.113.1" {
 		t.Errorf("expected nexthop 203.0.113.1, got %s", route.Nexthop)
+	}
+	gwPortName := "gw-vpc-gwip"
+	if route.OutputPort == nil || *route.OutputPort != gwPortName {
+		t.Errorf("expected OutputPort=%s, got %v", gwPortName, route.OutputPort)
+	}
+}
+
+// TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision is the regression
+// guard for mulga-siv-26: three VPCs sharing one external pool must produce
+// three gateway LRPs with distinct WAN-subnet IPs, distinct MACs and distinct
+// default routes. Pre-fix every LRP claimed pool.RangeStart and the VPCs
+// ARP-collided on br-ext.
+func TestTopologyHandler_IGWAttach_MultiVPC_NoIPCollision(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:       "ci-multi-2",
+			RangeStart: "192.168.0.160",
+			RangeEnd:   "192.168.0.169",
+			Gateway:    "192.168.0.1",
+			PrefixLen:  24,
+		},
+	}
+	topo := NewTopologyHandler(mock, WithExternalNetwork("pool", pools))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	vpcIds := []string{"vpc-multi-a", "vpc-multi-b", "vpc-multi-c"}
+	for _, vpcId := range vpcIds {
+		_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+			Name: "vpc-" + vpcId,
+			ExternalIDs: map[string]string{
+				"spinifex:vpc_id": vpcId,
+				"spinifex:cidr":   "10.0.0.0/16",
+			},
+		})
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		if err != nil {
+			t.Fatalf("request vpc.igw-attach %s: %v", vpcId, err)
+		}
+		assertSuccess(t, resp, "attach IGW "+vpcId)
+	}
+
+	macs := make(map[string]string, len(vpcIds))
+	ips := make(map[string]string, len(vpcIds))
+	for _, vpcId := range vpcIds {
+		gwPortName := "gw-" + vpcId
+		gwPort, err := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if err != nil {
+			t.Fatalf("get %s: %v", gwPortName, err)
+		}
+		if len(gwPort.Networks) != 1 {
+			t.Fatalf("%s: expected 1 network, got %v", gwPortName, gwPort.Networks)
+		}
+		ip, cidr, _ := strings.Cut(gwPort.Networks[0], "/")
+		if cidr != "24" {
+			t.Errorf("%s: expected /24, got /%s", gwPortName, cidr)
+		}
+		if !strings.HasPrefix(ip, "192.168.0.") {
+			t.Errorf("%s: expected 192.168.0.x, got %s", gwPortName, ip)
+		}
+		gwIP := gwPort.ExternalIDs["spinifex:gateway_ip"]
+		if gwIP != ip {
+			t.Errorf("%s: external_ids gateway_ip=%q, expected %q", gwPortName, gwIP, ip)
+		}
+		if other, dup := ips[ip]; dup {
+			t.Errorf("IP collision: %s and %s share %s", gwPortName, other, ip)
+		}
+		ips[ip] = gwPortName
+		if gwPort.MAC == "" {
+			t.Errorf("%s: empty MAC", gwPortName)
+		}
+		if other, dup := macs[gwPort.MAC]; dup {
+			t.Errorf("MAC collision: %s and %s share %s", gwPortName, other, gwPort.MAC)
+		}
+		macs[gwPort.MAC] = gwPortName
+
+		router, err := mock.GetLogicalRouter(ctx, "vpc-"+vpcId)
+		if err != nil {
+			t.Fatalf("get router for %s: %v", vpcId, err)
+		}
+		if len(router.StaticRoutes) != 1 {
+			t.Fatalf("%s: expected 1 static route, got %d", vpcId, len(router.StaticRoutes))
+		}
+		route := mock.staticRoutes[router.StaticRoutes[0]]
+		if route.Nexthop != "192.168.0.1" {
+			t.Errorf("%s: expected nexthop 192.168.0.1, got %s", vpcId, route.Nexthop)
+		}
+		if route.OutputPort == nil || *route.OutputPort != gwPortName {
+			t.Errorf("%s: expected OutputPort=%s, got %v", vpcId, gwPortName, route.OutputPort)
+		}
+	}
+	if len(macs) != len(vpcIds) {
+		t.Errorf("expected %d distinct MACs, got %d", len(vpcIds), len(macs))
+	}
+	if len(ips) != len(vpcIds) {
+		t.Errorf("expected %d distinct IPs, got %d", len(vpcIds), len(ips))
+	}
+}
+
+// TestTopologyHandler_IGWAttach_CentralizedNATAllocatesGwLrpIP guards
+// mulga-siv-36: in centralized NAT (veth/macvlan) the gateway LRP must
+// hold a WAN-subnet IP from pool.GwLrpRange so it can ARP the upstream
+// nexthop. Three VPCs sharing one pool must each get a distinct IP and
+// persist it on external_ids:spinifex:gateway_ip.
+func TestTopologyHandler_IGWAttach_CentralizedNATAllocatesGwLrpIP(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:            "lan",
+			RangeStart:      "192.168.3.100",
+			RangeEnd:        "192.168.3.150",
+			Gateway:         "192.168.3.1",
+			PrefixLen:       24,
+			GwLrpRangeStart: "192.168.3.20",
+			GwLrpRangeEnd:   "192.168.3.29",
+		},
+	}
+	// Default bridge mode is centralized (useCentralizedNAT returns true
+	// when bridgeMode != "direct"). Explicit veth here to be unambiguous.
+	topo := NewTopologyHandler(mock,
+		WithExternalNetwork("pool", pools),
+		WithBridgeMode(BridgeModeVeth),
+	)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	vpcIds := []string{"vpc-cn-a", "vpc-cn-b", "vpc-cn-c"}
+	for _, vpcId := range vpcIds {
+		_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+			Name: "vpc-" + vpcId,
+			ExternalIDs: map[string]string{
+				"spinifex:vpc_id": vpcId,
+				"spinifex:cidr":   "10.0.0.0/16",
+			},
+		})
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		if err != nil {
+			t.Fatalf("request vpc.igw-attach %s: %v", vpcId, err)
+		}
+		assertSuccess(t, resp, "attach IGW "+vpcId)
+	}
+
+	seen := make(map[string]string, len(vpcIds))
+	for _, vpcId := range vpcIds {
+		gwPortName := "gw-" + vpcId
+		gwPort, err := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if err != nil {
+			t.Fatalf("get %s: %v", gwPortName, err)
+		}
+		if len(gwPort.Networks) != 1 {
+			t.Fatalf("%s: expected 1 Network, got %v", gwPortName, gwPort.Networks)
+		}
+		net := gwPort.Networks[0]
+		if !strings.HasPrefix(net, "192.168.3.") || !strings.HasSuffix(net, "/24") {
+			t.Errorf("%s: expected 192.168.3.X/24 from gw_lrp_range, got %s", gwPortName, net)
+		}
+		gwIP := gwPort.ExternalIDs["spinifex:gateway_ip"]
+		if gwIP == "" {
+			t.Errorf("%s: missing spinifex:gateway_ip external_id", gwPortName)
+		}
+		if other, dup := seen[gwIP]; dup {
+			t.Errorf("gw IP collision: %s and %s share %s", gwPortName, other, gwIP)
+		}
+		seen[gwIP] = gwPortName
+
+		// Idempotent: re-attach must not change the assignment.
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		_, _ = nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		gwPort2, _ := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if gwPort2.ExternalIDs["spinifex:gateway_ip"] != gwIP {
+			t.Errorf("%s: re-attach changed gateway_ip from %s to %s",
+				gwPortName, gwIP, gwPort2.ExternalIDs["spinifex:gateway_ip"])
+		}
+	}
+}
+
+// dhcpStub is a minimal in-test responder for vpc.dhcp.acquire / release.
+// Each acquire returns a distinct lease IP keyed off ClientID so multi-VPC
+// tests get unique IPs without standing up a full DHCPManager.
+type dhcpStub struct {
+	t        *testing.T
+	leases   map[string]string // client_id -> ip
+	released map[string]bool
+	nextOct  int
+}
+
+func newDHCPStub(t *testing.T, nc *nats.Conn) *dhcpStub {
+	t.Helper()
+	s := &dhcpStub{
+		t:        t,
+		leases:   map[string]string{},
+		released: map[string]bool{},
+		nextOct:  101,
+	}
+	subA, err := nc.Subscribe(dhcp.TopicAcquire, func(msg *nats.Msg) {
+		var req dhcp.AcquireRequestMsg
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			data, _ := json.Marshal(dhcp.AcquireReplyMsg{Error: err.Error()})
+			_ = msg.Respond(data)
+			return
+		}
+		ip, ok := s.leases[req.ClientID]
+		if !ok {
+			ip = fmt.Sprintf("192.168.3.%d", s.nextOct)
+			s.nextOct++
+			s.leases[req.ClientID] = ip
+		}
+		reply := dhcp.AcquireReplyMsg{
+			IP:          ip,
+			SubnetMask:  "255.255.255.0",
+			ServerID:    "192.168.3.1",
+			Routers:     []string{"192.168.3.1"},
+			HWAddr:      "02:00:00:00:00:" + fmt.Sprintf("%02x", s.nextOct%256),
+			ExpiresUnix: 0,
+		}
+		data, _ := json.Marshal(reply)
+		_ = msg.Respond(data)
+	})
+	if err != nil {
+		t.Fatalf("subscribe acquire: %v", err)
+	}
+	subR, err := nc.Subscribe(dhcp.TopicRelease, func(msg *nats.Msg) {
+		var req dhcp.ReleaseRequestMsg
+		_ = json.Unmarshal(msg.Data, &req)
+		s.released[req.ClientID] = true
+		delete(s.leases, req.ClientID)
+		data, _ := json.Marshal(dhcp.ReleaseReplyMsg{})
+		_ = msg.Respond(data)
+	})
+	if err != nil {
+		t.Fatalf("subscribe release: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = subA.Unsubscribe()
+		_ = subR.Unsubscribe()
+	})
+	return s
+}
+
+// TestTopologyHandler_IGWAttach_DHCPGwLrpIP guards mulga-siv-38: with
+// pool.Source="dhcp" the gateway LRP IP must come from a DHCP lease
+// (vpc.dhcp.acquire), not the static gw_lrp_range allocator. Three VPCs
+// sharing one DHCP pool must each get a distinct lease IP and persist it
+// on external_ids:spinifex:gateway_ip. IGW detach must release the lease.
+func TestTopologyHandler_IGWAttach_DHCPGwLrpIP(t *testing.T) {
+	_, nc := startTestNATS(t)
+	stub := newDHCPStub(t, nc)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:           "lan-dhcp",
+			Source:         "dhcp",
+			Gateway:        "192.168.3.1",
+			PrefixLen:      24,
+			DhcpBindBridge: "br-wan",
+		},
+	}
+	topo := NewTopologyHandler(mock,
+		WithExternalNetwork("pool", pools),
+		WithBridgeMode(BridgeModeVeth),
+		WithNATSConn(nc),
+	)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	vpcIds := []string{"vpc-dh-a", "vpc-dh-b", "vpc-dh-c"}
+	for _, vpcId := range vpcIds {
+		_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+			Name: "vpc-" + vpcId,
+			ExternalIDs: map[string]string{
+				"spinifex:vpc_id": vpcId,
+				"spinifex:cidr":   "10.0.0.0/16",
+			},
+		})
+		evt := types.IGWEvent{InternetGatewayId: "igw-" + vpcId, VpcId: vpcId}
+		data, _ := json.Marshal(evt)
+		resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+		if err != nil {
+			t.Fatalf("request vpc.igw-attach %s: %v", vpcId, err)
+		}
+		assertSuccess(t, resp, "attach IGW "+vpcId)
+	}
+
+	seen := make(map[string]string, len(vpcIds))
+	for _, vpcId := range vpcIds {
+		gwPortName := "gw-" + vpcId
+		gwPort, err := mock.GetLogicalRouterPort(ctx, gwPortName)
+		if err != nil {
+			t.Fatalf("get %s: %v", gwPortName, err)
+		}
+		if len(gwPort.Networks) != 1 {
+			t.Fatalf("%s: expected 1 Network, got %v", gwPortName, gwPort.Networks)
+		}
+		ip, cidr, _ := strings.Cut(gwPort.Networks[0], "/")
+		if cidr != "24" {
+			t.Errorf("%s: expected /24 from DHCP lease mask, got /%s", gwPortName, cidr)
+		}
+		if !strings.HasPrefix(ip, "192.168.3.") {
+			t.Errorf("%s: expected 192.168.3.X from stub, got %s", gwPortName, ip)
+		}
+		gwIP := gwPort.ExternalIDs["spinifex:gateway_ip"]
+		if gwIP != ip {
+			t.Errorf("%s: external_ids gateway_ip=%q, expected %q", gwPortName, gwIP, ip)
+		}
+		if other, dup := seen[gwIP]; dup {
+			t.Errorf("gw IP collision: %s and %s share %s", gwPortName, other, gwIP)
+		}
+		seen[gwIP] = gwPortName
+
+		// stub recorded the lease keyed by gw-lrp-<vpcId>
+		clientID := "gw-lrp-" + vpcId
+		if stub.leases[clientID] != ip {
+			t.Errorf("%s: stub lease %q != lrp IP %q", clientID, stub.leases[clientID], ip)
+		}
+	}
+
+	// Detach one VPC, assert release reaches the stub.
+	detachVpc := vpcIds[0]
+	devt := types.IGWEvent{InternetGatewayId: "igw-" + detachVpc, VpcId: detachVpc}
+	ddata, _ := json.Marshal(devt)
+	resp, err := nc.Request(TopicIGWDetach, ddata, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-detach: %v", err)
+	}
+	assertSuccess(t, resp, "detach IGW "+detachVpc)
+	if !stub.released["gw-lrp-"+detachVpc] {
+		t.Errorf("expected DHCP release for gw-lrp-%s, stub released=%v", detachVpc, stub.released)
+	}
+}
+
+// TestTopologyHandler_IGWAttach_DHCPAcquireFailureAborts ensures that when
+// vpcd's DHCPManager replies with an error, IGW attach surfaces the failure
+// loud instead of falling back to link-local. Otherwise we silently restore
+// the broken pre-siv-36 behavior.
+func TestTopologyHandler_IGWAttach_DHCPAcquireFailureAborts(t *testing.T) {
+	_, nc := startTestNATS(t)
+	sub, err := nc.Subscribe(dhcp.TopicAcquire, func(msg *nats.Msg) {
+		reply := dhcp.AcquireReplyMsg{Error: "no leases available"}
+		data, _ := json.Marshal(reply)
+		_ = msg.Respond(data)
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:           "lan-dhcp",
+			Source:         "dhcp",
+			Gateway:        "192.168.3.1",
+			PrefixLen:      24,
+			DhcpBindBridge: "br-wan",
+		},
+	}
+	topo := NewTopologyHandler(mock,
+		WithExternalNetwork("pool", pools),
+		WithBridgeMode(BridgeModeVeth),
+		WithNATSConn(nc),
+	)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-dh-fail",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-dh-fail",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+	evt := types.IGWEvent{InternetGatewayId: "igw-fail", VpcId: "vpc-dh-fail"}
+	data, _ := json.Marshal(evt)
+	resp, _ := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	var reply struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(resp.Data, &reply)
+	if reply.Error == "" {
+		t.Fatal("expected attach to fail when DHCP acquire errors, got success")
+	}
+	if !strings.Contains(reply.Error, "dhcp acquire") && !strings.Contains(reply.Error, "no leases available") {
+		t.Errorf("expected dhcp-related error, got %q", reply.Error)
+	}
+	// External switch must be rolled back.
+	if _, err := mock.GetLogicalSwitch(ctx, "ext-vpc-dh-fail"); err == nil {
+		t.Error("expected external switch rolled back after DHCP failure")
+	}
+}
+
+// TestPrefixFromMask checks dotted-mask → prefix conversion across the
+// boundary cases gw LRP DHCP relies on (option 1 missing, /32, /0,
+// non-contiguous masks, IPv6).
+func TestPrefixFromMask(t *testing.T) {
+	cases := []struct {
+		mask string
+		want int
+	}{
+		{"", 0},
+		{"255.255.255.0", 24},
+		{"255.255.255.255", 32},
+		{"0.0.0.0", 0},
+		{"255.255.0.0", 16},
+		{"not-an-ip", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mask, func(t *testing.T) {
+			got := prefixFromMask(tc.mask)
+			if got != tc.want {
+				t.Errorf("prefixFromMask(%q)=%d, want %d", tc.mask, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -2321,5 +2825,460 @@ func TestTopologyHandler_AddNAT_CleansStaleRulesFromOtherVPCs(t *testing.T) {
 	newNAT := mock.nats[newRouter.NAT[0]]
 	if newNAT.LogicalIP != "10.200.1.10" {
 		t.Errorf("new NAT logical IP = %q, want 10.200.1.10", newNAT.LogicalIP)
+	}
+}
+
+// ensureLocalnetOptions retrofits options:nat-addresses on a localnet port
+// whose mode no longer matches (e.g. created during a pre-Fix 1 run where
+// detectBridgeMode returned direct because the veth had not been
+// recreated after reboot). mulga-998.b Fix 3.
+
+func TestEnsureLocalnetOptions_AddsNatAddressesInCentralizedMode(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-x"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-x", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-x",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external"},
+	})
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-x"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	port, _ := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-x")
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("expected nat-addresses=router after retrofit, got %q", port.Options["nat-addresses"])
+	}
+	if port.Options["network_name"] != "external" {
+		t.Errorf("network_name clobbered: got %q", port.Options["network_name"])
+	}
+}
+
+func TestEnsureLocalnetOptions_RemovesNatAddressesInDirectMode(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-y"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-y", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-y",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external", "nat-addresses": "router"},
+	})
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeDirect))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-y"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	port, _ := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-y")
+	if _, ok := port.Options["nat-addresses"]; ok {
+		t.Errorf("nat-addresses should be removed in direct mode, got %q", port.Options["nat-addresses"])
+	}
+	if port.Options["network_name"] != "external" {
+		t.Errorf("network_name clobbered: got %q", port.Options["network_name"])
+	}
+}
+
+func TestEnsureLocalnetOptions_NoOpWhenAlreadyCorrect(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-z"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-z", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-z",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external", "nat-addresses": "router"},
+	})
+	startUpdates := mock.UpdateLogicalSwitchPortCalls
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-z"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	if mock.UpdateLogicalSwitchPortCalls != startUpdates {
+		t.Errorf("expected no UpdateLogicalSwitchPort call when already correct (idempotent); got %d new calls",
+			mock.UpdateLogicalSwitchPortCalls-startUpdates)
+	}
+}
+
+func TestEnsureLocalnetOptions_NoOpInDirectModeWhenAbsent(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-d"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-d", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-d",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external"},
+	})
+	start := mock.UpdateLogicalSwitchPortCalls
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeDirect))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-d"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	if mock.UpdateLogicalSwitchPortCalls != start {
+		t.Errorf("direct mode + no nat-addresses should be a no-op; got %d new calls",
+			mock.UpdateLogicalSwitchPortCalls-start)
+	}
+}
+
+func TestEnsureLocalnetOptions_HandlesNilOptionsMap(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-n"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-n", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-n",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+	})
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-n"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	port, _ := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-n")
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("expected nat-addresses=router after nil-map init, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestEnsureLocalnetOptions_RestoresNetworkName(t *testing.T) {
+	// Operator (or test drill) cleared options entirely — retrofit must
+	// restore both network_name=external and nat-addresses=router.
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-r"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-r", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-r",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{},
+	})
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-r"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	port, _ := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-r")
+	if port.Options["network_name"] != "external" {
+		t.Errorf("expected network_name=external after retrofit, got %q", port.Options["network_name"])
+	}
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("expected nat-addresses=router after retrofit, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestEnsureLocalnetOptions_RestoresNetworkNameDirectMode(t *testing.T) {
+	// Direct mode: network_name still required, nat-addresses still absent.
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "ext-vpc-rd"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-rd", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-rd",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{},
+	})
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeDirect))
+	if err := topo.ensureLocalnetOptions(ctx, "ext-port-vpc-rd"); err != nil {
+		t.Fatalf("ensureLocalnetOptions: %v", err)
+	}
+	port, _ := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-rd")
+	if port.Options["network_name"] != "external" {
+		t.Errorf("expected network_name=external after retrofit, got %q", port.Options["network_name"])
+	}
+	if _, ok := port.Options["nat-addresses"]; ok {
+		t.Errorf("direct mode should not set nat-addresses, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestRetrofitAllExternalLocalnetOptions_FixesClearedOptions(t *testing.T) {
+	// Walks every ext-* switch in OVN (authoritative) and retrofits options
+	// on its localnet port. Covers VPCs whose IGW KV record is missing or
+	// whose options were cleared manually (mulga-998.b Drill 2).
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	// Two external switches with cleared options, one subnet switch (must be
+	// skipped because role != external), one external switch already correct.
+	for _, vpcID := range []string{"vpc-a", "vpc-b"} {
+		_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{
+			Name:        "ext-" + vpcID,
+			ExternalIDs: map[string]string{"spinifex:role": "external", "spinifex:vpc_id": vpcID},
+		})
+		_ = mock.CreateLogicalSwitchPort(ctx, "ext-"+vpcID, &nbdb.LogicalSwitchPort{
+			Name:      "ext-port-" + vpcID,
+			Type:      "localnet",
+			Addresses: []string{"unknown"},
+			Options:   map[string]string{},
+		})
+	}
+	// A subnet switch that must NOT be retrofitted.
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{
+		Name:        "subnet-foo",
+		ExternalIDs: map[string]string{"spinifex:subnet_id": "subnet-foo"},
+	})
+	// An ext switch already correct — must remain a no-op.
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{
+		Name:        "ext-vpc-ok",
+		ExternalIDs: map[string]string{"spinifex:role": "external", "spinifex:vpc_id": "vpc-ok"},
+	})
+	_ = mock.CreateLogicalSwitchPort(ctx, "ext-vpc-ok", &nbdb.LogicalSwitchPort{
+		Name:      "ext-port-vpc-ok",
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external", "nat-addresses": "router"},
+	})
+	startUpdates := mock.UpdateLogicalSwitchPortCalls
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	topo.RetrofitAllExternalLocalnetOptions(ctx)
+
+	for _, vpcID := range []string{"vpc-a", "vpc-b"} {
+		port, err := mock.GetLogicalSwitchPort(ctx, "ext-port-"+vpcID)
+		if err != nil {
+			t.Fatalf("get port: %v", err)
+		}
+		if port.Options["network_name"] != "external" {
+			t.Errorf("%s: expected network_name=external, got %q", vpcID, port.Options["network_name"])
+		}
+		if port.Options["nat-addresses"] != "router" {
+			t.Errorf("%s: expected nat-addresses=router, got %q", vpcID, port.Options["nat-addresses"])
+		}
+	}
+	// Expect exactly 2 updates (vpc-a + vpc-b); vpc-ok must be idempotent no-op.
+	if got := mock.UpdateLogicalSwitchPortCalls - startUpdates; got != 2 {
+		t.Errorf("expected 2 UpdateLogicalSwitchPort calls (one per stale ext port); got %d", got)
+	}
+}
+
+func TestEnsureLocalnetOptions_ErrorOnMissingPort(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	err := topo.ensureLocalnetOptions(ctx, "ext-port-missing")
+	if err == nil {
+		t.Fatal("expected error when port missing")
+	}
+	if !strings.Contains(err.Error(), "ext-port-missing") {
+		t.Errorf("error should name the port; got: %v", err)
+	}
+}
+
+// reconcileIGW must surface the CreateLogicalSwitchPort error and roll back
+// the external switch when the localnet port name collides (e.g. a stale
+// pre-existing port from a prior attach that leaked).
+func TestTopologyHandler_ReconcileIGW_LocalnetPortCreateError(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+
+	// Pre-create VPC router.
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-vpc-clash",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "vpc-clash", "spinifex:cidr": "10.0.0.0/16"},
+	})
+
+	// Pre-seed a logical switch port named "ext-port-vpc-clash" on an
+	// unrelated switch so reconcileIGW's CreateLogicalSwitchPort call
+	// collides with the existing port.
+	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{Name: "stale-switch"})
+	_ = mock.CreateLogicalSwitchPort(ctx, "stale-switch", &nbdb.LogicalSwitchPort{
+		Name: "ext-port-vpc-clash",
+		Type: "localnet",
+	})
+
+	err := topo.reconcileIGW(ctx, "vpc-clash", "igw-clash")
+	if err == nil {
+		t.Fatal("expected error from reconcileIGW when localnet port collides")
+	}
+	if !strings.Contains(err.Error(), "create localnet port") {
+		t.Errorf("expected 'create localnet port' in error; got: %v", err)
+	}
+
+	// The external switch must have been rolled back.
+	if _, err := mock.GetLogicalSwitch(ctx, "ext-vpc-clash"); err == nil {
+		t.Error("expected external switch to be rolled back after port-create failure")
+	}
+}
+
+// TestGwLrpRange exercises the gateway LRP IP range derivation. mulga-siv-36
+// dropped the link-local fallback in centralized NAT — auto-derive must yield
+// an in-subnet range whenever the operator did not configure one explicitly,
+// or fail loudly so the IGW attach surfaces the misconfiguration.
+func TestGwLrpRange(t *testing.T) {
+	cases := []struct {
+		name      string
+		pool      *ExternalPoolConfig
+		wantOK    bool
+		wantStart string
+		wantEnd   string
+		wantPfx   int
+	}{
+		{
+			name:   "nil pool",
+			pool:   nil,
+			wantOK: false,
+		},
+		{
+			name: "explicit range wins over auto",
+			pool: &ExternalPoolConfig{
+				Gateway:         "192.168.1.1",
+				PrefixLen:       24,
+				RangeStart:      "192.168.1.100",
+				RangeEnd:        "192.168.1.110",
+				GwLrpRangeStart: "192.168.1.50",
+				GwLrpRangeEnd:   "192.168.1.59",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.50",
+			wantEnd:   "192.168.1.59",
+			wantPfx:   24,
+		},
+		{
+			name: "explicit range invalid falls through to auto",
+			pool: &ExternalPoolConfig{
+				Gateway:         "192.168.1.1",
+				PrefixLen:       24,
+				RangeStart:      "192.168.1.100",
+				RangeEnd:        "192.168.1.110",
+				GwLrpRangeStart: "not-an-ip",
+				GwLrpRangeEnd:   "192.168.1.59",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.239",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive /24 default end of subnet",
+			pool: &ExternalPoolConfig{
+				Gateway:    "192.168.1.1",
+				PrefixLen:  24,
+				RangeStart: "192.168.1.100",
+				RangeEnd:   "192.168.1.110",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.239",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive overlap shifts below RangeStart",
+			pool: &ExternalPoolConfig{
+				Gateway:    "192.168.1.1",
+				PrefixLen:  24,
+				RangeStart: "192.168.1.245",
+				RangeEnd:   "192.168.1.254",
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.229",
+			wantEnd:   "192.168.1.244",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive guards gateway at start",
+			pool: &ExternalPoolConfig{
+				Gateway:   "192.168.1.240",
+				PrefixLen: 24,
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.241",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive guards gateway at end",
+			pool: &ExternalPoolConfig{
+				Gateway:   "192.168.1.254",
+				PrefixLen: 24,
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.239",
+			wantEnd:   "192.168.1.253",
+			wantPfx:   24,
+		},
+		{
+			name: "auto-derive guards gateway in middle",
+			pool: &ExternalPoolConfig{
+				Gateway:   "192.168.1.245",
+				PrefixLen: 24,
+			},
+			wantOK:    true,
+			wantStart: "192.168.1.246",
+			wantEnd:   "192.168.1.254",
+			wantPfx:   24,
+		},
+		{
+			name: "default prefix 24 when missing",
+			pool: &ExternalPoolConfig{
+				Gateway: "10.0.0.1",
+			},
+			wantOK:    true,
+			wantStart: "10.0.0.239",
+			wantEnd:   "10.0.0.254",
+			wantPfx:   24,
+		},
+		{
+			name: "unparseable gateway returns ok=false",
+			pool: &ExternalPoolConfig{
+				Gateway:   "not-an-ip",
+				PrefixLen: 24,
+			},
+			wantOK: false,
+		},
+		{
+			name: "/28 with full pool exhausts auto range",
+			pool: &ExternalPoolConfig{
+				Gateway:    "203.0.113.1",
+				PrefixLen:  28,
+				RangeStart: "203.0.113.2",
+				RangeEnd:   "203.0.113.14",
+			},
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start, end, pfx, ok := gwLrpRange(tc.pool)
+			if ok != tc.wantOK {
+				t.Fatalf("ok=%v, want %v", ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if start.String() != tc.wantStart {
+				t.Errorf("start=%s, want %s", start, tc.wantStart)
+			}
+			if end.String() != tc.wantEnd {
+				t.Errorf("end=%s, want %s", end, tc.wantEnd)
+			}
+			if pfx != tc.wantPfx {
+				t.Errorf("prefix=%d, want %d", pfx, tc.wantPfx)
+			}
+		})
 	}
 }

@@ -1,0 +1,125 @@
+name: E2E DDIL
+
+# Phase 1 trigger: workflow_dispatch only. Nightly cron + on-main-merge
+# land in mulga-siv-5.8 once ≥4 scenarios are asserting. See
+# docs/development/improvements/ddil-e2e-test-harness.md §4 / §Dependencies.
+on:
+  workflow_dispatch:
+    inputs:
+      quarantined:
+        description: "Comma-separated scenario letters to quarantine (A..F)"
+        required: false
+        default: ""
+
+env:
+  GIT_BRANCH: ${{ github.ref_name }}
+
+jobs:
+  ddil:
+    name: DDIL Real Multi-Node
+    runs-on: [ self-hosted, ci-multi ]
+    # Budget: ~45m go test + tofu provision/bootstrap/teardown on ci-multi.
+    # In Phase 1 the scenarios all t.Skip, so the real-world runtime is
+    # dominated by provisioning; the 60m ceiling leaves headroom for
+    # Phase 2/3 when assertions come online.
+    timeout-minutes: 60
+    env:
+      TOFU_LOG: /tmp/e2e-tofu-ddil-${{ github.run_id }}.log
+    steps:
+      - name: Clean Workspace
+        run: rm -rf "$GITHUB_WORKSPACE"/*
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: mulga
+
+      # Full spinifex checkout: the Go harness must run on the runner
+      # (outside the cluster) so its SSH path survives scenario partitions
+      # that drop peer-to-peer cluster traffic. Running inside the cluster
+      # would self-sever when Scenario C isolates a node.
+      - uses: actions/checkout@v6
+        name: Checkout Spinifex
+        with:
+          path: spinifex
+
+      - uses: actions/checkout@v6
+        name: Checkout Mulga (tofu-cluster)
+        with:
+          repository: mulgadc/mulga
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: scripts/tofu-cluster
+          path: mulga
+
+      - name: Build Install Artifacts
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          ./build-install-artifacts.sh "${GIT_BRANCH}" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-tests.tar"
+
+      - name: Provision VMs
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          export TF_VAR_git_branch="${GIT_BRANCH}"
+          tofu init -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+
+      - name: Bootstrap via Binary Install
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          SPX_EXTERNAL_POOL="${SPINIFEX_CI_POOL}" \
+          ./bootstrap-install.sh "${SPINIFEX_CI_ENV}" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            --test-tar "${RUNNER_TEMP}/spinifex-tests.tar"
+
+      - name: Run DDIL Scenarios
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          set -o pipefail
+          INVENTORY=$(tofu output -json inventory)
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+          SSH_USER=$(echo "$INVENTORY" | jq -r '.ssh_user')
+          REGION=$(echo "$INVENTORY" | jq -r '.region')
+          # DDIL_NODES must be the cluster-traffic IPs: PartitionNode
+          # installs iptables DROP rules for each peer, so the runner's
+          # SSH source IP must differ from these. On single-NIC
+          # tofu-cluster, wan_ip == cluster IP and the runner's outbound
+          # IP is distinct — see e2e-ddil-test-harness.md §3 Scenario C.
+          NODE_IPS=$(echo "$INVENTORY" | jq -r '[.nodes[].wan_ip] | join(",")')
+          echo "DDIL_NODES=${NODE_IPS}"
+
+          mkdir -p "${RUNNER_TEMP}/ddil-results"
+          cd "${GITHUB_WORKSPACE}/spinifex"
+          DDIL_NODES="${NODE_IPS}" \
+          DDIL_SSH_USER="${SSH_USER}" \
+          DDIL_SSH_KEY="${SSH_KEY}" \
+          DDIL_QUARANTINED="${{ inputs.quarantined }}" \
+          AWS_REGION="${REGION}" \
+            go test -tags=e2e -timeout 45m -json \
+              ./tests/e2e/ddil/scenarios/... \
+              | tee "${RUNNER_TEMP}/ddil-results/results.json"
+
+      - name: Upload DDIL Results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ddil-results-${{ github.run_id }}
+          path: ${{ runner.temp }}/ddil-results
+          retention-days: 30
+
+      - name: Teardown
+        if: always()
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true

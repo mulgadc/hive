@@ -34,6 +34,10 @@ func (s *NATSVolumeService) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 	return utils.NATSRequest[ec2.DescribeVolumeStatusOutput](s.natsConn, "ec2.DescribeVolumeStatus", input, 30*time.Second, accountID)
 }
 
+func (s *NATSVolumeService) DescribeVolumesModifications(input *ec2.DescribeVolumesModificationsInput, accountID string) (*ec2.DescribeVolumesModificationsOutput, error) {
+	return utils.NATSRequest[ec2.DescribeVolumesModificationsOutput](s.natsConn, "ec2.DescribeVolumesModifications", input, 30*time.Second, accountID)
+}
+
 func (s *NATSVolumeService) DeleteVolume(input *ec2.DeleteVolumeInput, accountID string) (*ec2.DeleteVolumeOutput, error) {
 	return utils.NATSRequest[ec2.DeleteVolumeOutput](s.natsConn, "ec2.DeleteVolume", input, 30*time.Second, accountID)
 }

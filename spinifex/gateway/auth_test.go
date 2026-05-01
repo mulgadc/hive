@@ -540,7 +540,10 @@ func TestParseAWSQueryArgs_URLDecoding(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := ParseAWSQueryArgs(tc.input)
+			result, err := ParseAWSQueryArgs(tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if result[tc.key] != tc.expected {
 				t.Errorf("Expected %q for key %q, got %q", tc.expected, tc.key, result[tc.key])
 			}

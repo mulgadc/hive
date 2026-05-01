@@ -73,8 +73,8 @@ func TestGenerateEC2ErrorResponse_Structure(t *testing.T) {
 			assert.Contains(t, xmlStr, "<RequestID>"+tc.requestID+"</RequestID>")
 
 			// Verify root element
-			assert.Contains(t, xmlStr, "<Response>")
-			assert.Contains(t, xmlStr, "</Response>")
+			assert.Contains(t, xmlStr, `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
+			assert.Contains(t, xmlStr, "</ErrorResponse>")
 
 			// Verify Errors wrapper
 			assert.Contains(t, xmlStr, "<Errors>")
@@ -137,10 +137,8 @@ func TestGenerateIAMErrorResponse_Structure(t *testing.T) {
 			// Verify XML header
 			assert.True(t, strings.HasPrefix(xmlStr, xml.Header))
 
-			// IAM uses <ErrorResponse> root, not <Response>
 			assert.Contains(t, xmlStr, "<ErrorResponse>")
 			assert.Contains(t, xmlStr, "</ErrorResponse>")
-			assert.NotContains(t, xmlStr, "<Response>")
 
 			// Verify IAM-specific structure
 			assert.Contains(t, xmlStr, "<Type>Sender</Type>")
@@ -205,8 +203,8 @@ func TestErrorHandler_UnknownError(t *testing.T) {
 	xmlStr := string(body)
 	// Unknown errors should be remapped to InternalError
 	assert.Contains(t, xmlStr, "<Code>InternalError</Code>")
-	// EC2 format
-	assert.Contains(t, xmlStr, "<Response>")
+	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
+	assert.Contains(t, xmlStr, "<Errors>")
 }
 
 func TestErrorHandler_EC2Service(t *testing.T) {
@@ -224,11 +222,9 @@ func TestErrorHandler_EC2Service(t *testing.T) {
 
 	body, _ := io.ReadAll(resp.Body)
 	xmlStr := string(body)
-	// EC2 uses <Response> root, not <ErrorResponse>
-	assert.Contains(t, xmlStr, "<Response>")
+	assert.Contains(t, xmlStr, `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
 	assert.Contains(t, xmlStr, "<Errors>")
 	assert.Contains(t, xmlStr, "<Code>InvalidParameterValue</Code>")
-	assert.NotContains(t, xmlStr, "<ErrorResponse>")
 }
 
 func TestErrorHandler_IgnoresClientRequestID(t *testing.T) {
@@ -428,8 +424,28 @@ func TestParseAWSQueryArgs(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := ParseAWSQueryArgs(tc.query)
+			result, err := ParseAWSQueryArgs(tc.query)
+			assert.NoError(t, err)
 			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestParseAWSQueryArgs_MalformedURLEncoding(t *testing.T) {
+	// AWS returns MalformedQueryString for invalid percent-encoding; the parser
+	// must surface an error instead of silently dropping the bad pair.
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"bad value encoding", "Action=DescribeInstances&Name=%ZZ"},
+		{"bad key encoding", "Bad%ZZKey=value"},
+		{"bad lone key encoding", "Lone%ZZ"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseAWSQueryArgs(tc.query)
+			require.Error(t, err)
 		})
 	}
 }
@@ -524,6 +540,36 @@ func TestRequest_UnsupportedService(t *testing.T) {
 	assert.Contains(t, string(body), "UnsupportedOperation")
 }
 
+func TestRequest_MalformedQueryString_EndToEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		service string
+		body    string
+	}{
+		{"ec2", "ec2", "Action=DescribeInstances&Bad=%ZZ"},
+		{"elbv2", "elasticloadbalancing", "Action=DescribeLoadBalancers&Bad=%ZZ"},
+		{"iam", "iam", "Action=ListUsers&Bad=%ZZ"},
+		{"spinifex", "spinifex", "Action=GetVersion&Bad=%ZZ"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &GatewayConfig{DisableLogging: true}
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			ctx := context.WithValue(req.Context(), ctxService, tc.service)
+			ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			gw.Request(w, req)
+
+			resp := w.Result()
+			body, _ := io.ReadAll(resp.Body)
+			assert.Equal(t, 400, resp.StatusCode)
+			assert.Contains(t, string(body), "MalformedQueryString")
+		})
+	}
+}
+
 func TestRequest_EC2MissingAction(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
@@ -537,7 +583,7 @@ func TestRequest_EC2MissingAction(t *testing.T) {
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, 400, resp.StatusCode)
-	assert.Contains(t, string(body), "InvalidAction")
+	assert.Contains(t, string(body), "MissingAction")
 }
 
 func TestRequest_IAMNilService(t *testing.T) {
@@ -587,7 +633,7 @@ func TestEC2Request_MissingAction(t *testing.T) {
 
 	err := gw.EC2_Request(w, req)
 	require.Error(t, err)
-	assert.Equal(t, awserrors.ErrorInvalidAction, err.Error())
+	assert.Equal(t, awserrors.ErrorMissingAction, err.Error())
 }
 
 func TestEC2Request_UnknownAction(t *testing.T) {
@@ -922,7 +968,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"DescribeImageAttribute", "ModifyImageAttribute", "ResetImageAttribute",
 		"DescribeRegions", "DescribeAvailabilityZones",
 		"DescribeVolumes", "ModifyVolume", "CreateVolume", "DeleteVolume",
-		"AttachVolume", "DescribeVolumeStatus", "DetachVolume",
+		"AttachVolume", "DescribeVolumeStatus", "DescribeVolumesModifications", "DetachVolume",
 		"DescribeAccountAttributes", "EnableEbsEncryptionByDefault",
 		"DisableEbsEncryptionByDefault", "GetEbsEncryptionByDefault",
 		"GetSerialConsoleAccessStatus", "EnableSerialConsoleAccess",
@@ -1097,7 +1143,7 @@ func TestWriteThrottleError_EC2(t *testing.T) {
 	assert.Equal(t, 503, resp.StatusCode)
 	assert.Equal(t, "application/xml", resp.Header.Get("Content-Type"))
 	assert.Contains(t, string(body), "<Code>RequestLimitExceeded</Code>")
-	assert.Contains(t, string(body), "<Response>")
+	assert.Contains(t, string(body), `<ErrorResponse xmlns="`+xmlnsEC2+`">`)
 }
 
 func TestWriteThrottleError_IAM(t *testing.T) {
@@ -1112,7 +1158,8 @@ func TestWriteThrottleError_IAM(t *testing.T) {
 
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
-	assert.Equal(t, 400, resp.StatusCode)
+	// AWS returns 503 for Throttling on every service; TF respects 503 + Retry-After but gives up on 400.
+	assert.Equal(t, 503, resp.StatusCode)
 	assert.Contains(t, string(body), "<Code>Throttling</Code>")
 	assert.Contains(t, string(body), "<ErrorResponse>")
 }
