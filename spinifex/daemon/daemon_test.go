@@ -1655,9 +1655,13 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	// Goroutine 1: Allocate and deallocate
 	go func() {
 		for range iterations {
+			// canAllocate -> allocate is non-atomic; allocate re-checks under
+			// the write lock and may fail if another goroutine took the slot.
+			// Only deallocate when allocate actually succeeded.
 			if rm.canAllocate(microType, 1) >= 1 {
-				rm.allocate(microType)
-				rm.deallocate(microType)
+				if err := rm.allocate(microType); err == nil {
+					rm.deallocate(microType)
+				}
 			}
 		}
 		done <- true
@@ -1675,8 +1679,9 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	go func() {
 		for range iterations {
 			if rm.canAllocate(microType, 1) >= 1 {
-				rm.allocate(microType)
-				rm.deallocate(microType)
+				if err := rm.allocate(microType); err == nil {
+					rm.deallocate(microType)
+				}
 			}
 		}
 		done <- true
