@@ -19,46 +19,28 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// sgIDRegex matches the spinifex SG ID format produced by utils.GenerateResourceID("sg"):
-// "sg-" followed by 17 lowercase hex characters.
+// sgIDRegex must stay in lockstep with utils.GenerateResourceID("sg").
 var sgIDRegex = regexp.MustCompile(`^sg-[0-9a-f]{17}$`)
 
-// validateCidrIp ensures the CIDR is parseable and round-trips to its canonical form.
-// Rejects any value that could carry an OVN match-expression injection payload
-func validateCidrIp(cidr string) error {
-	_, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return fmt.Errorf("invalid CidrIp %q: %w", cidr, err)
+// validateSGRule rejects values that could break out of an OVN ACL match-expression token.
+// CidrIp must round-trip to canonical form (so "10.0.0.5/8" with host bits set is rejected,
+// as is anything containing operators/whitespace that net.ParseCIDR would not accept).
+// SourceSG must match the spinifex SG-ID format. At least one source must be specified.
+func validateSGRule(r SGRule) error {
+	if r.CidrIp == "" && r.SourceSG == "" {
+		return errors.New("rule must specify CidrIp or SourceSG")
 	}
-	if ipnet.String() != cidr {
-		return fmt.Errorf("invalid CidrIp %q: not in canonical form, expected %q", cidr, ipnet.String())
-	}
-	return nil
-}
-
-// validateSourceSG ensures the source security-group reference matches the spinifex SG ID format.
-func validateSourceSG(sg string) error {
-	if !sgIDRegex.MatchString(sg) {
-		return fmt.Errorf("invalid SourceSG %q: must match sg-<17 hex chars>", sg)
-	}
-	return nil
-}
-
-// validateSGRules validates every CidrIp/SourceSG in a rule set before it is persisted or
-// published. Either field may be empty (one of the two is the source filter); empty values
-// are accepted and the OVN ACL builder treats them as "no source filter".
-func validateSGRules(rules []SGRule) error {
-	for i, r := range rules {
-		if r.CidrIp != "" {
-			if err := validateCidrIp(r.CidrIp); err != nil {
-				return fmt.Errorf("rule %d: %w", i, err)
-			}
+	if r.CidrIp != "" {
+		_, ipnet, err := net.ParseCIDR(r.CidrIp)
+		if err != nil {
+			return fmt.Errorf("invalid CidrIp %q: %w", r.CidrIp, err)
 		}
-		if r.SourceSG != "" {
-			if err := validateSourceSG(r.SourceSG); err != nil {
-				return fmt.Errorf("rule %d: %w", i, err)
-			}
+		if ipnet.String() != r.CidrIp {
+			return fmt.Errorf("invalid CidrIp %q: not canonical (expected %q)", r.CidrIp, ipnet.String())
 		}
+	}
+	if r.SourceSG != "" && !sgIDRegex.MatchString(r.SourceSG) {
+		return fmt.Errorf("invalid SourceSG %q: must match sg-<17 hex chars>", r.SourceSG)
 	}
 	return nil
 }
@@ -370,9 +352,8 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupIngress(input *ec2.AuthorizeSecur
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Convert AWS IpPermissions to SGRules
-	newRules := ipPermissionsToSGRules(input.IpPermissions)
-	if err := validateSGRules(newRules); err != nil {
+	newRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
 		slog.Warn("AuthorizeSecurityGroupIngress: invalid rule", "groupId", groupId, "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -425,8 +406,8 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupEgress(input *ec2.AuthorizeSecuri
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	newRules := ipPermissionsToSGRules(input.IpPermissions)
-	if err := validateSGRules(newRules); err != nil {
+	newRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
 		slog.Warn("AuthorizeSecurityGroupEgress: invalid rule", "groupId", groupId, "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -478,8 +459,8 @@ func (s *VPCServiceImpl) RevokeSecurityGroupIngress(input *ec2.RevokeSecurityGro
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	revokeRules := ipPermissionsToSGRules(input.IpPermissions)
-	if err := validateSGRules(revokeRules); err != nil {
+	revokeRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
 		slog.Warn("RevokeSecurityGroupIngress: invalid rule", "groupId", groupId, "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -526,8 +507,8 @@ func (s *VPCServiceImpl) RevokeSecurityGroupEgress(input *ec2.RevokeSecurityGrou
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	revokeRules := ipPermissionsToSGRules(input.IpPermissions)
-	if err := validateSGRules(revokeRules); err != nil {
+	revokeRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
 		slog.Warn("RevokeSecurityGroupEgress: invalid rule", "groupId", groupId, "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -572,8 +553,11 @@ func (s *VPCServiceImpl) sgRecordToEC2(record *SecurityGroupRecord, accountID st
 	return sg
 }
 
-// ipPermissionsToSGRules converts AWS IpPermission slice to SGRule slice.
-func ipPermissionsToSGRules(perms []*ec2.IpPermission) []SGRule {
+// ipPermissionsToSGRules converts AWS IpPermission slice to SGRule slice, validating
+// every tenant-supplied CidrIp/SourceSG. This is the only path that constructs SGRule
+// from external input — validating here makes it impossible for a future handler to
+// bypass the check.
+func ipPermissionsToSGRules(perms []*ec2.IpPermission) ([]SGRule, error) {
 	var rules []SGRule
 	for _, perm := range perms {
 		if perm == nil {
@@ -593,42 +577,36 @@ func ipPermissionsToSGRules(perms []*ec2.IpPermission) []SGRule {
 			toPort = *perm.ToPort
 		}
 
-		// One rule per CIDR range
+		appended := false
 		for _, ipRange := range perm.IpRanges {
 			if ipRange.CidrIp == nil {
 				continue
 			}
-			rules = append(rules, SGRule{
-				IpProtocol: proto,
-				FromPort:   fromPort,
-				ToPort:     toPort,
-				CidrIp:     *ipRange.CidrIp,
-			})
+			r := SGRule{IpProtocol: proto, FromPort: fromPort, ToPort: toPort, CidrIp: *ipRange.CidrIp}
+			if err := validateSGRule(r); err != nil {
+				return nil, err
+			}
+			rules = append(rules, r)
+			appended = true
 		}
 
-		// One rule per source security group
 		for _, pair := range perm.UserIdGroupPairs {
 			if pair.GroupId == nil {
 				continue
 			}
-			rules = append(rules, SGRule{
-				IpProtocol: proto,
-				FromPort:   fromPort,
-				ToPort:     toPort,
-				SourceSG:   *pair.GroupId,
-			})
+			r := SGRule{IpProtocol: proto, FromPort: fromPort, ToPort: toPort, SourceSG: *pair.GroupId}
+			if err := validateSGRule(r); err != nil {
+				return nil, err
+			}
+			rules = append(rules, r)
+			appended = true
 		}
 
-		// If no ranges and no groups specified, add a rule with no source filter
-		if len(perm.IpRanges) == 0 && len(perm.UserIdGroupPairs) == 0 {
-			rules = append(rules, SGRule{
-				IpProtocol: proto,
-				FromPort:   fromPort,
-				ToPort:     toPort,
-			})
+		if !appended {
+			return nil, errors.New("IpPermission must specify at least one IpRange or UserIdGroupPair")
 		}
 	}
-	return rules
+	return rules, nil
 }
 
 // sgRulesToIpPermissions converts SGRule slice to AWS IpPermission slice.
