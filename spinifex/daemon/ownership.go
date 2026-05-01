@@ -43,3 +43,15 @@ func isInstanceVisible(callerAccountID, ownerAccountID string) bool {
 	}
 	return callerAccountID == ownerAccountID
 }
+
+// volumeVisibleTo reports whether callerAccountID may operate on a volume with
+// the given tenantID. Pre-Phase4 volumes (empty tenantID) are root-only —
+// without this, the legacy short-circuit `tenantID != "" && tenantID != caller`
+// matched every caller and let any tenant attach a legacy/migration volume by
+// ID alone.
+func volumeVisibleTo(tenantID, callerAccountID string) bool {
+	if tenantID == "" {
+		return callerAccountID == utils.GlobalAccountID
+	}
+	return callerAccountID == tenantID
+}

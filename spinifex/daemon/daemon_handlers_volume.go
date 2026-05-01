@@ -54,9 +54,11 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 		return
 	}
 
-	// Account scoping: verify the caller owns this volume
+	// Account scoping: verify the caller owns this volume.
+	// Pre-Phase4 volumes (empty TenantID) are root-only; otherwise the caller
+	// must match the recorded tenant exactly.
 	callerAccountID := utils.AccountIDFromMsg(msg)
-	if callerAccountID != "" && volCfg.VolumeMetadata.TenantID != "" && volCfg.VolumeMetadata.TenantID != callerAccountID {
+	if !volumeVisibleTo(volCfg.VolumeMetadata.TenantID, callerAccountID) {
 		slog.Warn("AttachVolume: account does not own volume", "volumeId", volumeID, "callerAccount", callerAccountID, "ownerAccount", volCfg.VolumeMetadata.TenantID)
 		respondWithError(msg, awserrors.ErrorInvalidVolumeNotFound)
 		return
