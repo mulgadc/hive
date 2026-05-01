@@ -177,9 +177,11 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 	instance.EBSRequests.Mu.Unlock()
 
 	// Update BlockDeviceMappings using the mapping
-	d.Instances.Mu.Lock()
-	if instance.Instance != nil {
-		for _, bdm := range instance.Instance.BlockDeviceMappings {
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		if v.Instance == nil {
+			return
+		}
+		for _, bdm := range v.Instance.BlockDeviceMappings {
 			if bdm.Ebs == nil || bdm.Ebs.VolumeId == nil || bdm.DeviceName == nil {
 				continue
 			}
@@ -187,8 +189,7 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 				bdm.DeviceName = &gd
 			}
 		}
-	}
-	d.Instances.Mu.Unlock()
+	})
 
 	if err := d.WriteState(); err != nil {
 		slog.Error("Failed to persist state after guest device name update", "instanceId", instance.ID, "err", err)

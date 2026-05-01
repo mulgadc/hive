@@ -62,25 +62,27 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 	instanceID := *input.InstanceId
 
 	// Extract all instance context in a single critical section
-	d.Instances.Mu.Lock()
-	instance, ok := d.Instances.VMS[instanceID]
-	var status vm.InstanceState
-	var rootVolumeID, sourceImageID string
-	if ok {
-		status = instance.Status
-		if instance.Instance != nil {
-			for _, bdm := range instance.Instance.BlockDeviceMappings {
+	var (
+		instance      *vm.VM
+		status        vm.InstanceState
+		rootVolumeID  string
+		sourceImageID string
+	)
+	ok := d.vmMgr.UpdateState(instanceID, func(v *vm.VM) {
+		instance = v
+		status = v.Status
+		if v.Instance != nil {
+			for _, bdm := range v.Instance.BlockDeviceMappings {
 				if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil {
 					rootVolumeID = *bdm.Ebs.VolumeId
 					break
 				}
 			}
-			if instance.Instance.ImageId != nil {
-				sourceImageID = *instance.Instance.ImageId
+			if v.Instance.ImageId != nil {
+				sourceImageID = *v.Instance.ImageId
 			}
 		}
-	}
-	d.Instances.Mu.Unlock()
+	})
 
 	if !ok {
 		slog.Warn("CreateImage: instance not found", "instanceId", instanceID)
