@@ -24,8 +24,7 @@ import (
 var sgIDRegex = regexp.MustCompile(`^sg-[0-9a-f]{17}$`)
 
 // validateCidrIp ensures the CIDR is parseable and round-trips to its canonical form.
-// Rejects any value that could carry an OVN match-expression injection payload —
-// see Finding 1 in docs/development/improvements/spinifex-security-audit-findings.md.
+// Rejects any value that could carry an OVN match-expression injection payload
 func validateCidrIp(cidr string) error {
 	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
