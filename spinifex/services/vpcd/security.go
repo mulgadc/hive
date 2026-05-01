@@ -162,7 +162,11 @@ func (h *TopologyHandler) handleUpdateSG(msg *nats.Msg) {
 // high-volume and low-signal. Only denies carry Log=true.
 func (h *TopologyHandler) addRuleACLs(ctx context.Context, pgName string, ingress, egress []SGRuleForACL) {
 	for _, rule := range ingress {
-		match := BuildIngressACLMatch(pgName, rule)
+		match, err := BuildIngressACLMatch(pgName, rule)
+		if err != nil {
+			slog.Error("vpcd: refusing to install ingress ACL with unsafe rule (handler validator bug?)", "pg", pgName, "rule", rule, "err", err)
+			continue
+		}
 		spec := ACLSpec{Direction: "to-lport", Priority: 1000, Match: match, Action: "allow-related"}
 		if err := h.ovn.AddACL(ctx, pgName, spec); err != nil {
 			slog.Warn("vpcd: failed to add ingress ACL", "pg", pgName, "match", match, "err", err)
@@ -170,7 +174,11 @@ func (h *TopologyHandler) addRuleACLs(ctx context.Context, pgName string, ingres
 	}
 
 	for _, rule := range egress {
-		match := BuildEgressACLMatch(pgName, rule)
+		match, err := BuildEgressACLMatch(pgName, rule)
+		if err != nil {
+			slog.Error("vpcd: refusing to install egress ACL with unsafe rule (handler validator bug?)", "pg", pgName, "rule", rule, "err", err)
+			continue
+		}
 		spec := ACLSpec{Direction: "from-lport", Priority: 1000, Match: match, Action: "allow-related"}
 		if err := h.ovn.AddACL(ctx, pgName, spec); err != nil {
 			slog.Warn("vpcd: failed to add egress ACL", "pg", pgName, "match", match, "err", err)

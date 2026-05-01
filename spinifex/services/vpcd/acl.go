@@ -21,10 +21,42 @@ func portGroupName(groupId string) string {
 	return strings.ReplaceAll(groupId, "-", "_")
 }
 
+// aclForbiddenChars are characters that must never appear in tenant-supplied
+// CidrIp/SourceSG values reaching the OVN match-expression builder. The handler
+// in ec2/vpc/security_group.go validates inputs canonically; this is the
+// belt-and-suspenders guard that refuses to emit a poisoned match expression
+// if a future caller forgets to validate.
+const aclForbiddenChars = "&|()=<>$@\t\n\r\v\f \"'`\\;"
+
+// hasForbiddenACLChars reports whether s contains any character that could
+// break out of a CIDR or SG-reference token in an OVN match expression.
+func hasForbiddenACLChars(s string) bool {
+	if strings.ContainsAny(s, aclForbiddenChars) {
+		return true
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // BuildIngressACLMatch generates an OVN ACL match expression for an ingress rule.
 // Ingress rules use "outport == @{pgName}" because OVN ACLs with direction "to-lport"
 // match on the destination port (outport from the pipeline's perspective).
-func BuildIngressACLMatch(pgName string, rule SGRuleForACL) string {
+//
+// Returns an error if CidrIp or SourceSG contains characters that would let a
+// caller break out of the intended token (defensive guard — input validation in
+// the handler should already have rejected such values).
+func BuildIngressACLMatch(pgName string, rule SGRuleForACL) (string, error) {
+	if hasForbiddenACLChars(rule.CidrIp) {
+		return "", fmt.Errorf("BuildIngressACLMatch: CidrIp %q contains forbidden characters", rule.CidrIp)
+	}
+	if hasForbiddenACLChars(rule.SourceSG) {
+		return "", fmt.Errorf("BuildIngressACLMatch: SourceSG %q contains forbidden characters", rule.SourceSG)
+	}
+
 	parts := []string{fmt.Sprintf("outport == @%s", pgName), "ip4"}
 
 	// Protocol filter
@@ -39,13 +71,20 @@ func BuildIngressACLMatch(pgName string, rule SGRuleForACL) string {
 		parts = append(parts, fmt.Sprintf("ip4.src == $%s_ip4", sgPG))
 	}
 
-	return strings.Join(parts, " && ")
+	return strings.Join(parts, " && "), nil
 }
 
 // BuildEgressACLMatch generates an OVN ACL match expression for an egress rule.
 // Egress rules use "inport == @{pgName}" because OVN ACLs with direction "from-lport"
 // match on the source port (inport from the pipeline's perspective).
-func BuildEgressACLMatch(pgName string, rule SGRuleForACL) string {
+func BuildEgressACLMatch(pgName string, rule SGRuleForACL) (string, error) {
+	if hasForbiddenACLChars(rule.CidrIp) {
+		return "", fmt.Errorf("BuildEgressACLMatch: CidrIp %q contains forbidden characters", rule.CidrIp)
+	}
+	if hasForbiddenACLChars(rule.SourceSG) {
+		return "", fmt.Errorf("BuildEgressACLMatch: SourceSG %q contains forbidden characters", rule.SourceSG)
+	}
+
 	parts := []string{fmt.Sprintf("inport == @%s", pgName), "ip4"}
 
 	// Protocol filter
@@ -60,7 +99,7 @@ func BuildEgressACLMatch(pgName string, rule SGRuleForACL) string {
 		parts = append(parts, fmt.Sprintf("ip4.dst == $%s_ip4", sgPG))
 	}
 
-	return strings.Join(parts, " && ")
+	return strings.Join(parts, " && "), nil
 }
 
 // appendProtocolMatch adds protocol-specific match clauses to the parts slice.

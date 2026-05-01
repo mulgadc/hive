@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +18,51 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
+
+// sgIDRegex matches the spinifex SG ID format produced by utils.GenerateResourceID("sg"):
+// "sg-" followed by 17 lowercase hex characters.
+var sgIDRegex = regexp.MustCompile(`^sg-[0-9a-f]{17}$`)
+
+// validateCidrIp ensures the CIDR is parseable and round-trips to its canonical form.
+// Rejects any value that could carry an OVN match-expression injection payload —
+// see Finding 1 in docs/development/improvements/spinifex-security-audit-findings.md.
+func validateCidrIp(cidr string) error {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("invalid CidrIp %q: %w", cidr, err)
+	}
+	if ipnet.String() != cidr {
+		return fmt.Errorf("invalid CidrIp %q: not in canonical form, expected %q", cidr, ipnet.String())
+	}
+	return nil
+}
+
+// validateSourceSG ensures the source security-group reference matches the spinifex SG ID format.
+func validateSourceSG(sg string) error {
+	if !sgIDRegex.MatchString(sg) {
+		return fmt.Errorf("invalid SourceSG %q: must match sg-<17 hex chars>", sg)
+	}
+	return nil
+}
+
+// validateSGRules validates every CidrIp/SourceSG in a rule set before it is persisted or
+// published. Either field may be empty (one of the two is the source filter); empty values
+// are accepted and the OVN ACL builder treats them as "no source filter".
+func validateSGRules(rules []SGRule) error {
+	for i, r := range rules {
+		if r.CidrIp != "" {
+			if err := validateCidrIp(r.CidrIp); err != nil {
+				return fmt.Errorf("rule %d: %w", i, err)
+			}
+		}
+		if r.SourceSG != "" {
+			if err := validateSourceSG(r.SourceSG); err != nil {
+				return fmt.Errorf("rule %d: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
 
 const (
 	KVBucketSecurityGroups        = "spinifex-vpc-security-groups"
@@ -326,6 +373,10 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupIngress(input *ec2.AuthorizeSecur
 
 	// Convert AWS IpPermissions to SGRules
 	newRules := ipPermissionsToSGRules(input.IpPermissions)
+	if err := validateSGRules(newRules); err != nil {
+		slog.Warn("AuthorizeSecurityGroupIngress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	for _, nr := range newRules {
 		if slices.Contains(record.IngressRules, nr) {
 			return nil, errors.New(awserrors.ErrorInvalidPermissionDuplicate)
@@ -376,6 +427,10 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupEgress(input *ec2.AuthorizeSecuri
 	}
 
 	newRules := ipPermissionsToSGRules(input.IpPermissions)
+	if err := validateSGRules(newRules); err != nil {
+		slog.Warn("AuthorizeSecurityGroupEgress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	for _, nr := range newRules {
 		if slices.Contains(record.EgressRules, nr) {
 			return nil, errors.New(awserrors.ErrorInvalidPermissionDuplicate)
@@ -425,6 +480,10 @@ func (s *VPCServiceImpl) RevokeSecurityGroupIngress(input *ec2.RevokeSecurityGro
 	}
 
 	revokeRules := ipPermissionsToSGRules(input.IpPermissions)
+	if err := validateSGRules(revokeRules); err != nil {
+		slog.Warn("RevokeSecurityGroupIngress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	record.IngressRules = removeSGRules(record.IngressRules, revokeRules)
 
 	data, err := json.Marshal(record)
@@ -469,6 +528,10 @@ func (s *VPCServiceImpl) RevokeSecurityGroupEgress(input *ec2.RevokeSecurityGrou
 	}
 
 	revokeRules := ipPermissionsToSGRules(input.IpPermissions)
+	if err := validateSGRules(revokeRules); err != nil {
+		slog.Warn("RevokeSecurityGroupEgress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	record.EgressRules = removeSGRules(record.EgressRules, revokeRules)
 
 	data, err := json.Marshal(record)
