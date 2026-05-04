@@ -331,7 +331,8 @@ func TestIpPermissionsToSGRules_TCP(t *testing.T) {
 		},
 	}
 
-	rules := ipPermissionsToSGRules(perms)
+	rules, err := ipPermissionsToSGRules(perms)
+	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, "tcp", rules[0].IpProtocol)
 	assert.Equal(t, int64(80), rules[0].FromPort)
@@ -348,23 +349,26 @@ func TestIpPermissionsToSGRules_AllTraffic(t *testing.T) {
 		},
 	}
 
-	rules := ipPermissionsToSGRules(perms)
+	rules, err := ipPermissionsToSGRules(perms)
+	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, "-1", rules[0].IpProtocol)
 }
 
 func TestIpPermissionsToSGRules_SourceSG(t *testing.T) {
 	proto := "-1"
+	srcSG := "sg-0123456789abcdef0"
 	perms := []*ec2.IpPermission{
 		{
 			IpProtocol:       &proto,
-			UserIdGroupPairs: []*ec2.UserIdGroupPair{{GroupId: aws.String("sg-source")}},
+			UserIdGroupPairs: []*ec2.UserIdGroupPair{{GroupId: aws.String(srcSG)}},
 		},
 	}
 
-	rules := ipPermissionsToSGRules(perms)
+	rules, err := ipPermissionsToSGRules(perms)
+	require.NoError(t, err)
 	require.Len(t, rules, 1)
-	assert.Equal(t, "sg-source", rules[0].SourceSG)
+	assert.Equal(t, srcSG, rules[0].SourceSG)
 }
 
 func TestSGRulesToIpPermissions_Conversion(t *testing.T) {
@@ -462,6 +466,148 @@ func TestRemoveSGRules_NoMatch(t *testing.T) {
 
 	result := removeSGRules(existing, toRemove)
 	assert.Len(t, result, 1)
+}
+
+// --- SG-rule input validation (OVN ACL match-expression injection) ---
+
+func TestValidateSGRule(t *testing.T) {
+	cases := []struct {
+		name    string
+		rule    SGRule
+		wantErr bool
+	}{
+		// Valid
+		{"canonical /32", SGRule{CidrIp: "1.2.3.4/32"}, false},
+		{"canonical /8", SGRule{CidrIp: "10.0.0.0/8"}, false},
+		{"any", SGRule{CidrIp: "0.0.0.0/0"}, false},
+		{"valid SG ref", SGRule{SourceSG: "sg-0123456789abcdef0"}, false},
+
+		// Both empty would render as "no source filter" in the ACL builder — must be rejected.
+		{"both empty", SGRule{}, true},
+
+		// CidrIp invalid / injection-shaped
+		{"host bits set", SGRule{CidrIp: "10.0.0.5/8"}, true},
+		{"missing prefix", SGRule{CidrIp: "10.0.0.0"}, true},
+		{"bad mask", SGRule{CidrIp: "10.0.0.0/33"}, true},
+		{"injection ||", SGRule{CidrIp: "1.2.3.4/32 || ip4.src == 0.0.0.0/0"}, true},
+		{"injection &&", SGRule{CidrIp: "10.0.0.0/8 && ip4.src == 0.0.0.0/0"}, true},
+		{"injection ;drop", SGRule{CidrIp: "0.0.0.0/0; drop"}, true},
+		{"injection jndi", SGRule{CidrIp: "${jndi:ldap://x}"}, true},
+		{"injection newline", SGRule{CidrIp: "10.0.0.0/8\n outport == @other"}, true},
+		{"injection nbsp (multibyte)", SGRule{CidrIp: "10.0.0.0/8 "}, true},
+
+		// SourceSG invalid / injection-shaped
+		{"sg too short", SGRule{SourceSG: "sg-abc"}, true},
+		{"sg too long", SGRule{SourceSG: "sg-0123456789abcdef01"}, true},
+		{"sg uppercase", SGRule{SourceSG: "sg-0123456789ABCDEF0"}, true},
+		{"sg missing prefix", SGRule{SourceSG: "0123456789abcdef0"}, true},
+		{"sg legacy short", SGRule{SourceSG: "sg-source"}, true},
+		{"sg injection ||", SGRule{SourceSG: "sg-abc || outport == @other"}, true},
+		{"sg injection @", SGRule{SourceSG: "@other_pg"}, true},
+		{"sg injection $", SGRule{SourceSG: "$injected"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateSGRule(c.rule)
+			if c.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// Each handler smoke-test confirms the wire-up to ipPermissionsToSGRules; the
+// full payload table lives in TestValidateSGRule above.
+
+func TestAuthorizeSecurityGroupIngress_RejectsInvalidRule(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "inj-sg")
+
+	proto := "tcp"
+	_, err := svc.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []*ec2.IpPermission{{
+			IpProtocol: &proto,
+			FromPort:   aws.Int64(80),
+			ToPort:     aws.Int64(80),
+			IpRanges:   []*ec2.IpRange{{CidrIp: aws.String("1.2.3.4/32 || ip4.src == 0.0.0.0/0")}},
+		}},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestAuthorizeSecurityGroupEgress_RejectsInvalidRule(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "inj-sg-egress")
+
+	proto := "-1"
+	_, err := svc.AuthorizeSecurityGroupEgress(&ec2.AuthorizeSecurityGroupEgressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []*ec2.IpPermission{{
+			IpProtocol:       &proto,
+			UserIdGroupPairs: []*ec2.UserIdGroupPair{{GroupId: aws.String("sg-abc || outport == @other")}},
+		}},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestRevokeSecurityGroupIngress_RejectsInvalidRule(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "inj-sg-revoke")
+
+	proto := "tcp"
+	_, err := svc.RevokeSecurityGroupIngress(&ec2.RevokeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []*ec2.IpPermission{{
+			IpProtocol: &proto,
+			FromPort:   aws.Int64(80),
+			ToPort:     aws.Int64(80),
+			IpRanges:   []*ec2.IpRange{{CidrIp: aws.String("0.0.0.0/0; drop")}},
+		}},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestRevokeSecurityGroupEgress_RejectsInvalidRule(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "inj-sg-revoke-egress")
+
+	proto := "-1"
+	_, err := svc.RevokeSecurityGroupEgress(&ec2.RevokeSecurityGroupEgressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []*ec2.IpPermission{{
+			IpProtocol:       &proto,
+			UserIdGroupPairs: []*ec2.UserIdGroupPair{{GroupId: aws.String("sg-abc || outport == @other")}},
+		}},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestAuthorizeSecurityGroupIngress_AcceptsValidSourceSG(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "valid-src-sg")
+	srcSG := createTestSG(t, svc, vpcID, "valid-target-sg")
+
+	proto := "-1"
+	_, err := svc.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []*ec2.IpPermission{{
+			IpProtocol:       &proto,
+			UserIdGroupPairs: []*ec2.UserIdGroupPair{{GroupId: aws.String(srcSG)}},
+		}},
+	}, testAccountID)
+	require.NoError(t, err)
 }
 
 // --- DescribeSecurityGroups filter tests ---

@@ -378,7 +378,10 @@ if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLI
     echo "SSH via public IP: $SSH_HOST:$SSH_PORT"
 else
     echo "No public IP — using QEMU hostfwd for SSH"
-    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    # set -e would abort on $() returning non-zero, hiding the diagnostic below
+    if ! SSH_PORT=$(get_ssh_port "$INSTANCE_ID"); then
+        SSH_PORT=""
+    fi
     if [ -z "$SSH_PORT" ]; then
         echo "Failed to get SSH port for instance $INSTANCE_ID"
         exit 1
@@ -1038,7 +1041,11 @@ if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLI
     SSH_HOST="$INST_PUBLIC_IP"
     SSH_PORT=22
 else
-    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    # set -e would abort on $() returning non-zero
+    if ! SSH_PORT=$(get_ssh_port "$INSTANCE_ID"); then
+        echo "ERROR: Failed to get SSH port for instance $INSTANCE_ID"
+        exit 1
+    fi
     SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
 fi
 echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
@@ -1116,7 +1123,11 @@ if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLI
     SSH_HOST="$INST_PUBLIC_IP"
     SSH_PORT=22
 else
-    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    # set -e would abort on $() returning non-zero
+    if ! SSH_PORT=$(get_ssh_port "$INSTANCE_ID"); then
+        echo "ERROR: Failed to get SSH port for instance $INSTANCE_ID"
+        exit 1
+    fi
     SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
 fi
 wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 60

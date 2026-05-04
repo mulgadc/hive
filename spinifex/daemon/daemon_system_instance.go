@@ -237,9 +237,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 	}
 
 	// Add to daemon state so LaunchInstance can find it
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Insert(instance)
 
 	if err := d.WriteState(); err != nil {
 		slog.Warn("LaunchSystemInstance: failed to write state", "instanceId", instance.ID, "err", err)
@@ -347,10 +345,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 
 // TerminateSystemInstance stops and cleans up a system-managed VM.
 func (d *Daemon) TerminateSystemInstance(instanceID string) error {
-	d.Instances.Mu.Lock()
-	instance, exists := d.Instances.VMS[instanceID]
-	d.Instances.Mu.Unlock()
-
+	instance, exists := d.vmMgr.Get(instanceID)
 	if !exists {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
@@ -404,9 +399,7 @@ func (d *Daemon) TerminateSystemInstance(instanceID string) error {
 	}
 
 	// Clean up local state
-	d.Instances.Mu.Lock()
-	delete(d.Instances.VMS, instanceID)
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Delete(instanceID)
 
 	// Unsubscribe from per-instance NATS topic
 	d.mu.Lock()
@@ -467,13 +460,8 @@ func (d *Daemon) cleanupFailedSystemInstance(instance *vm.VM, instanceType *ec2.
 func (d *Daemon) WaitForSystemInstance(instanceID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		d.Instances.Mu.Lock()
-		inst, exists := d.Instances.VMS[instanceID]
 		var status vm.InstanceState
-		if exists {
-			status = inst.Status
-		}
-		d.Instances.Mu.Unlock()
+		exists := d.vmMgr.UpdateState(instanceID, func(v *vm.VM) { status = v.Status })
 
 		if !exists {
 			return fmt.Errorf("instance %s disappeared", instanceID)

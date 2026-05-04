@@ -74,8 +74,8 @@ Mirror the cloud image you intend to run as guest VMs:
 
 ```bash
 mkdir -p images
-curl -fsSL "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2" \
-  -o images/debian-12-amd64.qcow2
+curl -fsSL "https://cloud.debian.org/images/cloud/trixie/20260501-2465/debian-13-genericcloud-amd64-20260501-2465.qcow2" \
+  -o images/debian-13-amd64.qcow2
 ```
 
 ## Step 3. Assemble Transfer Media
@@ -140,8 +140,8 @@ sudo systemctl start spinifex.target
 Register the pre-staged image with Spinifex:
 
 ```bash
-sudo spx admin images import --file /mnt/usb/images/debian-12-amd64.qcow2 \
-  --distro debian --version 12 --arch x86_64
+sudo spx admin images import --file /mnt/usb/images/debian-13-amd64.qcow2 \
+  --distro debian --version 13 --arch x86_64
 ```
 
 ## Step 9. Verify

@@ -102,7 +102,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.detachDelay = 0 // Skip sleep in tests
 
 	// Initialize services (needed for handler tests)
-	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore())
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, objectstore.NewMemoryObjectStore())
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, objectstore.NewMemoryObjectStore(), nc)
 
 	t.Cleanup(func() {
@@ -394,7 +394,7 @@ func TestDaemon_Initialization(t *testing.T) {
 
 	assert.NotNil(t, daemon)
 	assert.NotNil(t, daemon.resourceMgr)
-	assert.NotNil(t, daemon.Instances.VMS)
+	assert.NotNil(t, daemon.vmMgr)
 	assert.Equal(t, cfg, daemon.config)
 }
 
@@ -945,8 +945,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-populate JetStream with test state
-	testInstances := &vm.Instances{VMS: vms}
-	err = daemon.jsManager.WriteState("node-1", testInstances)
+	err = daemon.jsManager.WriteState("node-1", vms)
 	require.NoError(t, err)
 
 	// Manually trigger the LoadState and allocation logic normally found in Start()
@@ -954,7 +953,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate the allocation loop in Start()
-	for _, instance := range daemon.Instances.VMS {
+	for _, instance := range daemon.vmMgr.Snapshot() {
 		if instance.Status != vm.StateTerminated && !instance.Attributes.StopInstance {
 			instanceType, ok := daemon.resourceMgr.instanceTypes[instance.InstanceType]
 			if ok {
@@ -986,12 +985,12 @@ func TestStopInstance_Deallocation(t *testing.T) {
 	instanceId := "i-test-stop"
 	instanceTypeStr := getTestInstanceType(t)
 	instanceType := daemon.resourceMgr.instanceTypes[instanceTypeStr]
-	daemon.Instances.VMS[instanceId] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceId,
 		InstanceType: instanceTypeStr,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-	}
+	})
 
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
@@ -1189,13 +1188,13 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		ec2Instance.SetInstanceId(instanceID)
 		ec2Instance.SetInstanceType("t3.micro")
 
-		daemon.Instances.VMS[instanceID] = &vm.VM{
+		daemon.vmMgr.Insert(&vm.VM{
 			ID:          instanceID,
 			Status:      vm.StateRunning,
 			AccountID:   testAccountID,
 			Reservation: reservation1,
 			Instance:    ec2Instance,
-		}
+		})
 	}
 
 	// Create another reservation with 2 instances
@@ -1209,13 +1208,13 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		ec2Instance.SetInstanceId(instanceID)
 		ec2Instance.SetInstanceType("t3.small")
 
-		daemon.Instances.VMS[instanceID] = &vm.VM{
+		daemon.vmMgr.Insert(&vm.VM{
 			ID:          instanceID,
 			Status:      vm.StateRunning,
 			AccountID:   testAccountID,
 			Reservation: reservation2,
 			Instance:    ec2Instance,
-		}
+		})
 	}
 
 	// Create a single-instance reservation
@@ -1227,13 +1226,13 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 	ec2Instance.SetInstanceId("i-single-001")
 	ec2Instance.SetInstanceType("t3.large")
 
-	daemon.Instances.VMS["i-single-001"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:          "i-single-001",
 		Status:      vm.StateStopped,
 		AccountID:   testAccountID,
 		Reservation: reservation3,
 		Instance:    ec2Instance,
-	}
+	})
 
 	// Subscribe to handle DescribeInstances
 	sub, err := daemon.natsConn.Subscribe("ec2.DescribeInstances", daemon.handleEC2DescribeInstances)
@@ -1656,9 +1655,13 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	// Goroutine 1: Allocate and deallocate
 	go func() {
 		for range iterations {
+			// canAllocate -> allocate is non-atomic; allocate re-checks under
+			// the write lock and may fail if another goroutine took the slot.
+			// Only deallocate when allocate actually succeeded.
 			if rm.canAllocate(microType, 1) >= 1 {
-				rm.allocate(microType)
-				rm.deallocate(microType)
+				if err := rm.allocate(microType); err == nil {
+					rm.deallocate(microType)
+				}
 			}
 		}
 		done <- true
@@ -1676,8 +1679,9 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	go func() {
 		for range iterations {
 			if rm.canAllocate(microType, 1) >= 1 {
-				rm.allocate(microType)
-				rm.deallocate(microType)
+				if err := rm.allocate(microType); err == nil {
+					rm.deallocate(microType)
+				}
 			}
 		}
 		done <- true
@@ -1862,7 +1866,7 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Call stopInstance with deleteVolume=true (termination)
 	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
@@ -1959,7 +1963,7 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Call stopInstance with deleteVolume=true (termination)
 	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
@@ -2042,7 +2046,7 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Call stopInstance with deleteVolume=false (stop, not terminate)
 	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, false)
@@ -2076,7 +2080,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Subscribe the handler to the instance's per-instance topic
 	sub, err := daemon.natsConn.Subscribe(
@@ -2109,10 +2113,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 
 	t.Run("InstanceNotRunning", func(t *testing.T) {
 		// Temporarily set status to stopped
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateStopped
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -2133,9 +2134,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 
 		// Restore running state
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateRunning
-		daemon.Instances.Mu.Unlock()
 	})
 
 	t.Run("VolumeNotFound", func(t *testing.T) {
@@ -2222,7 +2221,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Subscribe the handler to the instance's per-instance topic
 	sub, err := daemon.natsConn.Subscribe(
@@ -2253,10 +2252,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 
 	t.Run("InstanceNotRunning", func(t *testing.T) {
 		// Temporarily set status to stopped
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateStopped
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -2277,9 +2273,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 
 		// Restore running state
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateRunning
-		daemon.Instances.Mu.Unlock()
 	})
 
 	t.Run("VolumeNotAttached", func(t *testing.T) {
@@ -2571,7 +2565,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Subscribe a mock ebs.unmount handler
 	ebsUnmountCalled := make(chan string, 1)
@@ -2641,7 +2635,6 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	instance.EBSRequests.Mu.Unlock()
 
 	// Verify volume removed from BlockDeviceMappings
-	daemon.Instances.Mu.Lock()
 	for _, bdm := range instance.Instance.BlockDeviceMappings {
 		if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil {
 			assert.NotEqual(t, volumeID, *bdm.Ebs.VolumeId, "Volume should be removed from BlockDeviceMappings")
@@ -2650,7 +2643,6 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	// Root volume should still be present
 	assert.Len(t, instance.Instance.BlockDeviceMappings, 1)
 	assert.Equal(t, "vol-root", *instance.Instance.BlockDeviceMappings[0].Ebs.VolumeId)
-	daemon.Instances.Mu.Unlock()
 }
 
 // TestDetachVolume_ForceFlag tests that force=true continues past device_del failure
@@ -2714,7 +2706,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Mock ebs.unmount
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
@@ -2828,7 +2820,7 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -2869,7 +2861,6 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 	assert.True(t, found, "Volume must remain in EBSRequests when blockdev-del fails")
 
 	// Critical: BlockDeviceMappings must NOT be cleaned up
-	daemon.Instances.Mu.Lock()
 	bdmFound := false
 	for _, bdm := range instance.Instance.BlockDeviceMappings {
 		if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
@@ -2877,7 +2868,6 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 			break
 		}
 	}
-	daemon.Instances.Mu.Unlock()
 	assert.True(t, bdmFound, "Volume must remain in BlockDeviceMappings when blockdev-del fails")
 }
 
@@ -2920,7 +2910,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := types.EBSUnMountResponse{Mounted: false}
@@ -2996,7 +2986,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Mock ebs.mount to return success with a new NBDURI
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
@@ -3280,12 +3270,9 @@ func TestMarkInstanceFailed(t *testing.T) {
 		Instance:     ec2Instance,
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	daemon.markInstanceFailed(instance, "volume_preparation_failed")
-
-	daemon.Instances.Mu.Lock()
-	defer daemon.Instances.Mu.Unlock()
 
 	// Verify state transitioned to shutting-down
 	assert.Equal(t, vm.StateShuttingDown, instance.Status)
@@ -3312,13 +3299,11 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 		Instance:     nil, // no ec2.Instance
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Should not panic
 	daemon.markInstanceFailed(instance, "test_failure")
 
-	daemon.Instances.Mu.Lock()
-	defer daemon.Instances.Mu.Unlock()
 	assert.Equal(t, vm.StateShuttingDown, instance.Status)
 }
 
@@ -3464,7 +3449,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3474,10 +3459,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	t.Run("StopAlreadyStoppedInstance", func(t *testing.T) {
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateStopped
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -3497,10 +3479,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	})
 
 	t.Run("TerminateAlreadyTerminatedInstance", func(t *testing.T) {
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateTerminated
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{

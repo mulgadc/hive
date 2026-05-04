@@ -1110,8 +1110,8 @@ func trustTestServer(t *testing.T, srv *httptest.Server) {
 }
 
 func TestVerifyImageChecksum(t *testing.T) {
-	const debianName = "debian-12-generic-amd64.tar.xz"
-	const ubuntuName = "noble-server-cloudimg-amd64.img"
+	const debianName = "debian-13-genericcloud-amd64-20260501-2465.tar.xz"
+	const ubuntuName = "resolute-server-cloudimg-amd64.img"
 	const alpineName = "alb-alpine-3.21.6-x86_64.raw"
 
 	debianBytes := []byte("debian-image-bytes-fixture")

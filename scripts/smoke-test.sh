@@ -96,15 +96,15 @@ fi
 # --- Import AMI ---
 echo "==> Importing AMI"
 
-LOCAL_IMAGE="$HOME/images/ubuntu-24.04.img"
+LOCAL_IMAGE="$HOME/images/ubuntu-26.04.img"
 ARCH=$(uname -m)
 
 case "$ARCH" in
-    x86_64)        IMG_ARCH="x86_64"; IMAGE_NAME="ubuntu-24.04-x86_64" ;;
-    aarch64|arm64) IMG_ARCH="arm64";  IMAGE_NAME="ubuntu-24.04-arm64"  ;;
+    x86_64)        IMG_ARCH="x86_64"; IMAGE_NAME="ubuntu-26.04-x86_64" ;;
+    aarch64|arm64) IMG_ARCH="arm64";  IMAGE_NAME="ubuntu-26.04-arm64"  ;;
     *)
         echo "  Warning: unknown arch $ARCH, defaulting to x86_64"
-        IMG_ARCH="x86_64"; IMAGE_NAME="ubuntu-24.04-x86_64"
+        IMG_ARCH="x86_64"; IMAGE_NAME="ubuntu-26.04-x86_64"
         ;;
 esac
 
@@ -120,7 +120,7 @@ else
     if [ -f "$LOCAL_IMAGE" ]; then
         echo "  Using local image: $LOCAL_IMAGE"
         sudo /usr/local/bin/spx admin images import \
-            --file "$LOCAL_IMAGE" --distro ubuntu --version 24.04 --arch "$IMG_ARCH"
+            --file "$LOCAL_IMAGE" --distro ubuntu --version 26.04 --arch "$IMG_ARCH"
     else
         echo "  Downloading image: $IMAGE_NAME"
         sudo /usr/local/bin/spx admin images import --name "$IMAGE_NAME"

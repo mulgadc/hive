@@ -54,9 +54,7 @@ func (d *Daemon) publishHeartbeat() {
 func (d *Daemon) buildHeartbeat() *Heartbeat {
 	totalVCPU, totalMem, reservedVCPU, reservedMem, allocVCPU, allocMem, _ := d.resourceMgr.GetResourceStats()
 
-	d.Instances.Mu.Lock()
-	vmCount := len(d.Instances.VMS)
-	d.Instances.Mu.Unlock()
+	vmCount := d.vmMgr.Count()
 
 	return &Heartbeat{
 		Node:          d.node,

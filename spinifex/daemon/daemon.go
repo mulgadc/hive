@@ -134,8 +134,8 @@ type Daemon struct {
 	cancel                context.CancelFunc
 	shutdownWg            sync.WaitGroup
 
-	// Local VM Instances
-	Instances vm.Instances
+	// vmMgr owns the in-memory map of VMs running on this node.
+	vmMgr *vm.Manager
 
 	// NAT Subscriptions
 	natsSubscriptions map[string]*nats.Subscription
@@ -457,7 +457,7 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 		gpuManager:        gpuMgr,
 		ctx:               ctx,
 		cancel:            cancel,
-		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:             vm.NewManager(),
 		natsSubscriptions: make(map[string]*nats.Subscription),
 		startTime:         time.Now(),
 		detachDelay:       1 * time.Second,
@@ -660,7 +660,7 @@ func (d *Daemon) Start() error {
 
 	// Create services before loading/launching instances, since LaunchInstance depends on them
 	store := objectstore.NewS3ObjectStoreFromConfig(admin.DialTarget(d.config.Predastore.Host), d.config.Predastore.Region, d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
-	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
+	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
 
@@ -901,9 +901,7 @@ func (d *Daemon) Start() error {
 	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
 	// that are already in use by running system instances.
 	if d.mgmtIPAllocator != nil {
-		d.Instances.Mu.Lock()
-		d.mgmtIPAllocator.Rebuild(d.Instances.VMS)
-		d.Instances.Mu.Unlock()
+		d.mgmtIPAllocator.Rebuild(d.vmMgr.SnapshotMap())
 		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
 	}
 
@@ -1107,7 +1105,11 @@ func (d *Daemon) migrateInstanceToKV(instance *vm.VM, writeFn func(string, *vm.V
 			"instance", instance.ID, "bucket", label, "err", err)
 		return false
 	}
-	delete(d.Instances.VMS, instance.ID)
+	if !d.vmMgr.DeleteIf(instance.ID, instance) {
+		slog.Info("Slot reclaimed by another handler during migration; skipping local delete",
+			"instance", instance.ID, "bucket", label)
+		return true
+	}
 	slog.Info("Migrated instance to KV", "instance", instance.ID, "bucket", label)
 	return true
 }
@@ -1149,19 +1151,14 @@ func (d *Daemon) restoreInstances() {
 		return
 	}
 
-	slog.Info("Loaded state", "instance count", len(d.Instances.VMS))
-
-	// Ensure mutexes and QMP clients are usable after deserialization
-	d.Instances.Mu = sync.Mutex{}
+	slog.Info("Loaded state", "instance count", d.vmMgr.Count())
 
 	// Phase 1: Reconnect running QEMU, finalize transitional states, collect VMs to relaunch
 	var toLaunch []*vm.VM
 
-	for i := range d.Instances.VMS {
-		d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
-		d.Instances.VMS[i].QMPClient = &qmp.QMPClient{}
-
-		instance := d.Instances.VMS[i]
+	for _, instance := range d.vmMgr.Snapshot() {
+		instance.EBSRequests.Mu = sync.Mutex{}
+		instance.QMPClient = &qmp.QMPClient{}
 
 		if instance.Status == vm.StateTerminated {
 			if !d.migrateTerminatedToKV(instance) {
@@ -1332,9 +1329,8 @@ func (d *Daemon) restoreInstances() {
 					}
 				}()
 				// Skip if instance was terminated while waiting for semaphore
-				d.Instances.Mu.Lock()
-				status := inst.Status
-				d.Instances.Mu.Unlock()
+				var status vm.InstanceState
+				d.vmMgr.Inspect(inst, func(v *vm.VM) { status = v.Status })
 				if status != vm.StatePending && status != vm.StateProvisioning {
 					slog.Info("Instance state changed during recovery, skipping launch",
 						"instanceId", inst.ID, "status", string(status))
@@ -1578,32 +1574,38 @@ func (d *Daemon) ClusterManager() error {
 }
 
 // WriteState writes the instance state to JetStream KV store (required).
-// It acquires d.Instances.Mu internally.
+// The marshal+put runs under the manager lock so VM fields can't change
+// mid-encode. Lock-across-Put is a known limitation; splitting marshal from
+// put requires a JetStreamManager API change and is deferred.
 func (d *Daemon) WriteState() error {
 	if d.jsManager == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot write state")
 	}
-	if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
-		slog.Error("JetStream write failed", "error", err)
-		return fmt.Errorf("failed to write state to JetStream: %w", err)
+	var writeErr error
+	d.vmMgr.View(func(vms map[string]*vm.VM) {
+		writeErr = d.jsManager.WriteState(d.node, vms)
+	})
+	if writeErr != nil {
+		slog.Error("JetStream write failed", "error", writeErr)
+		return fmt.Errorf("failed to write state to JetStream: %w", writeErr)
 	}
 	return nil
 }
 
-// LoadState loads the instance state from JetStream KV store (required)
+// LoadState loads the instance state from JetStream KV store (required).
+// Replaces the manager's running set with the loaded map.
 func (d *Daemon) LoadState() error {
 	if d.jsManager == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot load state")
 	}
 
-	instances, err := d.jsManager.LoadState(d.node)
+	loaded, err := d.jsManager.LoadState(d.node)
 	if err != nil {
 		slog.Error("JetStream load failed", "error", err)
 		return fmt.Errorf("failed to load state from JetStream: %w", err)
 	}
 
-	// Copy only the VMS map, not the mutex
-	d.Instances.VMS = instances.VMS
+	d.vmMgr.Replace(loaded)
 	return nil
 }
 
@@ -1979,7 +1981,7 @@ func (d *Daemon) setupShutdown() {
 		} else {
 			d.shuttingDown.Store(true)
 			// Pass instances to terminate
-			if err := d.stopInstance(d.Instances.VMS, false); err != nil {
+			if err := d.stopInstance(d.vmMgr.SnapshotMap(), false); err != nil {
 				slog.Error("Failed to stop instances during shutdown", "err", err)
 			}
 		}
@@ -2048,9 +2050,8 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 			time.Sleep(30 * time.Second)
 
 			// Check if instance is in a terminal or transitional state - exit heartbeat
-			d.Instances.Mu.Lock()
-			status := instance.Status
-			d.Instances.Mu.Unlock()
+			var status vm.InstanceState
+			d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 			if status == vm.StateStopping || status == vm.StateStopped || status == vm.StateShuttingDown || status == vm.StateTerminated || status == vm.StateError {
 				slog.Info("QMP heartbeat exiting - instance not running", "instance", instance.ID, "status", status)
@@ -2087,9 +2088,8 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 // effects. Logs the abort reason at Info so it's visible without polluting
 // error logs (terminate-during-pending is an expected user-driven race).
 func (d *Daemon) launchStillValid(instance *vm.VM) bool {
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 	if status == vm.StatePending || status == vm.StateStopped || status == vm.StateProvisioning {
 		return true
 	}
@@ -2193,9 +2193,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 
 	// Step 9: Update the instance metadata for running state and volume attached
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Insert(instance)
 
 	// Final race check — QEMU is up, but if a terminate fired during
 	// StartInstance/CreateQMPClient, the concurrent goroutine has already
@@ -2232,27 +2230,34 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 	// request transitioned it to shutting-down while LaunchInstance was running),
 	// don't spawn a second finalizeTermination goroutine — the existing cleanup
 	// handler owns the lifecycle from here.
-	d.Instances.Mu.Lock()
-	if instance.Status == vm.StateShuttingDown || instance.Status == vm.StateTerminated {
-		d.Instances.Mu.Unlock()
+	skip := false
+	var observedStatus vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		observedStatus = v.Status
+		if v.Status == vm.StateShuttingDown || v.Status == vm.StateTerminated {
+			skip = true
+			return
+		}
+		// Set state reason before transition
+		if v.Instance != nil {
+			v.Instance.StateReason = &ec2.StateReason{}
+			v.Instance.StateReason.SetCode("Server.InternalError")
+			v.Instance.StateReason.SetMessage(reason)
+		}
+	})
+	if skip {
 		slog.Info("markInstanceFailed: instance already in cleanup state, skipping",
-			"instanceId", instance.ID, "status", string(instance.Status), "reason", reason)
+			"instanceId", instance.ID, "status", string(observedStatus), "reason", reason)
 		return
 	}
-
-	// Set state reason before transition
-	if instance.Instance != nil {
-		instance.Instance.StateReason = &ec2.StateReason{}
-		instance.Instance.StateReason.SetCode("Server.InternalError")
-		instance.Instance.StateReason.SetMessage(reason)
-	}
-	d.Instances.Mu.Unlock()
 
 	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
 		slog.Error("markInstanceFailed transition failed", "instanceId", instance.ID, "err", err)
 		// If the error was a write failure, the in-memory state is already
 		// shutting-down. Still proceed with finalization to avoid getting stuck.
-		if instance.Status != vm.StateShuttingDown {
+		var postErrStatus vm.InstanceState
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { postErrStatus = v.Status })
+		if postErrStatus != vm.StateShuttingDown {
 			return
 		}
 	}
@@ -2279,9 +2284,7 @@ func (d *Daemon) finalizeTermination(instance *vm.VM) {
 		return
 	}
 
-	d.Instances.Mu.Lock()
-	instance.LastNode = d.node
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.LastNode = d.node })
 
 	if err := d.TransitionState(instance, vm.StateTerminated); err != nil {
 		slog.Error("Failed to transition failed instance to terminated", "instanceId", instance.ID, "err", err)
@@ -2298,25 +2301,16 @@ func (d *Daemon) finalizeTermination(instance *vm.VM) {
 	}
 
 	// Guard + delete: another handler may have reclaimed this instance.
-	d.Instances.Mu.Lock()
-	current, exists := d.Instances.VMS[instance.ID]
-	if !exists || current != instance {
-		d.Instances.Mu.Unlock()
+	if !d.vmMgr.DeleteIf(instance.ID, instance) {
 		slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
 			"instanceId", instance.ID, "state", "terminated")
 		return
 	}
-	delete(d.Instances.VMS, instance.ID)
-	d.Instances.Mu.Unlock()
 
 	if err := d.WriteState(); err != nil {
 		slog.Error("Failed to persist state after terminating failed instance, re-adding to local map",
 			"instanceId", instance.ID, "err", err)
-		d.Instances.Mu.Lock()
-		if _, occupied := d.Instances.VMS[instance.ID]; !occupied {
-			d.Instances.VMS[instance.ID] = instance
-		}
-		d.Instances.Mu.Unlock()
+		d.vmMgr.InsertIfAbsent(instance)
 	} else {
 		slog.Info("Released failed instance ownership to KV",
 			"instanceId", instance.ID, "lastNode", d.node)
@@ -2337,16 +2331,11 @@ func (d *Daemon) startPendingWatchdog() {
 			case <-d.ctx.Done():
 				return
 			case <-ticker.C:
-				d.Instances.Mu.Lock()
-				var stuck []*vm.VM
-				for _, instance := range d.Instances.VMS {
-					if (instance.Status == vm.StatePending || instance.Status == vm.StateProvisioning) &&
-						instance.Instance != nil && instance.Instance.LaunchTime != nil &&
-						time.Since(*instance.Instance.LaunchTime) > pendingWatchdogTimeout {
-						stuck = append(stuck, instance)
-					}
-				}
-				d.Instances.Mu.Unlock()
+				stuck := d.vmMgr.Filter(func(v *vm.VM) bool {
+					return (v.Status == vm.StatePending || v.Status == vm.StateProvisioning) &&
+						v.Instance != nil && v.Instance.LaunchTime != nil &&
+						time.Since(*v.Instance.LaunchTime) > pendingWatchdogTimeout
+				})
 
 				for _, instance := range stuck {
 					slog.Warn("Instance stuck in pending, marking failed",

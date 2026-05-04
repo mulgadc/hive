@@ -57,15 +57,15 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Debian 12 AMI
+# Debian 13 AMI
 # For MulgaOS, need to import a local AMI first
-data "aws_ami" "debian12" {
+data "aws_ami" "debian13" {
   most_recent = true
   owners      = ["000000000000"] # Spinifex system images (on AWS use "136693071363" for Debian official)
 
   filter {
     name   = "name"
-    values = ["*debian-12*"]
+    values = ["*debian-13*"]
   }
 
   filter {
@@ -191,7 +191,7 @@ resource "aws_security_group" "web_ssh" {
 
 resource "aws_instance" "vm" {
   count         = 3
-  ami           = data.aws_ami.debian12.id
+  ami           = data.aws_ami.debian13.id
   instance_type = "t3.small"
 
   subnet_id              = aws_subnet.public.id

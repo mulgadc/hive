@@ -320,11 +320,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	// Add all instances to state immediately so DescribeInstances can find them
 	// while volumes are being prepared and VMs are launching
-	d.Instances.Mu.Lock()
 	for _, instance := range instances {
-		d.Instances.VMS[instance.ID] = instance
+		d.vmMgr.Insert(instance)
 	}
-	d.Instances.Mu.Unlock()
 
 	if err := d.WriteState(); err != nil {
 		slog.Error("handleEC2RunInstances failed to write initial state", "err", err)
@@ -350,9 +348,8 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	var successCount int
 	for _, instance := range instances {
 		// Skip if instance was terminated by a concurrent request
-		d.Instances.Mu.Lock()
-		status := instance.Status
-		d.Instances.Mu.Unlock()
+		var status vm.InstanceState
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 		if status != vm.StatePending && status != vm.StateProvisioning {
 			slog.Info("Instance state changed during provisioning, skipping launch",
 				"instanceId", instance.ID, "status", string(status))
@@ -407,9 +404,8 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 func (d *Daemon) handleRebootInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Rebooting instance", "id", command.ID)
 
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Error("RebootInstance: instance not in running state", "instanceId", command.ID, "status", status)
@@ -435,9 +431,8 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	slog.Info("Starting instance", "id", command.ID)
 
 	// Validate instance is in stopped state
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateStopped {
 		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
@@ -458,9 +453,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	// Clear stop attribute before launch so WriteState inside LaunchInstance
 	// persists the correct attributes. Without this, a daemon restart after
 	// a stop→start cycle would see StopInstance=true and skip reconnecting QEMU.
-	d.Instances.Mu.Lock()
-	instance.Attributes = command.Attributes
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.Attributes = command.Attributes })
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	err := d.LaunchInstance(instance)
@@ -500,9 +493,8 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 
 	// Check state validity before attempting transition — return the correct
 	// AWS error code when the instance is already stopped/terminated/etc.
-	d.Instances.Mu.Lock()
-	currentState := instance.Status
-	d.Instances.Mu.Unlock()
+	var currentState vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { currentState = v.Status })
 
 	// If instance is already shutting-down and we're asked to terminate, treat
 	// as idempotent — the finalizeTermination goroutine is already cleaning up.
@@ -544,10 +536,10 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				slog.Error("Failed to transition to error state", "instanceId", inst.ID, "err", err)
 			}
 		} else {
-			d.Instances.Mu.Lock()
-			inst.Attributes = attrs
-			inst.LastNode = d.node
-			d.Instances.Mu.Unlock()
+			d.vmMgr.Inspect(inst, func(v *vm.VM) {
+				v.Attributes = attrs
+				v.LastNode = d.node
+			})
 
 			if err := d.TransitionState(inst, finalState); err != nil {
 				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
@@ -591,16 +583,11 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				// from stopped KV, re-added it to VMS with a new pointer, and
 				// launched it. Deleting here would destroy the running instance's
 				// state — creating a "ghost instance" visible nowhere.
-				d.Instances.Mu.Lock()
-				current, exists := d.Instances.VMS[inst.ID]
-				if !exists || current != inst {
-					d.Instances.Mu.Unlock()
+				if !d.vmMgr.DeleteIf(inst.ID, inst) {
 					slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
 						"instanceId", inst.ID, "state", string(finalState))
 					return
 				}
-				delete(d.Instances.VMS, inst.ID)
-				d.Instances.Mu.Unlock()
 
 				// Unsubscribe from per-instance NATS topic. Safe to do after
 				// the delete — LaunchInstance already unsubscribes stale entries
@@ -619,11 +606,7 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 					slog.Error("Failed to persist state after releasing instance, re-adding to local map for consistency",
 						"instanceId", inst.ID, "err", err)
 					// Only re-add if another handler hasn't claimed the slot
-					d.Instances.Mu.Lock()
-					if _, occupied := d.Instances.VMS[inst.ID]; !occupied {
-						d.Instances.VMS[inst.ID] = inst
-					}
-					d.Instances.Mu.Unlock()
+					d.vmMgr.InsertIfAbsent(inst)
 				} else {
 					slog.Info("Released instance ownership to KV",
 						"instanceId", inst.ID, "state", string(finalState), "lastNode", d.node)
@@ -738,9 +721,6 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 	slog.Info("Processing DescribeInstances request from this node", "accountID", accountID)
 
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
 	// Validate and filter instances if specific instance IDs were requested
 	instanceIDFilter := make(map[string]bool)
 	if len(describeInstancesInput.InstanceIds) > 0 {
@@ -766,74 +746,78 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	// Group instances by reservation ID (AWS returns instances grouped by reservation)
 	reservationMap := make(map[string]*ec2.Reservation)
 
-	// Iterate through all instances on this node
-	for _, instance := range d.Instances.VMS {
-		// Skip instances not owned by the caller's account.
-		// Pre-Phase4 instances (empty AccountID) are only visible to root.
-		if !isInstanceVisible(accountID, instance.AccountID) {
-			continue
-		}
-
-		// Skip if filtering by instance IDs and this instance is not in the filter
-		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
-			continue
-		}
-
-		// Use stored reservation metadata if available
-		if instance.Reservation != nil && instance.Instance != nil {
-			resID := ""
-			if instance.Reservation.ReservationId != nil {
-				resID = *instance.Reservation.ReservationId
-			}
-
-			// Create reservation entry if it doesn't exist
-			if _, exists := reservationMap[resID]; !exists {
-				reservation := &ec2.Reservation{}
-				reservation.SetReservationId(resID)
-				if instance.Reservation.OwnerId != nil {
-					reservation.SetOwnerId(*instance.Reservation.OwnerId)
-				}
-				reservation.Instances = []*ec2.Instance{}
-				reservationMap[resID] = reservation
-			}
-
-			// Update the instance state to current state
-			instanceCopy := *instance.Instance
-			instanceCopy.State = &ec2.InstanceState{}
-
-			// Populate PublicIpAddress from VM if stored
-			if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
-				instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
-			}
-
-			// Map internal status to EC2 state codes using the centralized mapping
-			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
-				instanceCopy.State.SetCode(info.Code)
-				instanceCopy.State.SetName(info.Name)
-			} else {
-				slog.Warn("Instance has unmapped status, reporting as pending",
-					"instanceId", instance.ID, "status", string(instance.Status))
-				instanceCopy.State.SetCode(0)
-				instanceCopy.State.SetName("pending")
-			}
-
-			// Populate Placement if instance belongs to a placement group
-			if instance.PlacementGroupName != "" {
-				instanceCopy.Placement = &ec2.Placement{
-					GroupName:        aws.String(instance.PlacementGroupName),
-					AvailabilityZone: aws.String(d.config.AZ),
-				}
-			}
-
-			// Apply filters against the fully-built instance copy
-			if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+	// Iterate under the manager lock — VM fields (Status, Instance, Reservation,
+	// PublicIP, PlacementGroupName) are mutated through manager-locked
+	// Inspect/UpdateState elsewhere, so reading them lock-free would race.
+	d.vmMgr.View(func(vms map[string]*vm.VM) {
+		for _, instance := range vms {
+			// Skip instances not owned by the caller's account.
+			// Pre-Phase4 instances (empty AccountID) are only visible to root.
+			if !isInstanceVisible(accountID, instance.AccountID) {
 				continue
 			}
 
-			// Add instance to its reservation
-			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+			// Skip if filtering by instance IDs and this instance is not in the filter
+			if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+				continue
+			}
+
+			// Use stored reservation metadata if available
+			if instance.Reservation != nil && instance.Instance != nil {
+				resID := ""
+				if instance.Reservation.ReservationId != nil {
+					resID = *instance.Reservation.ReservationId
+				}
+
+				// Create reservation entry if it doesn't exist
+				if _, exists := reservationMap[resID]; !exists {
+					reservation := &ec2.Reservation{}
+					reservation.SetReservationId(resID)
+					if instance.Reservation.OwnerId != nil {
+						reservation.SetOwnerId(*instance.Reservation.OwnerId)
+					}
+					reservation.Instances = []*ec2.Instance{}
+					reservationMap[resID] = reservation
+				}
+
+				// Update the instance state to current state
+				instanceCopy := *instance.Instance
+				instanceCopy.State = &ec2.InstanceState{}
+
+				// Populate PublicIpAddress from VM if stored
+				if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
+					instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
+				}
+
+				// Map internal status to EC2 state codes using the centralized mapping
+				if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+					instanceCopy.State.SetCode(info.Code)
+					instanceCopy.State.SetName(info.Name)
+				} else {
+					slog.Warn("Instance has unmapped status, reporting as pending",
+						"instanceId", instance.ID, "status", string(instance.Status))
+					instanceCopy.State.SetCode(0)
+					instanceCopy.State.SetName("pending")
+				}
+
+				// Populate Placement if instance belongs to a placement group
+				if instance.PlacementGroupName != "" {
+					instanceCopy.Placement = &ec2.Placement{
+						GroupName:        aws.String(instance.PlacementGroupName),
+						AvailabilityZone: aws.String(d.config.AZ),
+					}
+				}
+
+				// Apply filters against the fully-built instance copy
+				if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+					continue
+				}
+
+				// Add instance to its reservation
+				reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+			}
 		}
-	}
+	})
 
 	// Convert map to slice
 	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
@@ -963,10 +947,8 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	}
 
 	// Add instance to local map and clear stop attribute before launch
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
 	instance.Attributes = types.EC2CommandAttributes{StartInstance: true}
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Insert(instance)
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	err = d.LaunchInstance(instance)
@@ -976,9 +958,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
 		}
-		d.Instances.Mu.Lock()
-		delete(d.Instances.VMS, instance.ID)
-		d.Instances.Mu.Unlock()
+		d.vmMgr.Delete(instance.ID)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
@@ -1391,12 +1371,9 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 
 	// Look up instance: running first, then stopped KV.
 	var instance *vm.VM
-
-	d.Instances.Mu.Lock()
-	if running, ok := d.Instances.VMS[instanceID]; ok {
+	if running, ok := d.vmMgr.Get(instanceID); ok {
 		instance = running
 	}
-	d.Instances.Mu.Unlock()
 
 	if instance == nil {
 		if d.jsManager == nil {

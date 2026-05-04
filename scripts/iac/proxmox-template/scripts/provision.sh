@@ -92,15 +92,15 @@ mkdir -p "$HOME/images"
 ARCH=$(dpkg --print-architecture)
 IMAGE_URL=""
 if [ "$ARCH" = "amd64" ]; then
-    IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+    IMAGE_URL="https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img"
 elif [ "$ARCH" = "arm64" ]; then
-    IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"
+    IMAGE_URL="https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-arm64.img"
 fi
 
 if [ -n "$IMAGE_URL" ]; then
-    echo "  Downloading Ubuntu 24.04 cloud image ($ARCH)..."
-    curl -L -o "$HOME/images/ubuntu-24.04.img" "$IMAGE_URL"
-    echo "  Saved to ~/images/ubuntu-24.04.img"
+    echo "  Downloading Ubuntu 26.04 cloud image ($ARCH)..."
+    curl -L -o "$HOME/images/ubuntu-26.04.img" "$IMAGE_URL"
+    echo "  Saved to ~/images/ubuntu-26.04.img"
 else
     echo "  Unknown arch ($ARCH), skipping cloud image download"
 fi

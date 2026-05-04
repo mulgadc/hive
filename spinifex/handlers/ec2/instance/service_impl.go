@@ -231,17 +231,15 @@ type InstanceServiceImpl struct {
 	config        *config.Config
 	instanceTypes map[string]*ec2.InstanceTypeInfo
 	natsConn      *nats.Conn
-	instances     *vm.Instances
 	objectStore   objectstore.ObjectStore
 }
 
 // NewInstanceServiceImpl creates a new instance service implementation for daemon use
-func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.InstanceTypeInfo, nc *nats.Conn, instances *vm.Instances, store objectstore.ObjectStore) *InstanceServiceImpl {
+func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.InstanceTypeInfo, nc *nats.Conn, store objectstore.ObjectStore) *InstanceServiceImpl {
 	return &InstanceServiceImpl{
 		config:        cfg,
 		instanceTypes: instanceTypes,
 		natsConn:      nc,
-		instances:     instances,
 		objectStore:   store,
 	}
 }

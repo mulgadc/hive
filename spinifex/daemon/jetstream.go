@@ -390,11 +390,8 @@ func (m *JetStreamManager) WriteServiceManifest(nodeID string, services []string
 }
 
 // WriteState writes the instance state to the KV store for the given node.
-// It acquires instances.Mu internally.
-func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) error {
-	instances.Mu.Lock()
-	defer instances.Mu.Unlock()
-
+// vms must be a snapshot owned by the caller — JetStreamManager does not lock.
+func (m *JetStreamManager) WriteState(nodeID string, vms map[string]*vm.VM) error {
 	if m.kv == nil {
 		return errors.New("KV bucket not initialized")
 	}
@@ -403,7 +400,7 @@ func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) er
 	state := struct {
 		VMS map[string]*vm.VM `json:"vms"`
 	}{
-		VMS: instances.VMS,
+		VMS: vms,
 	}
 
 	jsonData, err := json.Marshal(state)
@@ -423,18 +420,19 @@ func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) er
 			if _, retryErr := kv.Put(key, jsonData); retryErr != nil {
 				return retryErr
 			}
-			slog.Debug("Wrote state to JetStream KV (after recovery)", "key", key, "instances", len(instances.VMS))
+			slog.Debug("Wrote state to JetStream KV (after recovery)", "key", key, "instances", len(vms))
 			return nil
 		}
 		return err
 	}
 
-	slog.Debug("Wrote state to JetStream KV", "key", key, "instances", len(instances.VMS))
+	slog.Debug("Wrote state to JetStream KV", "key", key, "instances", len(vms))
 	return nil
 }
 
-// LoadState loads the instance state from the KV store for the given node
-func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
+// LoadState loads the instance state from the KV store for the given node.
+// Returns an empty (non-nil) map when no state exists for the node.
+func (m *JetStreamManager) LoadState(nodeID string) (map[string]*vm.VM, error) {
 	if m.kv == nil {
 		return nil, errors.New("KV bucket not initialized")
 	}
@@ -444,7 +442,7 @@ func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			slog.Debug("No existing state in JetStream KV, returning empty state", "key", key)
-			return &vm.Instances{VMS: make(map[string]*vm.VM)}, nil
+			return make(map[string]*vm.VM), nil
 		}
 		if isStreamUnavailable(err) {
 			slog.Warn("KV stream unavailable, attempting recovery", "operation", "LoadState", "key", key, "err", err)
@@ -457,7 +455,7 @@ func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
 			if err != nil {
 				if errors.Is(err, nats.ErrKeyNotFound) {
 					slog.Warn("No state found after KV recovery", "key", key)
-					return &vm.Instances{VMS: make(map[string]*vm.VM)}, nil
+					return make(map[string]*vm.VM), nil
 				}
 				return nil, err
 			}
@@ -467,18 +465,18 @@ func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
 		}
 	}
 
-	var instances vm.Instances
-	if err := json.Unmarshal(entry.Value(), &instances); err != nil {
+	var state struct {
+		VMS map[string]*vm.VM `json:"vms"`
+	}
+	if err := json.Unmarshal(entry.Value(), &state); err != nil {
 		return nil, err
 	}
-
-	// Ensure the VMS map is initialized
-	if instances.VMS == nil {
-		instances.VMS = make(map[string]*vm.VM)
+	if state.VMS == nil {
+		state.VMS = make(map[string]*vm.VM)
 	}
 
-	slog.Debug("Loaded state from JetStream KV", "key", key, "instances", len(instances.VMS))
-	return &instances, nil
+	slog.Debug("Loaded state from JetStream KV", "key", key, "instances", len(state.VMS))
+	return state.VMS, nil
 }
 
 // DeleteState removes the instance state from the KV store for the given node

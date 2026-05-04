@@ -621,10 +621,14 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         echo "  SSH via public IP: $SSH_HOST:$SSH_PORT"
     else
         SSH_HOST="$host_ip"
-        SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 10)
+        # set -e would abort on $() returning non-zero, hiding the diagnostic below
+        if ! SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 30); then
+            SSH_PORT=""
+        fi
         SSH_KEY="$HOME/.ssh/spinifex-key"
         if [ -z "$SSH_PORT" ]; then
             echo "  ERROR: Failed to get SSH port for $instance_id on $host_ip"
+            dump_guest_ssh_diagnostics "$instance_id" "$host_ip" "$SSH_HOST" ""
             fail_test "Guest SSH ($instance_id)"
             continue
         fi

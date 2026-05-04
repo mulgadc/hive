@@ -58,7 +58,7 @@ Deploy two Nginx web servers behind an internet-facing Application Load Balancer
 | Elastic IP | `nginx-alb-nat-eip` | Public address for the NAT Gateway |
 | NAT Gateway | `nginx-alb-nat` | Outbound internet for the private subnets (cloud-init apt bootstrap) |
 | Security Group | `nginx-alb-sg` | Allows SSH (22) and HTTP (80) inbound |
-| EC2 Instances | `nginx-alb-1`, `nginx-alb-2` | Ubuntu 24.04 with Nginx via cloud-init (private subnets) |
+| EC2 Instances | `nginx-alb-1`, `nginx-alb-2` | Ubuntu 26.04 with Nginx via cloud-init (private subnets) |
 | ALB | `nginx-alb` | Internet-facing Application Load Balancer on port 80 |
 | Target Group | `nginx-alb-tg` | HTTP health-checked group for both instances |
 | Listener | HTTP :80 | Forwards traffic to the target group |
@@ -66,7 +66,7 @@ Deploy two Nginx web servers behind an internet-facing Application Load Balancer
 **Prerequisites:**
 
 - Spinifex installed and running (see [Installing Spinifex](/docs/install))
-- An Ubuntu 24.04 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
+- An Ubuntu 26.04 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
 
 ## Instructions
@@ -96,10 +96,10 @@ spx admin images import --name lb-alpine-3.21.6-x86_64
 
 ### Step 2.1 Install Debian AMI
 
-Next, install the Debian 12 AMI which is used in the example to host the `nginx` webservers as an EC2 instance.
+Next, install the Debian 13 AMI which is used in the example to host the `nginx` webservers as an EC2 instance.
 
 ```bash
-spx admin images import --name debian-12-x86_64
+spx admin images import --name debian-13-x86_64
 ```
 
 ### Step 3. Deploy
@@ -184,7 +184,7 @@ tofu destroy
 
 ### AMI Not Found
 
-Ensure you have imported an Ubuntu 24.04 image. Check available AMIs:
+Ensure you have imported an Ubuntu 26.04 image. Check available AMIs:
 
 ```bash
 aws ec2 describe-images --owners 000000000000 --profile spinifex
@@ -193,7 +193,7 @@ aws ec2 describe-images --owners 000000000000 --profile spinifex
 If missing import:
 
 ```bash
-spx admin images import --name ubuntu-24.04-x86_64
+spx admin images import --name ubuntu-26.04-x86_64
 ```
 
 ### Provider Connection Refused

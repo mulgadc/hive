@@ -22,6 +22,7 @@ resources:
 ## Table of Contents
 
 - [Overview](#overview)
+- [Prerequisites](#prerequisites)
 - [Instructions](#instructions)
 - [Troubleshooting](#troubleshooting)
 
@@ -36,6 +37,22 @@ A Spinifex cluster distributes services across multiple servers for high availab
 - Minimum 1 NIC per server (2 recommended for production)
 - UDP port 6081 open between hosts (Geneve tunnels)
 - TCP ports 4222, 4248, 6641, 6642 open between hosts (NATS, OVN)
+
+## Prerequisites
+
+> [!IMPORTANT]
+> **Prerequisite — WAN bridge required on every node.**
+>
+> Before running the installer on any server, that server's WAN interface **must** already be enslaved to a Linux bridge named `br-wan`. The host IP, default route, and DHCP must all live on the bridge — not on the bare NIC.
+>
+> The bootstrap installer does **not** create this bridge for you yet. Running it on a host whose default route is still on a bare NIC will leave the install in a non-working state. Auto-provisioning of `br-wan` will land in the next release.
+>
+> **Verify on every node before continuing:**
+>
+> - `ip -br link show br-wan` — bridge exists and is `UP`
+> - `ip route` — default route's `dev` is `br-wan`
+>
+> **Setup references:** [VPC Networking → Bridge Setup](/docs/vpc-networking#bridge-setup-physical-network-wiring) for the topology.
 
 ## Instructions
 

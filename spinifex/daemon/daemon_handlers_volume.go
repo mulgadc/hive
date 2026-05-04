@@ -36,9 +36,8 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	device := command.AttachVolumeData.Device
 
 	// Validate instance is running
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Error("AttachVolume: instance not running", "instanceId", command.ID, "status", status)
@@ -82,9 +81,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 
 	// Determine device name
 	if device == "" {
-		d.Instances.Mu.Lock()
-		device = nextAvailableDevice(instance)
-		d.Instances.Mu.Unlock()
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { device = nextAvailableDevice(v) })
 		if device == "" {
 			slog.Error("AttachVolume: no available device names")
 			respondWithError(msg, awserrors.ErrorAttachmentLimitExceeded)
@@ -265,8 +262,10 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	instance.EBSRequests.Mu.Unlock()
 
 	// Update BlockDeviceMappings on the ec2.Instance using actual guest device name
-	d.Instances.Mu.Lock()
-	if instance.Instance != nil {
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		if v.Instance == nil {
+			return
+		}
 		now := time.Now()
 		mapping := &ec2.InstanceBlockDeviceMapping{}
 		mapping.SetDeviceName(guestDevice)
@@ -275,9 +274,8 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 		mapping.Ebs.SetAttachTime(now)
 		mapping.Ebs.SetDeleteOnTermination(false)
 		mapping.Ebs.SetStatus("attached")
-		instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
-	}
-	d.Instances.Mu.Unlock()
+		v.Instance.BlockDeviceMappings = append(v.Instance.BlockDeviceMappings, mapping)
+	})
 
 	// Update volume metadata in S3
 	if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, guestDevice); err != nil {
@@ -313,9 +311,8 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	force := command.DetachVolumeData.Force
 
 	// Validate instance is running
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Error("DetachVolume: instance not running", "instanceId", command.ID, "status", status)
@@ -424,18 +421,19 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	instance.EBSRequests.Mu.Unlock()
 
 	// Remove from BlockDeviceMappings
-	d.Instances.Mu.Lock()
-	if instance.Instance != nil {
-		filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(instance.Instance.BlockDeviceMappings))
-		for _, bdm := range instance.Instance.BlockDeviceMappings {
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		if v.Instance == nil {
+			return
+		}
+		filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(v.Instance.BlockDeviceMappings))
+		for _, bdm := range v.Instance.BlockDeviceMappings {
 			if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
 				continue
 			}
 			filtered = append(filtered, bdm)
 		}
-		instance.Instance.BlockDeviceMappings = filtered
-	}
-	d.Instances.Mu.Unlock()
+		v.Instance.BlockDeviceMappings = filtered
+	})
 
 	// Update volume metadata to "available"
 	if err := d.volumeService.UpdateVolumeState(volumeID, "available", "", ""); err != nil {

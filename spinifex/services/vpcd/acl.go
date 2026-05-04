@@ -24,6 +24,10 @@ func portGroupName(groupId string) string {
 // BuildIngressACLMatch generates an OVN ACL match expression for an ingress rule.
 // Ingress rules use "outport == @{pgName}" because OVN ACLs with direction "to-lport"
 // match on the destination port (outport from the pipeline's perspective).
+//
+// Tenant-supplied CidrIp/SourceSG values MUST be validated by the handler before
+// reaching this builder (see ec2/vpc/security_group.go ipPermissionsToSGRules). This
+// builder interpolates them verbatim.
 func BuildIngressACLMatch(pgName string, rule SGRuleForACL) string {
 	parts := []string{fmt.Sprintf("outport == @%s", pgName), "ip4"}
 

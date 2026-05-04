@@ -7,9 +7,9 @@ export AWS_PROFILE=spinifex
 
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64)            IMAGE_NAME="ami-ubuntu-24.04-x86_64" ;;
-    aarch64|arm64)     IMAGE_NAME="ami-ubuntu-24.04-arm64" ;;
-    *)                 echo "Unknown arch $ARCH, default x86_64"; IMAGE_NAME="ami-ubuntu-24.04-x86_64" ;;
+    x86_64)            IMAGE_NAME="ami-ubuntu-26.04-x86_64" ;;
+    aarch64|arm64)     IMAGE_NAME="ami-ubuntu-26.04-arm64" ;;
+    *)                 echo "Unknown arch $ARCH, default x86_64"; IMAGE_NAME="ami-ubuntu-26.04-x86_64" ;;
 esac
 
 INSTANCE_TYPE=$(aws ec2 describe-instance-types \
