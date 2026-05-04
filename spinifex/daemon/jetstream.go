@@ -445,6 +445,18 @@ func (m *JetStreamManager) WriteStateBestEffort(nodeID string, vms map[string]*v
 		return
 	}
 
+	m.WriteStateBytesBestEffort(nodeID, jsonData, timeout)
+}
+
+// WriteStateBytesBestEffort behaves like WriteStateBestEffort but accepts
+// pre-marshalled JSON. Used by hot paths that marshal under a short-lived lock
+// and commit lock-free.
+func (m *JetStreamManager) WriteStateBytesBestEffort(nodeID string, jsonData []byte, timeout time.Duration) {
+	if m.kv == nil {
+		slog.Debug("KV bucket not initialized, skipping cluster sync", "node", nodeID)
+		return
+	}
+
 	key := InstanceStatePrefix + nodeID
 	done := make(chan error, 1)
 	go func() {
@@ -458,7 +470,7 @@ func (m *JetStreamManager) WriteStateBestEffort(nodeID string, vms map[string]*v
 			slog.Warn("KV sync failed (best-effort)", "key", key, "err", putErr)
 			return
 		}
-		slog.Debug("Wrote state to KV (best-effort)", "key", key, "instances", len(vms))
+		slog.Debug("Wrote state to KV (best-effort)", "key", key, "bytes", len(jsonData))
 	case <-time.After(timeout):
 		slog.Warn("KV sync timed out (best-effort)", "key", key, "timeout", timeout)
 	}

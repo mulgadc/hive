@@ -46,24 +46,43 @@ func LocalStatePath(dataDir string) string {
 	return filepath.Join(dataDir, DefaultLocalStateDir, LocalStateFileName)
 }
 
+// MarshalLocalState produces the JSON wire form of vms wrapped with the schema
+// version. Callers that already hold a stable view of vms (e.g. inside a
+// vm.Manager.View callback) can marshal under the lock and pass the bytes to
+// WriteLocalStateBytes — that avoids racing json.Marshal against concurrent
+// VM-field mutations.
+func MarshalLocalState(vms map[string]*vm.VM) ([]byte, error) {
+	state := LocalState{
+		SchemaVersion: LocalStateSchemaVersion,
+		VMS:           vms,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("marshal local state: %w", err)
+	}
+	return data, nil
+}
+
 // WriteLocalState atomically writes the instance state to path. vms must be a
 // snapshot owned by the caller (e.g. from vm.Manager.SnapshotMap) — this
-// function does not lock.
+// function does not lock. Convenience wrapper around MarshalLocalState +
+// WriteLocalStateBytes for callers that own an exclusive snapshot.
 //
 // Atomicity: marshal → write to <path>.tmp → fsync → rename. The rename is
 // atomic on POSIX so a concurrent reader sees either the old file or the new
 // one, never a half-written file.
 func WriteLocalState(path string, vms map[string]*vm.VM) error {
-	state := LocalState{
-		SchemaVersion: LocalStateSchemaVersion,
-		VMS:           vms,
-	}
-
-	data, err := json.Marshal(state)
+	data, err := MarshalLocalState(vms)
 	if err != nil {
-		return fmt.Errorf("marshal local state: %w", err)
+		return err
 	}
+	return WriteLocalStateBytes(path, data)
+}
 
+// WriteLocalStateBytes atomically writes pre-marshalled state JSON to path.
+// Used by hot paths that marshal under a short-lived lock and then commit to
+// disk lock-free.
+func WriteLocalStateBytes(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)

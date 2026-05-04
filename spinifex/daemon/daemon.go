@@ -187,6 +187,10 @@ type Daemon struct {
 	// /local/status endpoint added in 1b.
 	natsRetryCount atomic.Int64
 
+	// stateRevision is bumped on every successful local-state write. Surfaced
+	// via /local/status so observers can detect changes without diffing payloads.
+	stateRevision atomic.Uint64
+
 	mu sync.Mutex
 }
 
@@ -214,6 +218,12 @@ func (d *Daemon) Mode() string {
 // since process start.
 func (d *Daemon) NATSRetryCount() int64 {
 	return d.natsRetryCount.Load()
+}
+
+// Revision returns the local-state revision counter. Bumped on every successful
+// WriteState; observers can detect changes without diffing the full payload.
+func (d *Daemon) Revision() uint64 {
+	return d.stateRevision.Load()
 }
 
 // onNATSDisconnect runs when the NATS client loses its connection. Flips the
@@ -1544,6 +1554,8 @@ func (d *Daemon) ClusterManager() error {
 		}
 	})
 
+	d.registerLocalRoutes(r)
+
 	// Load TLS certificate (C-5: serve over HTTPS instead of plaintext HTTP)
 	// Resolve relative cert paths against config directory (cert lives alongside spinifex.toml).
 	// For binary installs, systemd sets absolute paths via env vars; for dev, the config
@@ -1611,17 +1623,35 @@ func (d *Daemon) localStatePath() string {
 // JetStream KV is best-effort cluster cache. The local write is fatal on
 // failure; KV failures are logged and swallowed so partition-time clients
 // never see "KV down" errors.
+//
+// Both wire forms are marshalled inside vmMgr.View so json.Marshal sees a
+// stable VM-field snapshot. Marshaling outside the lock would race against
+// concurrent TransitionState writers under the data race detector.
 func (d *Daemon) WriteState() error {
-	vms := d.vmMgr.SnapshotMap()
+	var (
+		localData, kvData []byte
+		marshalErr        error
+	)
+	d.vmMgr.View(func(vms map[string]*vm.VM) {
+		localData, marshalErr = MarshalLocalState(vms)
+		if marshalErr != nil {
+			return
+		}
+		kvData, marshalErr = marshalInstanceState(vms)
+	})
+	if marshalErr != nil {
+		return fmt.Errorf("marshal state: %w", marshalErr)
+	}
 
 	path := d.localStatePath()
-	if err := WriteLocalState(path, vms); err != nil {
+	if err := WriteLocalStateBytes(path, localData); err != nil {
 		slog.Error("Local state write failed", "path", path, "error", err)
 		return fmt.Errorf("write local state: %w", err)
 	}
+	d.stateRevision.Add(1)
 
 	if d.jsManager != nil {
-		d.jsManager.WriteStateBestEffort(d.node, vms, kvSyncTimeout)
+		d.jsManager.WriteStateBytesBestEffort(d.node, kvData, kvSyncTimeout)
 	}
 
 	return nil
