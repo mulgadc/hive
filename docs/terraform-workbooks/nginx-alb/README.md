@@ -96,10 +96,10 @@ spx admin images import --name lb-alpine-3.21.6-x86_64
 
 ### Step 2.1 Install Debian AMI
 
-Next, install the Debian 12 AMI which is used in the example to host the `nginx` webservers as an EC2 instance.
+Next, install the Debian 13 AMI which is used in the example to host the `nginx` webservers as an EC2 instance.
 
 ```bash
-spx admin images import --name debian-12-x86_64
+spx admin images import --name debian-13-x86_64
 ```
 
 ### Step 3. Deploy

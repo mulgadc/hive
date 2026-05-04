@@ -31,7 +31,7 @@ This directory contains OpenTofu/Terraform configuration files for deploying inf
    ```
 
 4. **AMI available**
-   Before running, ensure you have a Debian 12 AMI imported:
+   Before running, ensure you have a Debian 13 AMI imported:
    ```bash
    # Import an AMI using the spinifex CLI or aws CLI
    aws --endpoint-url http://localhost:8080 ec2 describe-images
@@ -105,7 +105,7 @@ The `main.tf` creates:
 4. **Route Table** - Routes `0.0.0.0/0` through IGW
 5. **Security Group** - Allows SSH (22), HTTP (80), HTTPS (443) inbound
 6. **Placement Group** - Spread strategy for HA
-7. **3 EC2 Instances** - t3.small Debian 12 VMs
+7. **3 EC2 Instances** - t3.small Debian 13 VMs
 8. **SSH Key Pair** - ED25519 key saved to `spinifex-test.pem`
 
 ## SSH Access
@@ -133,7 +133,7 @@ export AWS_SECRET_ACCESS_KEY=your_secret
 
 ### "Error: No AMI found"
 
-Import a Debian 12 AMI first, or modify `main.tf` to use a different AMI filter.
+Import a Debian 13 AMI first, or modify `main.tf` to use a different AMI filter.
 
 ### Connection refused
 

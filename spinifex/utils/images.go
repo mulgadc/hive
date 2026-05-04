@@ -275,31 +275,31 @@ type Images struct {
 
 var AvailableImages = map[string]Images{
 
-	"debian-12-x86_64": {
-		Name:         "debian-12-x86_64",
-		Description:  "Debian 12 (Bookworm) x86_64 cloud image",
+	"debian-13-x86_64": {
+		Name:         "debian-13-x86_64",
+		Description:  "Debian 13 (Trixie) x86_64 cloud image",
 		Distro:       "debian",
-		Version:      "12",
+		Version:      "13",
 		Arch:         "x86_64",
 		Platform:     "Linux/UNIX",
-		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-		URL:          "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-amd64.tar.xz",
-		Checksum:     "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/SHA512SUMS",
+		CreatedAt:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		URL:          "https://cloud.debian.org/images/cloud/trixie/20260501-2465/debian-13-genericcloud-amd64-20260501-2465.tar.xz",
+		Checksum:     "https://cloud.debian.org/images/cloud/trixie/20260501-2465/SHA512SUMS",
 		ChecksumType: "sha512",
 		BootMode:     "bios",
 		Starred:      true,
 	},
 
-	"debian-12-arm64": {
-		Name:         "debian-12-arm64",
-		Description:  "Debian 12 (Bookworm) arm64 cloud image",
+	"debian-13-arm64": {
+		Name:         "debian-13-arm64",
+		Description:  "Debian 13 (Trixie) arm64 cloud image",
 		Distro:       "debian",
-		Version:      "12",
+		Version:      "13",
 		Arch:         "arm64",
 		Platform:     "Linux/UNIX",
-		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-		URL:          "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz",
-		Checksum:     "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/SHA512SUMS",
+		CreatedAt:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		URL:          "https://cloud.debian.org/images/cloud/trixie/20260501-2465/debian-13-genericcloud-arm64-20260501-2465.tar.xz",
+		Checksum:     "https://cloud.debian.org/images/cloud/trixie/20260501-2465/SHA512SUMS",
 		ChecksumType: "sha512",
 		BootMode:     "bios",
 		Starred:      true,

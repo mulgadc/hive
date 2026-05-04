@@ -199,13 +199,13 @@ spx admin images list
 - fetches from remote endpoint for common/trusted images to bootstrap environment, or baked in from compile.
 
 // If --name specified, download
-spx admin images import --name debian-12-x86_64
+spx admin images import --name debian-13-x86_64
 
 // List available images
 spx admin images list
 
 // Manually import a path
-spx admin images import --file /path/to/image --distro debian --version 12 --arch x86_64
+spx admin images import --file /path/to/image --distro debian --version 13 --arch x86_64
 
 -> x <-
 */

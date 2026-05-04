@@ -865,11 +865,11 @@ func TestDescribeImages_FilterBy(t *testing.T) {
 		{
 			name: "name",
 			setup: func(t *testing.T, store *objectstore.MemoryObjectStore) {
-				createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+				createTestAMIConfigWithName(t, store, "ami-aaa", "debian-13")
 				createTestAMIConfigWithName(t, store, "ami-bbb", "ubuntu-22")
 			},
 			input: &ec2.DescribeImagesInput{Filters: []*ec2.Filter{
-				{Name: aws.String("name"), Values: []*string{aws.String("debian-12")}},
+				{Name: aws.String("name"), Values: []*string{aws.String("debian-13")}},
 			}},
 			wantIDs: []string{"ami-aaa"},
 		},
@@ -986,13 +986,13 @@ func TestDescribeImages_FilterBy(t *testing.T) {
 
 func TestDescribeImages_FilterMultipleValues_OR(t *testing.T) {
 	svc, store := setupTestImageService(t)
-	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-13")
 	createTestAMIConfigWithName(t, store, "ami-bbb", "ubuntu-22")
 	createTestAMIConfigWithName(t, store, "ami-ccc", "centos-9")
 
 	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		Filters: []*ec2.Filter{
-			{Name: aws.String("name"), Values: []*string{aws.String("debian-12"), aws.String("centos-9")}},
+			{Name: aws.String("name"), Values: []*string{aws.String("debian-13"), aws.String("centos-9")}},
 		},
 	}, testAccountID)
 	require.NoError(t, err)
@@ -1002,17 +1002,17 @@ func TestDescribeImages_FilterMultipleValues_OR(t *testing.T) {
 func TestDescribeImages_FilterMultipleNames_AND(t *testing.T) {
 	svc, store := setupTestImageService(t)
 	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
-		ImageID: "ami-match", Name: "debian-12", Architecture: "x86_64",
+		ImageID: "ami-match", Name: "debian-13", Architecture: "x86_64",
 		RootDeviceType: "ebs", VolumeSizeGiB: 8,
 	})
 	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
-		ImageID: "ami-nomatch", Name: "debian-12", Architecture: "arm64",
+		ImageID: "ami-nomatch", Name: "debian-13", Architecture: "arm64",
 		RootDeviceType: "ebs", VolumeSizeGiB: 8,
 	})
 
 	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		Filters: []*ec2.Filter{
-			{Name: aws.String("name"), Values: []*string{aws.String("debian-12")}},
+			{Name: aws.String("name"), Values: []*string{aws.String("debian-13")}},
 			{Name: aws.String("architecture"), Values: []*string{aws.String("x86_64")}},
 		},
 	}, testAccountID)
@@ -1049,7 +1049,7 @@ func TestDescribeImages_FilterWildcard(t *testing.T) {
 
 func TestDescribeImages_FilterNoResults(t *testing.T) {
 	svc, store := setupTestImageService(t)
-	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-13")
 
 	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		Filters: []*ec2.Filter{
@@ -1062,7 +1062,7 @@ func TestDescribeImages_FilterNoResults(t *testing.T) {
 
 func TestDescribeImages_FilterNoFilters(t *testing.T) {
 	svc, store := setupTestImageService(t)
-	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-13")
 	createTestAMIConfigWithName(t, store, "ami-bbb", "ubuntu-22")
 
 	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{}, testAccountID)

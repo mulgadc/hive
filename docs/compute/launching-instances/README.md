@@ -157,7 +157,7 @@ If the AMI is for a different architecture (e.g. arm64 on an x86_64 host), impor
 
 ```bash
 spx admin images list
-spx admin images import --name debian-12-x86_64
+spx admin images import --name debian-13-x86_64
 ```
 
 ### Cannot SSH Into Instance
