@@ -30,6 +30,7 @@ REBOOT_WAIT_SECS="${REBOOT_WAIT_SECS:-300}"
 DAEMON_READY_SECS="${DAEMON_READY_SECS:-180}"
 INSTANCE_RUNNING_SECS="${INSTANCE_RUNNING_SECS:-120}"
 LB_RECOVER_SECS="${LB_RECOVER_SECS:-180}"
+GUEST_SSH_SECS="${GUEST_SSH_SECS:-180}"
 
 NODE_KEY_PATH="\$HOME/reboot-e2e-key"
 NODE_USERDATA_PATH="\$HOME/reboot-e2e-userdata.txt"
@@ -484,13 +485,18 @@ if [ "$IPS_PRESERVED" = true ]; then
 fi
 
 # 8.3: guest VMs actually rebooted (uptime check via two-hop ssh)
-log "Verifying guest VMs rebooted (ssh into each guest from spinifex node)..."
+log "Verifying guest VMs rebooted (poll up to ${GUEST_SSH_SECS}s per guest)..."
 GUESTS_REBOOTED=true
 for inst_id in "${APP_INSTANCE_IDS[@]}"; do
     GUEST_IP="${PRE_INSTANCE_IPS[$inst_id]}"
-    GUEST_UPTIME=$(node_ssh "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR -i $NODE_KEY_PATH ubuntu@${GUEST_IP} 'cat /proc/uptime'" 2>/dev/null | awk '{print int($1)}')
+    GUEST_UPTIME=""
+    for attempt in $(seq 1 $((GUEST_SSH_SECS / 5))); do
+        GUEST_UPTIME=$(node_ssh "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR -i $NODE_KEY_PATH ubuntu@${GUEST_IP} 'cat /proc/uptime'" 2>/dev/null | awk '{print int($1)}')
+        if [ -n "$GUEST_UPTIME" ]; then break; fi
+        sleep 5
+    done
     if [ -z "$GUEST_UPTIME" ]; then
-        fail "$inst_id ($GUEST_IP): guest ssh failed"
+        fail "$inst_id ($GUEST_IP): guest ssh failed after ${GUEST_SSH_SECS}s"
         GUESTS_REBOOTED=false
     elif [ "$GUEST_UPTIME" -gt 600 ]; then
         fail "$inst_id ($GUEST_IP): uptime=${GUEST_UPTIME}s — guest did not reboot"
