@@ -36,8 +36,8 @@ This guide installs Spinifex on a single server using the binary installer. For 
 
 **Supported Operating Systems:**
 
-- Ubuntu 22.04 / 24.04 / 25.10
-- Debian 12 / 13
+- Ubuntu 26.04
+- Debian 13
 
 **What Gets Installed:**
 

@@ -6,12 +6,12 @@ export AWS_PROFILE=spinifex
 # Detect architecture
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
-    IMAGE_NAME="ami-ubuntu-24.04-x86_64"
+    IMAGE_NAME="ami-ubuntu-26.04-x86_64"
 elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    IMAGE_NAME="ami-ubuntu-24.04-arm64"
+    IMAGE_NAME="ami-ubuntu-26.04-arm64"
 else
     echo "Warning: Unknown architecture $ARCH, defaulting to x86_64"
-    IMAGE_NAME="ami-ubuntu-24.04-x86_64"
+    IMAGE_NAME="ami-ubuntu-26.04-x86_64"
 fi
 
 # Query available instance types from Spinifex and pick the first micro type

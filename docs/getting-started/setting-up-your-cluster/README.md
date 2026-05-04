@@ -61,20 +61,20 @@ NAME                    | DISTRO | VERSION | ARCH   | BOOT
 debian-13-arm64         | debian | 13      | arm64  | bios
 debian-13-x86_64        | debian | 13      | x86_64 | bios
 lb-alpine-3.21.6-x86_64 | alpine | 3.21.6  | x86_64 | bios
-ubuntu-24.04-arm64      | ubuntu | 24.04   | arm64  | bios
-ubuntu-24.04-x86_64     | ubuntu | 24.04   | x86_64 | bios
+ubuntu-26.04-arm64      | ubuntu | 26.04   | arm64  | bios
+ubuntu-26.04-x86_64     | ubuntu | 26.04   | x86_64 | bios
 ```
 
 Import an image:
 
 ```bash
-spx admin images import --name ubuntu-24.04-x86_64
+spx admin images import --name ubuntu-26.04-x86_64
 ```
 
 Or import a local image file:
 
 ```bash
-spx admin images import --file ~/images/ubuntu-24.04.img --distro ubuntu --version 24.04 --arch x86_64
+spx admin images import --file ~/images/ubuntu-26.04.img --distro ubuntu --version 26.04 --arch x86_64
 ```
 
 Verify the import and note the AMI ID:
@@ -173,7 +173,7 @@ Launch an instance in the public subnet, note this will select an instance type 
 > **Note:** Replace `AMI_NAME` with the previously imported image above with the `ami-` prefix.
 
 ```bash
-AMI_NAME="ami-ubuntu-24.04-x86_64"
+AMI_NAME="ami-ubuntu-26.04-x86_64"
 
 AMI_ID=$(aws ec2 describe-images \
   --filters "Name=name,Values=$AMI_NAME" \
