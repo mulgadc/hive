@@ -372,7 +372,10 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         echo "  SSH via public IP: $SSH_HOST:$SSH_PORT"
     else
         echo "  No public IP — using QEMU hostfwd for SSH"
-        SSH_PORT=$(get_ssh_port "$instance_id")
+        # set -e would abort on $() returning non-zero, hiding the diagnostic below
+        if ! SSH_PORT=$(get_ssh_port "$instance_id"); then
+            SSH_PORT=""
+        fi
         if [ -z "$SSH_PORT" ]; then
             echo "  ERROR: Failed to get SSH port for instance $instance_id"
             exit 1

@@ -123,24 +123,58 @@ func TestDiscoverChassis_EmptyOutput(t *testing.T) {
 	}
 }
 
-func TestDiscoverChassis_Error_FallsBackToConfig(t *testing.T) {
+// chassisDiscoveryOrFail mirrors the fail-start branch in launchService so the
+// contract is unit-testable without a full NATS + OVN NB stand-up. Any change
+// to the fail-start semantics must also update this helper (mulga-999).
+func chassisDiscoveryOrFail(sbAddr string) ([]string, error) {
+	names, err := discoverChassis(sbAddr)
+	if err != nil {
+		return nil, fmt.Errorf("vpcd: discover OVN chassis: %w", err)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("vpcd: no OVN chassis registered in SBDB — is ovn-controller running and connected?")
+	}
+	return names, nil
+}
+
+// TestLaunchService_FailsOnDiscoverChassisError pins the fail-start contract:
+// when the SBDB query errors, vpcd must surface a wrapped error rather than
+// guessing a chassis name (which is what the pre-mulga-999 fallback did).
+func TestLaunchService_FailsOnDiscoverChassisError(t *testing.T) {
 	orig := discoverChassis
 	defer func() { discoverChassis = orig }()
-
 	discoverChassis = func(sbAddr string) ([]string, error) {
 		return nil, fmt.Errorf("connection refused")
 	}
 
-	// Simulate the fallback logic from launchService
-	_, err := discoverChassis("")
+	_, err := chassisDiscoveryOrFail("")
 	if err == nil {
-		t.Fatal("expected error from discoverChassis")
+		t.Fatal("expected error to propagate from discoverChassis")
+	}
+	if !strings.Contains(err.Error(), "discover OVN chassis") {
+		t.Errorf("expected wrapped error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("expected underlying cause to be preserved, got: %v", err)
+	}
+}
+
+// TestLaunchService_FailsOnEmptyChassisDiscovery pins the no-fallback
+// contract: an empty SBDB chassis list (typical when ovn-controller hasn't
+// registered yet) must fail-start rather than silently bind nothing.
+func TestLaunchService_FailsOnEmptyChassisDiscovery(t *testing.T) {
+	orig := discoverChassis
+	defer func() { discoverChassis = orig }()
+	discoverChassis = func(sbAddr string) ([]string, error) {
+		return []string{}, nil
 	}
 
-	// Fallback to config (as launchService does)
-	chassisNames := []string{"chassis-node1"}
-	if len(chassisNames) != 1 || chassisNames[0] != "chassis-node1" {
-		t.Errorf("expected fallback to config names, got %v", chassisNames)
+	_, err := chassisDiscoveryOrFail("")
+	if err == nil {
+		t.Fatal("expected error when SBDB has zero chassis registered")
+	}
+	if !strings.Contains(err.Error(), "no OVN chassis registered") {
+		t.Errorf("expected fail-start message, got: %v", err)
 	}
 }
 
@@ -217,5 +251,213 @@ func TestPreflightOVN_BothFail_ReportsFirst(t *testing.T) {
 	// Should report br-int first (checked first)
 	if !strings.Contains(err.Error(), "br-int") {
 		t.Errorf("expected first error to mention br-int, got: %v", err)
+	}
+}
+
+// verifyBridgeMode is the post-detect sanity check — mulga-998.b Fix 2.
+// portToBr and readLinkMaster are injected for tests.
+
+func stubBridgeProbes(t *testing.T, ovsPorts map[string]string, links map[string]string) {
+	t.Helper()
+	origPort := portToBr
+	origLink := readLinkMaster
+	t.Cleanup(func() {
+		portToBr = origPort
+		readLinkMaster = origLink
+	})
+	portToBr = func(port string) (string, error) {
+		br, ok := ovsPorts[port]
+		if !ok {
+			return "", fmt.Errorf("no port named %q", port)
+		}
+		return br, nil
+	}
+	readLinkMaster = func(iface string) (string, error) {
+		m, ok := links[iface]
+		if !ok {
+			return "", fmt.Errorf("no link named %q", iface)
+		}
+		return m, nil
+	}
+}
+
+func TestVerifyBridgeMode_DirectOK(t *testing.T) {
+	stubBridgeProbes(t, map[string]string{"enp0s3": "br-wan"}, nil)
+	if err := verifyBridgeMode(BridgeModeDirect, "enp0s3", "br-wan"); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_DirectMismatch(t *testing.T) {
+	stubBridgeProbes(t, map[string]string{"enp0s3": "br-wan"}, nil)
+	err := verifyBridgeMode(BridgeModeDirect, "enp0s3", "br-ext")
+	if err == nil || !strings.Contains(err.Error(), "br-ext") {
+		t.Fatalf("expected mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_DirectMissingNIC(t *testing.T) {
+	stubBridgeProbes(t, map[string]string{}, nil)
+	err := verifyBridgeMode(BridgeModeDirect, "enp0s3", "br-wan")
+	if err == nil {
+		t.Fatal("expected error when WAN NIC not in OVSDB")
+	}
+}
+
+func TestVerifyBridgeMode_VethOK(t *testing.T) {
+	stubBridgeProbes(t,
+		map[string]string{"veth-wan-ovs": OvnExternalBridge},
+		map[string]string{"veth-wan-br": "br-wan"})
+	if err := verifyBridgeMode(BridgeModeVeth, "", "br-wan"); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethMissingOvsPort(t *testing.T) {
+	stubBridgeProbes(t, map[string]string{}, map[string]string{"veth-wan-br": "br-wan"})
+	err := verifyBridgeMode(BridgeModeVeth, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), "veth-wan-ovs") {
+		t.Fatalf("expected veth-wan-ovs error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethWrongOvsBridge(t *testing.T) {
+	stubBridgeProbes(t,
+		map[string]string{"veth-wan-ovs": "br-wan"},
+		map[string]string{"veth-wan-br": "br-wan"})
+	err := verifyBridgeMode(BridgeModeVeth, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), OvnExternalBridge) {
+		t.Fatalf("expected br-ext mismatch, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethWrongLinuxMaster(t *testing.T) {
+	stubBridgeProbes(t,
+		map[string]string{"veth-wan-ovs": OvnExternalBridge},
+		map[string]string{"veth-wan-br": "br-other"})
+	err := verifyBridgeMode(BridgeModeVeth, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), "br-other") {
+		t.Fatalf("expected master mismatch, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_UnknownModeLists(t *testing.T) {
+	err := verifyBridgeMode("macvlan", "enp0s3", "br-wan")
+	if err == nil {
+		t.Fatal("expected error for unsupported mode")
+	}
+	if !strings.Contains(err.Error(), BridgeModeDirect) || !strings.Contains(err.Error(), BridgeModeVeth) {
+		t.Errorf("expected error to list supported values, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_EmptyModeRejected(t *testing.T) {
+	err := verifyBridgeMode("", "", "")
+	if err == nil {
+		t.Fatal("expected error for empty mode (D12)")
+	}
+}
+
+func TestVerifyBridgeMode_DirectMissingExternalIface(t *testing.T) {
+	err := verifyBridgeMode(BridgeModeDirect, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), "external_interface") {
+		t.Fatalf("expected external_interface error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_DirectMissingBindBridge(t *testing.T) {
+	err := verifyBridgeMode(BridgeModeDirect, "enp0s3", "")
+	if err == nil || !strings.Contains(err.Error(), "dhcp_bind_bridge") {
+		t.Fatalf("expected dhcp_bind_bridge error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethMissingBindBridge(t *testing.T) {
+	err := verifyBridgeMode(BridgeModeVeth, "", "")
+	if err == nil || !strings.Contains(err.Error(), "dhcp_bind_bridge") {
+		t.Fatalf("expected dhcp_bind_bridge error, got: %v", err)
+	}
+}
+
+func TestVerifyBridgeMode_VethLinuxBrMissing(t *testing.T) {
+	stubBridgeProbes(t,
+		map[string]string{"veth-wan-ovs": OvnExternalBridge},
+		nil)
+	err := verifyBridgeMode(BridgeModeVeth, "", "br-wan")
+	if err == nil || !strings.Contains(err.Error(), "veth-wan-br") {
+		t.Fatalf("expected veth-wan-br error, got: %v", err)
+	}
+}
+
+// detectBridgeMode — mulga-998.b Fix 2.
+
+func stubDetectProbes(t *testing.T, macvlans []string, links []string) {
+	t.Helper()
+	origMac := ifaceIsMacvlan
+	origExists := ifaceExists
+	t.Cleanup(func() {
+		ifaceIsMacvlan = origMac
+		ifaceExists = origExists
+	})
+	macSet := map[string]bool{}
+	for _, m := range macvlans {
+		macSet[m] = true
+	}
+	linkSet := map[string]bool{}
+	for _, l := range links {
+		linkSet[l] = true
+	}
+	ifaceIsMacvlan = func(name string) bool { return macSet[name] }
+	ifaceExists = func(name string) bool { return linkSet[name] }
+}
+
+func TestDetectBridgeMode_MacvlanWins(t *testing.T) {
+	stubDetectProbes(t, []string{"spx-ext-enp0s3"}, []string{"veth-wan-ovs"})
+	if got := detectBridgeMode("enp0s3"); got != BridgeModeMacvlan {
+		t.Errorf("want %q, got %q", BridgeModeMacvlan, got)
+	}
+}
+
+func TestDetectBridgeMode_VethWhenNoMacvlan(t *testing.T) {
+	stubDetectProbes(t, nil, []string{"veth-wan-ovs"})
+	if got := detectBridgeMode("enp0s3"); got != BridgeModeVeth {
+		t.Errorf("want %q, got %q", BridgeModeVeth, got)
+	}
+}
+
+func TestDetectBridgeMode_FallthroughDirect(t *testing.T) {
+	stubDetectProbes(t, nil, nil)
+	if got := detectBridgeMode("enp0s3"); got != BridgeModeDirect {
+		t.Errorf("want %q, got %q", BridgeModeDirect, got)
+	}
+}
+
+func TestResolveBridgeConfig_UsesExplicitMode(t *testing.T) {
+	stubDetectProbes(t, nil, nil)
+	mode, br := resolveBridgeConfig(BridgeModeVeth, "enp0s3", "br-wan")
+	if mode != BridgeModeVeth || br != "br-wan" {
+		t.Errorf("got (%q,%q), want (%q,br-wan)", mode, br, BridgeModeVeth)
+	}
+}
+
+func TestResolveBridgeConfig_AutoDetects(t *testing.T) {
+	stubDetectProbes(t, nil, []string{"veth-wan-ovs"})
+	mode, _ := resolveBridgeConfig("", "enp0s3", "br-wan")
+	if mode != BridgeModeVeth {
+		t.Errorf("want auto-detect veth, got %q", mode)
+	}
+}
+
+func TestResolveBridgeConfig_EmptyStaysEmptyWithNoIface(t *testing.T) {
+	mode, _ := resolveBridgeConfig("", "", "")
+	if mode != "" {
+		t.Errorf("empty mode + no iface should stay empty (D12); got %q", mode)
+	}
+}
+
+func TestResolveBridgeConfig_DefaultsBindBridge(t *testing.T) {
+	_, br := resolveBridgeConfig(BridgeModeDirect, "enp0s3", "")
+	if br != "br-wan" {
+		t.Errorf("empty dhcp_bind_bridge should default to br-wan, got %q", br)
 	}
 }

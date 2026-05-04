@@ -22,6 +22,8 @@ type NATSInstanceService struct {
 	natsConn *nats.Conn
 }
 
+var _ InstanceService = (*NATSInstanceService)(nil)
+
 // NewNATSInstanceService creates a new NATS-based instance service
 func NewNATSInstanceService(conn *nats.Conn) InstanceService {
 	return &NATSInstanceService{natsConn: conn}

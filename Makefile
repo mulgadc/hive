@@ -49,8 +49,7 @@ else
   _SECQ  = 2>&1 | tee
 endif
 
-build:
-	$(MAKE) go_build
+build: go_build build-installer build-lb-agent
 
 # Build spinifex-ui frontend (requires pnpm)
 build-ui:
@@ -65,6 +64,10 @@ LDFLAGS := -s -w -X github.com/mulgadc/spinifex/cmd/spinifex/cmd.Version=$(VERSI
 go_build:
 	@echo -e "\n....Building $(GO_PROJECT_NAME)"
 	go build $(GO_BUILD_MOD) -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) cmd/spinifex/main.go
+
+build-installer:
+	@echo -e "\n....Building spinifex-installer"
+	go build -ldflags "-s -w" -o ./bin/spinifex-installer cmd/installer/main.go
 
 build-lb-agent:
 	@echo -e "\n....Building lb-agent (static)"
@@ -221,8 +224,23 @@ distro-arm64:
 distro-clean:
 	rm -rf dist/
 
-.PHONY: build build-ui build-lb-agent build-system-image build-lb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
+# Ansible dev lifecycle (experimental, parallel to dev-*.sh / reset-dev-env.sh).
+# See scripts/ansible/README.md and docs/development/improvements/ansible-dev-lifecycle.md.
+ansible-dev-preflight:
+	cd scripts/ansible && ansible-playbook playbooks/dev-preflight.yml
+
+ansible-dev-teardown:
+	cd scripts/ansible && ansible-playbook playbooks/dev-teardown.yml
+
+ansible-dev-install:
+	cd scripts/ansible && ansible-playbook playbooks/dev-install.yml
+
+ansible-dev-reset:
+	cd scripts/ansible && ansible-playbook playbooks/dev-reset.yml
+
+.PHONY: build build-ui build-installer build-lb-agent build-system-image build-lb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
 	deploy reinstall clean \
 	install-system install-go install-aws quickinstall \
 	lint fix govulncheck \
-	distro distro-amd64 distro-arm64 distro-clean
+	distro distro-amd64 distro-arm64 distro-clean \
+	ansible-dev-preflight ansible-dev-teardown ansible-dev-install ansible-dev-reset

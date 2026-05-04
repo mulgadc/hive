@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - "**/*.go"
       - go.mod
@@ -27,7 +28,7 @@ jobs:
   e2e_single:
     name: Single-Node E2E
     runs-on: [ self-hosted, ci-single ]
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
     steps:
@@ -41,24 +42,9 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
-      - name: Resolve Mulga Branch
-        id: mulga-branch
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
-            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
-            echo "mulga: using branch ${BRANCH}"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "mulga: branch ${BRANCH} not found, falling back to main"
-          fi
-
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
-          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
@@ -125,24 +111,9 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
-      - name: Resolve Mulga Branch
-        id: mulga-branch
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
-            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
-            echo "mulga: using branch ${BRANCH}"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "mulga: branch ${BRANCH} not found, falling back to main"
-          fi
-
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
-          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
@@ -204,24 +175,9 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
-      - name: Resolve Mulga Branch
-        id: mulga-branch
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
-            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
-            echo "mulga: using branch ${BRANCH}"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "mulga: branch ${BRANCH} not found, falling back to main"
-          fi
-
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
-          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga

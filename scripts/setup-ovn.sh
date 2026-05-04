@@ -26,7 +26,6 @@
 #   --no-mgmt-bridge     Skip mgmt bridge provisioning (for dev-networking hosts)
 #   --ovn-remote=ADDR    OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip=IP        Geneve tunnel endpoint IP (default: auto-detect)
-#   --chassis-id=ID      OVN chassis identifier (default: chassis-$(hostname -s))
 #
 # WAN Bridge Auto-Detection:
 #   When no --wan-bridge is given, the script checks the default route interface:
@@ -65,7 +64,6 @@ MGMT_CIDR="10.15.8.1/24"
 MGMT_IFACE=""
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
-CHASSIS_ID=""
 
 # Parse arguments
 for arg in "$@"; do
@@ -81,7 +79,6 @@ for arg in "$@"; do
         --no-mgmt-bridge)   MGMT_BRIDGE_ENABLED=false ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
         --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
-        --chassis-id=*)     CHASSIS_ID="${arg#*=}" ;;
         --help|-h)
             head -50 "$0" | tail -48
             exit 0
@@ -210,12 +207,6 @@ if [ -z "$ENCAP_IP" ]; then
     fi
 fi
 
-# Auto-detect chassis ID if not specified
-if [ -z "$CHASSIS_ID" ]; then
-    CHASSIS_ID="chassis-$(hostname -s)"
-    echo "Auto-detected chassis ID: $CHASSIS_ID"
-fi
-
 echo "=== Spinifex OVN Compute Node Setup ==="
 echo "  Management node:  $MANAGEMENT"
 if [ -n "$WAN_BRIDGE" ]; then
@@ -231,7 +222,6 @@ else
 fi
 echo "  OVN Remote (SB):  $OVN_REMOTE"
 echo "  Encap IP:         $ENCAP_IP"
-echo "  Chassis ID:       $CHASSIS_ID"
 echo ""
 
 # --- Step 1: Install packages ---
@@ -300,10 +290,45 @@ sudo ovs-vsctl set Bridge br-int other-config:disable-in-band=true
 sudo ip link set br-int up
 echo "  br-int: created, fail-mode=secure, up"
 
+# Mark OVS internal netdevs Unmanaged for systemd-networkd. Without this,
+# Trixie's networkd takes ownership of any unconfigured iface and may bring
+# br-int/br-ext admin-down after setup-ovn.sh's `ip link set up` (no Match
+# rule => default management => no carrier => link down). OVS dataplane
+# still forwards, but ovn-controller flow programming and any tooling that
+# probes link state misbehave. Unmanaged=yes keeps OVS in sole control.
+# (mulga-siv-37)
+OVS_INTERNAL_NET=/etc/systemd/network/05-spinifex-ovs-internal.network
+if [ ! -f "$OVS_INTERNAL_NET" ]; then
+    sudo tee "$OVS_INTERNAL_NET" >/dev/null <<'NETWORK'
+[Match]
+Name=br-int br-ext
+
+[Link]
+Unmanaged=yes
+NETWORK
+    sudo networkctl reload 2>/dev/null || true
+    echo "  wrote $OVS_INTERNAL_NET (Unmanaged=yes for br-int br-ext)"
+fi
+
 # --- Step 3b: Configure WAN bridge for public subnet uplink ---
 if [ -n "$WAN_BRIDGE" ]; then
     echo ""
     echo "Step 3b: Configuring WAN bridge ($WAN_BRIDGE) for public subnet uplink..."
+
+    # Rip down any stale veth persistence from a previous veth-mode install
+    # when switching to any non-veth mode. Idempotent — each command uses
+    # --if-exists / 2>/dev/null to tolerate absence. Without this, the
+    # veth pair re-materialises on reboot and fights the current mode's
+    # bridge plumbing (Fix 1, mulga-998.b, per D17).
+    if [ "$WAN_BRIDGE_MODE" != "veth" ]; then
+        sudo rm -f /etc/systemd/network/14-spinifex-br-wan.netdev \
+                   /etc/systemd/network/15-spinifex-veth-wan.netdev \
+                   /etc/systemd/network/15-spinifex-veth-wan.network \
+                   /etc/systemd/network/16-spinifex-veth-wan-ovs.network
+        sudo networkctl reload 2>/dev/null || true
+        sudo ovs-vsctl --if-exists del-port "$WAN_BRIDGE" veth-wan-ovs
+        sudo ip link del veth-wan-br 2>/dev/null || true
+    fi
 
     case "$WAN_BRIDGE_MODE" in
         existing)
@@ -357,6 +382,75 @@ if [ -n "$WAN_BRIDGE" ]; then
 
             echo "  $LINUX_BRIDGE (Linux) ↔ veth pair ↔ $WAN_BRIDGE (OVS)"
             echo "  $LINUX_BRIDGE keeps its IP and routes — no interruption"
+
+            # Persist the veth pair across reboot via systemd-networkd. Veths
+            # are kernel-only and vanish on reboot; without persistence vpcd
+            # starts with the OVS port pointing at a nonexistent peer and
+            # silently falls back to direct mode (Fix 1, mulga-998.b).
+            #
+            # networkd's Bridge= directive requires the target bridge to be a
+            # known NetDev. On ISO-installed nodes the installer writes
+            # 11-spinifex-br-wan.netdev, which the gate below detects and
+            # skips this write. On binary-installed nodes where the operator
+            # manages br-wan outside networkd (e.g. cloud-init), this file
+            # fills the gap so veth-wan-br resolves its bridge on reboot.
+            # `Failed to create netdev: File exists` is harmless — networkd
+            # matches the existing kernel bridge by name+kind.
+            #
+            # Gate: skip the write if any .netdev (installer, cloud-init,
+            # netplan, manual) already declares this bridge — don't clobber
+            # existing networkd config. networkd searches /etc, /run, /usr/lib;
+            # check all three. Our own file is excluded so idempotent re-runs
+            # still rewrite when needed.
+            BR_WAN_NETDEV="/etc/systemd/network/14-spinifex-br-wan.netdev"
+            VETH_NETDEV="/etc/systemd/network/15-spinifex-veth-wan.netdev"
+            VETH_NETWORK="/etc/systemd/network/15-spinifex-veth-wan.network"
+            VETH_OVS_NETWORK="/etc/systemd/network/16-spinifex-veth-wan-ovs.network"
+            EXISTING_BR_NETDEV=$(grep -rls --include="*.netdev" -E "^\s*Name=$LINUX_BRIDGE\s*$" \
+                /etc/systemd/network /run/systemd/network /usr/lib/systemd/network 2>/dev/null \
+                | grep -v "^$BR_WAN_NETDEV$" || true)
+            if [ -n "$EXISTING_BR_NETDEV" ]; then
+                echo "  skipping $BR_WAN_NETDEV — operator-managed NetDev already declares $LINUX_BRIDGE: $EXISTING_BR_NETDEV"
+            else
+                sudo tee "$BR_WAN_NETDEV" >/dev/null <<NETDEV
+[NetDev]
+Name=$LINUX_BRIDGE
+Kind=bridge
+NETDEV
+            fi
+            sudo tee "$VETH_NETDEV" >/dev/null <<NETDEV
+[NetDev]
+Name=veth-wan-br
+Kind=veth
+
+[Peer]
+Name=veth-wan-ovs
+NETDEV
+            sudo tee "$VETH_NETWORK" >/dev/null <<NETWORK
+[Match]
+Name=veth-wan-br
+
+[Network]
+Bridge=$LINUX_BRIDGE
+ConfigureWithoutCarrier=yes
+NETWORK
+            # Second unit admin-ups the OVS end of the pair. OVS owns the port
+            # (enslaved via ovs-vsctl add-port above) but does not flip admin
+            # state on external ports — that's networkd's job. Without this,
+            # veth-wan-ovs stays DOWN after reboot, peer goes LOWERLAYERDOWN,
+            # br-wan loses carrier (Fix 1 follow-up, mulga-998.b).
+            sudo tee "$VETH_OVS_NETWORK" >/dev/null <<NETWORK
+[Match]
+Name=veth-wan-ovs
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+ConfigureWithoutCarrier=yes
+NETWORK
+            sudo networkctl reload 2>/dev/null || true
+            echo "  wrote $VETH_NETDEV + $VETH_NETWORK + $VETH_OVS_NETWORK (veth persists on reboot)"
             ;;
 
         direct)
@@ -523,7 +617,6 @@ echo "Step 4: Setting OVS external_ids for OVN..."
 if [ -n "$WAN_BRIDGE" ]; then
     BRIDGE_MAPPINGS="external:${WAN_BRIDGE}"
     sudo ovs-vsctl set Open_vSwitch . \
-        external_ids:system-id="$CHASSIS_ID" \
         external_ids:ovn-remote="$OVN_REMOTE" \
         external_ids:ovn-encap-ip="$ENCAP_IP" \
         external_ids:ovn-encap-type="geneve" \
@@ -531,13 +624,16 @@ if [ -n "$WAN_BRIDGE" ]; then
     echo "  ovn-bridge-mappings: $BRIDGE_MAPPINGS"
 else
     sudo ovs-vsctl set Open_vSwitch . \
-        external_ids:system-id="$CHASSIS_ID" \
         external_ids:ovn-remote="$OVN_REMOTE" \
         external_ids:ovn-encap-ip="$ENCAP_IP" \
         external_ids:ovn-encap-type="geneve"
 fi
 
-echo "  system-id:      $CHASSIS_ID"
+# system-id is owned by the openvswitch-switch package (persisted in
+# /etc/openvswitch/system-id.conf and re-applied on every boot). Read it back
+# rather than overriding — overriding here would drift from the on-disk value
+# and the next reboot would silently flip the chassis identity (mulga-999).
+echo "  system-id:      $(sudo ovs-vsctl get open . external_ids:system-id)"
 echo "  ovn-remote:     $OVN_REMOTE"
 echo "  ovn-encap-ip:   $ENCAP_IP"
 echo "  ovn-encap-type: geneve"

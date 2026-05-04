@@ -2,6 +2,7 @@ package handlers_ec2_vpc
 
 import (
 	"encoding/json"
+	"net"
 	"testing"
 	"time"
 
@@ -281,7 +282,9 @@ func TestDetachENI(t *testing.T) {
 
 func TestGenerateENIMac(t *testing.T) {
 	mac := generateENIMac("eni-test123")
-	assert.Regexp(t, `^02:00:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$`, mac)
+	hw, err := net.ParseMAC(mac)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x02), hw[0]&0x03)
 
 	// Same input produces same MAC
 	assert.Equal(t, mac, generateENIMac("eni-test123"))

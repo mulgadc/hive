@@ -730,7 +730,7 @@ if [ "$PEER_AVAILABLE" = true ]; then
             NLB_HOST=$(find_lb_host "$NLB_ENI_ID") || true
         fi
         if [ -n "$ALB_HOST" ]; then
-            ALB_REMOTE=$(pick_peer "$ALB_HOST")
+            ALB_REMOTE=$(pick_peer "$ALB_HOST") || ALB_REMOTE=""
             echo "  ALB VM on $ALB_HOST (remote test from $ALB_REMOTE)"
         else
             echo "  ALB VM host: unknown (falling back to local=$LOCAL_IP, remote=$PEER_NODE_IP)"
@@ -738,7 +738,7 @@ if [ "$PEER_AVAILABLE" = true ]; then
             ALB_REMOTE="$PEER_NODE_IP"
         fi
         if [ -n "$NLB_HOST" ]; then
-            NLB_REMOTE=$(pick_peer "$NLB_HOST")
+            NLB_REMOTE=$(pick_peer "$NLB_HOST") || NLB_REMOTE=""
             echo "  NLB VM on $NLB_HOST (remote test from $NLB_REMOTE)"
         else
             echo "  NLB VM host: unknown (falling back to local=$LOCAL_IP, remote=$PEER_NODE_IP)"

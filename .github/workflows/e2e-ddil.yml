@@ -36,20 +36,6 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
-      - name: Resolve Mulga Branch
-        id: mulga-branch
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
-            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
-            echo "mulga: using branch ${BRANCH}"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-            echo "mulga: branch ${BRANCH} not found, falling back to main"
-          fi
-
       # Full spinifex checkout: the Go harness must run on the runner
       # (outside the cluster) so its SSH path survives scenario partitions
       # that drop peer-to-peer cluster traffic. Running inside the cluster
@@ -63,7 +49,6 @@ jobs:
         name: Checkout Mulga (tofu-cluster)
         with:
           repository: mulgadc/mulga
-          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
@@ -125,7 +110,7 @@ jobs:
 
       - name: Upload DDIL Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ddil-results-${{ github.run_id }}
           path: ${{ runner.temp }}/ddil-results

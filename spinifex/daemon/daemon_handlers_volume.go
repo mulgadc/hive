@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -35,9 +36,8 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	device := command.AttachVolumeData.Device
 
 	// Validate instance is running
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Error("AttachVolume: instance not running", "instanceId", command.ID, "status", status)
@@ -53,9 +53,11 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 		return
 	}
 
-	// Account scoping: verify the caller owns this volume
+	// Account scoping: verify the caller owns this volume.
+	// Pre-Phase4 volumes (empty TenantID) are root-only; otherwise the caller
+	// must match the recorded tenant exactly.
 	callerAccountID := utils.AccountIDFromMsg(msg)
-	if callerAccountID != "" && volCfg.VolumeMetadata.TenantID != "" && volCfg.VolumeMetadata.TenantID != callerAccountID {
+	if !volumeVisibleTo(volCfg.VolumeMetadata.TenantID, callerAccountID) {
 		slog.Warn("AttachVolume: account does not own volume", "volumeId", volumeID, "callerAccount", callerAccountID, "ownerAccount", volCfg.VolumeMetadata.TenantID)
 		respondWithError(msg, awserrors.ErrorInvalidVolumeNotFound)
 		return
@@ -79,9 +81,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 
 	// Determine device name
 	if device == "" {
-		d.Instances.Mu.Lock()
-		device = nextAvailableDevice(instance)
-		d.Instances.Mu.Unlock()
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { device = nextAvailableDevice(v) })
 		if device == "" {
 			slog.Error("AttachVolume: no available device names")
 			respondWithError(msg, awserrors.ErrorAttachmentLimitExceeded)
@@ -262,8 +262,10 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	instance.EBSRequests.Mu.Unlock()
 
 	// Update BlockDeviceMappings on the ec2.Instance using actual guest device name
-	d.Instances.Mu.Lock()
-	if instance.Instance != nil {
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		if v.Instance == nil {
+			return
+		}
 		now := time.Now()
 		mapping := &ec2.InstanceBlockDeviceMapping{}
 		mapping.SetDeviceName(guestDevice)
@@ -272,9 +274,8 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 		mapping.Ebs.SetAttachTime(now)
 		mapping.Ebs.SetDeleteOnTermination(false)
 		mapping.Ebs.SetStatus("attached")
-		instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
-	}
-	d.Instances.Mu.Unlock()
+		v.Instance.BlockDeviceMappings = append(v.Instance.BlockDeviceMappings, mapping)
+	})
 
 	// Update volume metadata in S3
 	if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, guestDevice); err != nil {
@@ -310,9 +311,8 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	force := command.DetachVolumeData.Force
 
 	// Validate instance is running
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Error("DetachVolume: instance not running", "instanceId", command.ID, "status", status)
@@ -357,32 +357,42 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	nodeName := fmt.Sprintf("nbd-%s", volumeID)
 	iothreadID := fmt.Sprintf("ioth-%s", volumeID)
 
-	// Phase 1: QMP device_del (remove guest device)
+	// Phase 1: QMP device_del (remove guest device).
+	// Idempotent: a prior detach may have already removed the device but
+	// failed at blockdev-del, leaving the volume's external state intact.
+	// Treat DeviceNotFound as success so the retry can drive blockdev-del
+	// to completion without bailing on the now-absent guest device.
 	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
 		Execute:   "device_del",
 		Arguments: map[string]any{"id": deviceID},
 	}, instance.ID)
-	if err != nil {
-		if !force {
-			slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
-			respondWithError(msg, awserrors.ErrorServerInternal)
-			return
-		}
+	switch {
+	case err == nil:
+	case isQMPDeviceNotFound(err):
+		slog.Info("DetachVolume: guest device already removed (resuming detach)", "volumeId", volumeID, "err", err)
+	case force:
 		slog.Warn("DetachVolume: QMP device_del failed (force=true, continuing)", "volumeId", volumeID, "err", err)
+	default:
+		slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
 	}
 
 	// Brief pause for guest to acknowledge PCI removal
 	time.Sleep(d.detachDelay)
 
-	// Phase 2: QMP blockdev-del (remove block node)
-	_, blockdevErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
-		Execute:   "blockdev-del",
-		Arguments: map[string]any{"node-name": nodeName},
-	}, instance.ID)
+	// Phase 2: QMP blockdev-del (remove block node).
+	// Poll-retry on "node is in use": after device_del, NBD client teardown
+	// and any in-flight I/O can hold the block node briefly. Bailing here
+	// without retry leaves the guest device gone but the block node intact,
+	// and the next AWS-CLI retry hits DeviceNotFound on device_del with no
+	// path forward (mulga-siv-41).
+	blockdevErr := d.tryBlockdevDel(instance, nodeName)
 	if blockdevErr != nil {
-		// Block node still referenced by QEMU; do not clean up state or unmount —
-		// tearing down the NBD server would crash the VM, and removing metadata
-		// would allow the volume to be double-attached.
+		// Block node still referenced after retry budget exhausted; do not
+		// clean up state or unmount — tearing down the NBD server would
+		// crash the VM, and removing metadata would allow the volume to be
+		// double-attached.
 		slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
@@ -411,18 +421,19 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	instance.EBSRequests.Mu.Unlock()
 
 	// Remove from BlockDeviceMappings
-	d.Instances.Mu.Lock()
-	if instance.Instance != nil {
-		filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(instance.Instance.BlockDeviceMappings))
-		for _, bdm := range instance.Instance.BlockDeviceMappings {
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		if v.Instance == nil {
+			return
+		}
+		filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(v.Instance.BlockDeviceMappings))
+		for _, bdm := range v.Instance.BlockDeviceMappings {
 			if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
 				continue
 			}
 			filtered = append(filtered, bdm)
 		}
-		instance.Instance.BlockDeviceMappings = filtered
-	}
-	d.Instances.Mu.Unlock()
+		v.Instance.BlockDeviceMappings = filtered
+	})
 
 	// Update volume metadata to "available"
 	if err := d.volumeService.UpdateVolumeState(volumeID, "available", "", ""); err != nil {
@@ -448,6 +459,10 @@ func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DescribeVolumeStatus(msg *nats.Msg) {
 	handleNATSRequest(msg, d.volumeService.DescribeVolumeStatus)
+}
+
+func (d *Daemon) handleEC2DescribeVolumesModifications(msg *nats.Msg) {
+	handleNATSRequest(msg, d.volumeService.DescribeVolumesModifications)
 }
 
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
@@ -499,4 +514,63 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
 	handleNATSRequest(msg, d.volumeService.DeleteVolume)
+}
+
+// tryBlockdevDel issues blockdev-del with bounded retry on "is in use"
+// errors. After device_del, NBD client teardown and any in-flight guest
+// I/O can briefly hold the block node; QEMU surfaces this as a
+// GenericError carrying "Node <name> is in use". Polling at d.detachDelay
+// gives the I/O drain enough time without a hardcoded long sleep.
+func (d *Daemon) tryBlockdevDel(instance *vm.VM, nodeName string) error {
+	const maxAttempts = 20 // 20 × detachDelay (default 1s) = 20s budget
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+			Execute:   "blockdev-del",
+			Arguments: map[string]any{"node-name": nodeName},
+		}, instance.ID)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("DetachVolume: blockdev-del succeeded after retry",
+					"nodeName", nodeName, "attempts", attempt)
+			}
+			return nil
+		}
+		lastErr = err
+		if !isQMPNodeInUse(err) {
+			return err
+		}
+		if attempt == maxAttempts {
+			break
+		}
+		slog.Debug("DetachVolume: blockdev-del busy, retrying",
+			"nodeName", nodeName, "attempt", attempt, "err", err)
+		time.Sleep(d.detachDelay)
+	}
+	return lastErr
+}
+
+// isQMPDeviceNotFound returns true when err is a QMP DeviceNotFound class
+// error from device_del. Used to make device_del idempotent across detach
+// retries — the second AWS-CLI call must not bail when QEMU reports the
+// device is already gone (mulga-siv-41).
+func isQMPDeviceNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "DeviceNotFound")
+}
+
+// isQMPNodeInUse returns true when err is a QMP GenericError reporting a
+// block node still in use. blockdev-del fails this way while NBD client
+// teardown and queued I/O drain after device_del; the caller polls until
+// the node is released or the budget expires. Match "in use" rather than
+// "is in use" — QEMU phrases this as both "X is in use" and "X is still
+// in use" depending on the path.
+func isQMPNodeInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "in use")
 }

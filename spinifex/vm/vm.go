@@ -130,11 +130,6 @@ func (v *VM) ResetNodeLocalState() {
 	v.EBSRequests.Mu = sync.Mutex{}
 }
 
-type Instances struct {
-	VMS map[string]*VM `json:"vms"`
-	Mu  sync.Mutex     `json:"-"`
-}
-
 type NetDev struct {
 	Value string `json:"value"`
 }

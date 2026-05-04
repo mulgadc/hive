@@ -81,9 +81,17 @@ type EBS struct {
 // is available for a type, the node subscribes to ec2.RunInstances.{type};
 // when full, it unsubscribes so NATS routes requests to other nodes.
 type ResourceManager struct {
-	mu            sync.RWMutex
-	availableVCPU int
-	availableMem  float64
+	mu sync.RWMutex
+	// hostVCPU / hostMemGB are the raw figures reported by the host
+	// (runtime.NumCPU, /proc/meminfo). Schedulable capacity for guest VMs
+	// is host - reserved - allocated.
+	hostVCPU  int
+	hostMemGB float64
+	// reservedVCPU / reservedMem are held back from guest scheduling for
+	// the spinifex daemon and co-located services (NATS, predastore,
+	// viperblock, vpcd, awsgw, ui). See hostReserve / defaultHostReserve.
+	reservedVCPU  int
+	reservedMem   float64
 	allocatedVCPU int
 	allocatedMem  float64
 	instanceTypes map[string]*ec2.InstanceTypeInfo
@@ -123,8 +131,8 @@ type Daemon struct {
 	cancel                context.CancelFunc
 	shutdownWg            sync.WaitGroup
 
-	// Local VM Instances
-	Instances vm.Instances
+	// vmMgr owns the in-memory map of VMs running on this node.
+	vmMgr *vm.Manager
 
 	// NAT Subscriptions
 	natsSubscriptions map[string]*nats.Subscription
@@ -217,9 +225,8 @@ func (d *Daemon) onNATSDisconnect(_ *nats.Conn, _ error) {
 
 // onNATSReconnect runs when the NATS client reattaches to a server. Flips back
 // to cluster mode, bumps the retry counter, and pushes the full local instance
-// state to KV so the cluster view re-converges. The KV push is fired in a
-// goroutine because it briefly takes Instances.Mu and should not block the
-// NATS client goroutine.
+// state to KV so the cluster view re-converges. The KV push runs in a goroutine
+// to keep the NATS client callback non-blocking.
 func (d *Daemon) onNATSReconnect(_ *nats.Conn) {
 	d.mode.Store(DaemonModeCluster)
 	d.natsRetryCount.Add(1)
@@ -280,6 +287,9 @@ func getSystemMemory() (float64, error) {
 // NewResourceManager creates a new resource manager with system capabilities.
 // Returns an error if system memory cannot be detected, since an incorrect
 // default would either under-provision (large servers) or over-commit (small devices).
+// Also returns an error if the host is too small to satisfy the daemon's
+// reserve — clamping silently would defeat the reserve and look like a
+// runtime bug.
 func NewResourceManager() (*ResourceManager, error) {
 	// Get system CPU cores
 	numCPU := runtime.NumCPU()
@@ -288,6 +298,14 @@ func NewResourceManager() (*ResourceManager, error) {
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
 		return nil, fmt.Errorf("detect system memory: %w", err)
+	}
+
+	reservedVCPU, reservedMem, err := applyHostReserve(defaultHostReserve, numCPU, totalMemGB)
+	if err != nil {
+		slog.Error("host below minimum reserve — daemon refuses to start",
+			"err", err, "hostVCPU", numCPU, "hostMemGB", totalMemGB,
+			"reserveVCPU", defaultHostReserve.vCPU, "reserveMemGB", defaultHostReserve.memGB)
+		return nil, fmt.Errorf("validate host reserve: %w", err)
 	}
 
 	// Determine architecture
@@ -300,12 +318,16 @@ func NewResourceManager() (*ResourceManager, error) {
 	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch)
 
 	slog.Info("System resources detected",
-		"vCPUs", numCPU, "memGB", totalMemGB,
+		"hostVCPU", numCPU, "hostMemGB", totalMemGB,
+		"reservedVCPU", reservedVCPU, "reservedMemGB", reservedMem,
+		"schedulableVCPU", numCPU-reservedVCPU, "schedulableMemGB", totalMemGB-reservedMem,
 		"instanceTypes", len(instanceTypes))
 
 	return &ResourceManager{
-		availableVCPU: numCPU,
-		availableMem:  totalMemGB,
+		hostVCPU:      numCPU,
+		hostMemGB:     totalMemGB,
+		reservedVCPU:  reservedVCPU,
+		reservedMem:   reservedMem,
 		instanceTypes: instanceTypes,
 	}, nil
 }
@@ -363,8 +385,8 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 		}
 
 		count := canAllocateCount(
-			rm.availableVCPU, rm.allocatedVCPU,
-			rm.availableMem, rm.allocatedMem,
+			rm.hostVCPU-rm.reservedVCPU, rm.allocatedVCPU,
+			rm.hostMemGB-rm.reservedMem, rm.allocatedMem,
 			vCPUs, memMiB,
 			1<<30, // effectively unlimited — let resources be the constraint
 		)
@@ -379,23 +401,36 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 	}
 
 	slog.Info("GetAvailableInstanceTypeInfos", "total_types", len(rm.instanceTypes), "total_available_slots", len(infos),
-		"hostVCPU", rm.availableVCPU, "hostMem", rm.availableMem, "showCapacity", showCapacity)
+		"hostVCPU", rm.hostVCPU, "hostMem", rm.hostMemGB,
+		"reservedVCPU", rm.reservedVCPU, "reservedMem", rm.reservedMem,
+		"showCapacity", showCapacity)
 
 	return infos
 }
 
 // GetResourceStats returns current resource allocation stats for the node status response.
-func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
+// totalVCPU / totalMemGB are the raw host figures; reservedVCPU / reservedMemGB are
+// held back from guest scheduling. Per-type caps reflect host - reserved - allocated,
+// matching what the admission path will actually permit.
+func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, reservedVCPU int, reservedMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	totalVCPU = rm.availableVCPU
-	totalMemGB = rm.availableMem
+	totalVCPU = rm.hostVCPU
+	totalMemGB = rm.hostMemGB
+	reservedVCPU = rm.reservedVCPU
+	reservedMemGB = rm.reservedMem
 	allocVCPU = rm.allocatedVCPU
 	allocMemGB = rm.allocatedMem
 
-	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-	remainingMem := rm.availableMem - rm.allocatedMem
+	remainingVCPU := rm.hostVCPU - rm.reservedVCPU - rm.allocatedVCPU
+	remainingMem := rm.hostMemGB - rm.reservedMem - rm.allocatedMem
+	if remainingVCPU < 0 || remainingMem < 0 {
+		slog.Error("schedulable capacity negative — reserve misconfigured or allocation drift",
+			"hostVCPU", rm.hostVCPU, "reservedVCPU", rm.reservedVCPU, "allocatedVCPU", rm.allocatedVCPU,
+			"hostMemGB", rm.hostMemGB, "reservedMem", rm.reservedMem, "allocatedMem", rm.allocatedMem,
+			"remainingVCPU", remainingVCPU, "remainingMem", remainingMem)
+	}
 
 	for name, it := range rm.instanceTypes {
 		if instancetypes.IsSystemType(name) {
@@ -407,7 +442,7 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 		}
 		caps = append(caps, typeCap)
 	}
-	return totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps
+	return totalVCPU, totalMemGB, reservedVCPU, reservedMemGB, allocVCPU, allocMemGB, caps
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -440,7 +475,7 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 		resourceMgr:       rm,
 		ctx:               ctx,
 		cancel:            cancel,
-		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:             vm.NewManager(),
 		natsSubscriptions: make(map[string]*nats.Subscription),
 		startTime:         time.Now(),
 		detachDelay:       1 * time.Second,
@@ -478,6 +513,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "spinifex-workers"},
 		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "spinifex-workers"},
 		{"ec2.DescribeVolumeStatus", d.handleEC2DescribeVolumeStatus, "spinifex-workers"},
+		{"ec2.DescribeVolumesModifications", d.handleEC2DescribeVolumesModifications, "spinifex-workers"},
 		{"ec2.CreateSnapshot", d.handleEC2CreateSnapshot, "spinifex-workers"},
 		{"ec2.DescribeSnapshots", d.handleEC2DescribeSnapshots, "spinifex-workers"},
 		{"ec2.DeleteSnapshot", d.handleEC2DeleteSnapshot, "spinifex-workers"},
@@ -644,7 +680,7 @@ func (d *Daemon) Start() error {
 
 	// Create services before loading/launching instances, since LaunchInstance depends on them
 	store := objectstore.NewS3ObjectStoreFromConfig(admin.DialTarget(d.config.Predastore.Host), d.config.Predastore.Region, d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
-	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store, d.resourceMgr, d.jsManager)
+	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, store, d.vmMgr, d.resourceMgr, d.jsManager)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
 
@@ -714,26 +750,33 @@ func (d *Daemon) Start() error {
 			slog.Warn("Failed to get JetStream for external IPAM", "err", jsErr)
 		} else {
 			var pools []handlers_ec2_vpc.ExternalPoolConfig
-			// Resolve WAN bridge name for DHCP pools
-			wanBridge := ""
+			// Resolve DHCP bind bridge name for DHCP pools (where AF_PACKET binds).
+			dhcpBindBridge := ""
 			if node, ok := d.clusterConfig.Nodes[d.clusterConfig.Node]; ok {
-				wanBridge = node.VPCD.WanBridge
+				dhcpBindBridge = node.VPCD.DhcpBindBridge
+			}
+			gwMAC := ""
+			if d.clusterConfig.Bootstrap.VpcId != "" {
+				gwMAC = utils.HashMAC("gw-" + d.clusterConfig.Bootstrap.VpcId)
 			}
 			for _, p := range d.clusterConfig.Network.ExternalPools {
 				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
-					Name:       p.Name,
-					Source:     p.Source,
-					RangeStart: p.RangeStart,
-					RangeEnd:   p.RangeEnd,
-					Gateway:    p.Gateway,
-					GatewayIP:  p.GatewayIP,
-					PrefixLen:  p.PrefixLen,
-					Region:     p.Region,
-					AZ:         p.AZ,
-					WanBridge:  wanBridge,
+					Name:            p.Name,
+					Source:          p.Source,
+					RangeStart:      p.RangeStart,
+					RangeEnd:        p.RangeEnd,
+					Gateway:         p.Gateway,
+					GatewayIP:       p.GatewayIP,
+					PrefixLen:       p.PrefixLen,
+					Region:          p.Region,
+					AZ:              p.AZ,
+					DhcpBindBridge:  dhcpBindBridge,
+					GatewayMAC:      gwMAC,
+					GwLrpRangeStart: p.GwLrpRangeStart,
+					GwLrpRangeEnd:   p.GwLrpRangeEnd,
 				})
 			}
-			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(js, pools)
+			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(d.natsConn, js, pools)
 			if err != nil {
 				slog.Warn("Failed to initialize external IPAM", "err", err)
 			} else {
@@ -880,9 +923,7 @@ func (d *Daemon) Start() error {
 	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
 	// that are already in use by running system instances.
 	if d.mgmtIPAllocator != nil {
-		d.Instances.Mu.Lock()
-		d.mgmtIPAllocator.Rebuild(d.Instances.VMS)
-		d.Instances.Mu.Unlock()
+		d.mgmtIPAllocator.Rebuild(d.vmMgr.SnapshotMap())
 		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
 	}
 
@@ -1090,7 +1131,11 @@ func (d *Daemon) migrateInstanceToKV(instance *vm.VM, writeFn func(string, *vm.V
 			"instance", instance.ID, "bucket", label, "err", err)
 		return false
 	}
-	delete(d.Instances.VMS, instance.ID)
+	if !d.vmMgr.DeleteIf(instance.ID, instance) {
+		slog.Info("Slot reclaimed by another handler during migration; skipping local delete",
+			"instance", instance.ID, "bucket", label)
+		return true
+	}
 	slog.Info("Migrated instance to KV", "instance", instance.ID, "bucket", label)
 	return true
 }
@@ -1132,19 +1177,14 @@ func (d *Daemon) restoreInstances() error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	slog.Info("Loaded state", "instance count", len(d.Instances.VMS))
-
-	// Ensure mutexes and QMP clients are usable after deserialization
-	d.Instances.Mu = sync.Mutex{}
+	slog.Info("Loaded state", "instance count", d.vmMgr.Count())
 
 	// Phase 1: Reconnect running QEMU, finalize transitional states, collect VMs to relaunch
 	var toLaunch []*vm.VM
 
-	for i := range d.Instances.VMS {
-		d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
-		d.Instances.VMS[i].QMPClient = &qmp.QMPClient{}
-
-		instance := d.Instances.VMS[i]
+	for _, instance := range d.vmMgr.Snapshot() {
+		instance.EBSRequests.Mu = sync.Mutex{}
+		instance.QMPClient = &qmp.QMPClient{}
 
 		if instance.Status == vm.StateTerminated {
 			if !d.migrateTerminatedToKV(instance) {
@@ -1309,9 +1349,8 @@ func (d *Daemon) restoreInstances() error {
 					}
 				}()
 				// Skip if instance was terminated while waiting for semaphore
-				d.Instances.Mu.Lock()
-				status := inst.Status
-				d.Instances.Mu.Unlock()
+				var status vm.InstanceState
+				d.vmMgr.Inspect(inst, func(v *vm.VM) { status = v.Status })
 				if status != vm.StatePending && status != vm.StateProvisioning {
 					slog.Info("Instance state changed during recovery, skipping launch",
 						"instanceId", inst.ID, "status", string(status))
@@ -1572,21 +1611,17 @@ func (d *Daemon) localStatePath() string {
 // JetStream KV is best-effort cluster cache. The local write is fatal on
 // failure; KV failures are logged and swallowed so partition-time clients
 // never see "KV down" errors.
-//
-// Acquires d.Instances.Mu internally. Lock is held across the local write and
-// the bounded KV sync so the snapshot stays consistent.
 func (d *Daemon) WriteState() error {
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
+	vms := d.vmMgr.SnapshotMap()
 
 	path := d.localStatePath()
-	if err := WriteLocalState(path, &d.Instances); err != nil {
+	if err := WriteLocalState(path, vms); err != nil {
 		slog.Error("Local state write failed", "path", path, "error", err)
 		return fmt.Errorf("write local state: %w", err)
 	}
 
 	if d.jsManager != nil {
-		d.jsManager.WriteStateBestEffort(d.node, &d.Instances, kvSyncTimeout)
+		d.jsManager.WriteStateBestEffort(d.node, vms, kvSyncTimeout)
 	}
 
 	return nil
@@ -1606,12 +1641,12 @@ func (d *Daemon) LoadState() error {
 	}
 
 	if state == nil {
-		d.Instances.VMS = make(map[string]*vm.VM)
+		d.vmMgr.Replace(map[string]*vm.VM{})
 		slog.Info("No local state file, starting with empty instance map", "path", path)
 		return nil
 	}
 
-	d.Instances.VMS = state.VMS
+	d.vmMgr.Replace(state.VMS)
 	slog.Info("Loaded local state", "path", path, "instances", len(state.VMS))
 	return nil
 }
@@ -1782,14 +1817,18 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				d.cleanupExtraENITaps(instance)
 			}
 
-			// Clean up management TAP and release IP
-			if instance.MgmtTap != "" {
-				if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
-					slog.Warn("Failed to clean up mgmt tap device", "tap", instance.MgmtTap, "instanceId", instance.ID, "err", err)
-				}
-				if d.mgmtIPAllocator != nil {
-					d.mgmtIPAllocator.Release(instance.ID)
-				}
+			// Clean up management TAP and release IP. Derive the name from
+			// instance.ID rather than reading instance.MgmtTap — the field
+			// is set only after SetupMgmtTapDevice returns, so a terminate
+			// that races mid-launch would skip cleanup and leak the OVS
+			// port. CleanupMgmtTapDevice is idempotent for instances that
+			// never reached the setup step.
+			mgmtTap := MgmtTapName(instance.ID)
+			if err := CleanupMgmtTapDevice(mgmtTap); err != nil {
+				slog.Warn("Failed to clean up mgmt tap device", "tap", mgmtTap, "instanceId", instance.ID, "err", err)
+			}
+			if d.mgmtIPAllocator != nil {
+				d.mgmtIPAllocator.Release(instance.ID)
 			}
 
 			// Release public IP before deleting ENI
@@ -1898,7 +1937,7 @@ func (d *Daemon) setupShutdown() {
 		} else {
 			d.shuttingDown.Store(true)
 			// Pass instances to terminate
-			if err := d.stopInstance(d.Instances.VMS, false); err != nil {
+			if err := d.stopInstance(d.vmMgr.SnapshotMap(), false); err != nil {
 				slog.Error("Failed to stop instances during shutdown", "err", err)
 			}
 		}
@@ -1967,9 +2006,8 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 			time.Sleep(30 * time.Second)
 
 			// Check if instance is in a terminal or transitional state - exit heartbeat
-			d.Instances.Mu.Lock()
-			status := instance.Status
-			d.Instances.Mu.Unlock()
+			var status vm.InstanceState
+			d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 			if status == vm.StateStopping || status == vm.StateStopped || status == vm.StateShuttingDown || status == vm.StateTerminated || status == vm.StateError {
 				slog.Info("QMP heartbeat exiting - instance not running", "instance", instance.ID, "status", status)
@@ -1999,14 +2037,30 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	return nil
 }
 
+// launchStillValid returns true while LaunchInstance may continue setting up
+// resources for instance. Returns false if a concurrent terminate has flipped
+// status out of pending/stopped/provisioning — at that point the terminate
+// goroutine owns cleanup and LaunchInstance must bail without further side
+// effects. Logs the abort reason at Info so it's visible without polluting
+// error logs (terminate-during-pending is an expected user-driven race).
+func (d *Daemon) launchStillValid(instance *vm.VM) bool {
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+	if status == vm.StatePending || status == vm.StateStopped || status == vm.StateProvisioning {
+		return true
+	}
+	slog.Info("Launch aborted by concurrent terminate", "instanceId", instance.ID, "status", string(status))
+	return false
+}
+
 func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
-	// Abort if instance is no longer in a launchable state (e.g., terminated
-	// by a concurrent request while waiting in the launch queue).
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
-	if status != vm.StatePending && status != vm.StateStopped && status != vm.StateProvisioning {
-		return fmt.Errorf("instance %s in %s state, not launchable", instance.ID, status)
+	// Abort if instance is no longer in a launchable state. A concurrent
+	// terminate request that flipped status to shutting-down/terminated
+	// owns the cleanup lifecycle; this path is an expected race outcome,
+	// not an error, so return nil to avoid the spurious
+	// "Failed to transition instance to running" ERROR log.
+	if !d.launchStillValid(instance) {
+		return nil
 	}
 
 	// First, confirm if the instance is already running
@@ -2032,6 +2086,15 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	if err != nil {
 		slog.Error("Failed to mount volumes", "err", err)
 		return err
+	}
+
+	// Re-check status — MountVolumes can take 30+s on cold AMIs (NBD
+	// clone), and a terminate can race in during that window. Skip the
+	// remaining setup so the concurrent terminate goroutine doesn't fight
+	// SetupTapDevice and leak resources. PR1b.1's idempotency safety net
+	// catches anything that does slip through.
+	if !d.launchStillValid(instance) {
+		return nil
 	}
 
 	// Step 6: Launch the instance via QEMU/KVM
@@ -2076,9 +2139,15 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 
 	// Step 9: Update the instance metadata for running state and volume attached
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Insert(instance)
+
+	// Final race check — QEMU is up, but if a terminate fired during
+	// StartInstance/CreateQMPClient, the concurrent goroutine has already
+	// transitioned status to shutting-down. Attempting StateRunning here
+	// would log a spurious error; let the terminate cleanup own teardown.
+	if !d.launchStillValid(instance) {
+		return nil
+	}
 
 	if err := d.TransitionState(instance, vm.StateRunning); err != nil {
 		slog.Error("Failed to transition instance to running", "instanceId", instance.ID, "err", err)
@@ -2107,27 +2176,34 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 	// request transitioned it to shutting-down while LaunchInstance was running),
 	// don't spawn a second finalizeTermination goroutine — the existing cleanup
 	// handler owns the lifecycle from here.
-	d.Instances.Mu.Lock()
-	if instance.Status == vm.StateShuttingDown || instance.Status == vm.StateTerminated {
-		d.Instances.Mu.Unlock()
+	skip := false
+	var observedStatus vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		observedStatus = v.Status
+		if v.Status == vm.StateShuttingDown || v.Status == vm.StateTerminated {
+			skip = true
+			return
+		}
+		// Set state reason before transition
+		if v.Instance != nil {
+			v.Instance.StateReason = &ec2.StateReason{}
+			v.Instance.StateReason.SetCode("Server.InternalError")
+			v.Instance.StateReason.SetMessage(reason)
+		}
+	})
+	if skip {
 		slog.Info("markInstanceFailed: instance already in cleanup state, skipping",
-			"instanceId", instance.ID, "status", string(instance.Status), "reason", reason)
+			"instanceId", instance.ID, "status", string(observedStatus), "reason", reason)
 		return
 	}
-
-	// Set state reason before transition
-	if instance.Instance != nil {
-		instance.Instance.StateReason = &ec2.StateReason{}
-		instance.Instance.StateReason.SetCode("Server.InternalError")
-		instance.Instance.StateReason.SetMessage(reason)
-	}
-	d.Instances.Mu.Unlock()
 
 	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
 		slog.Error("markInstanceFailed transition failed", "instanceId", instance.ID, "err", err)
 		// If the error was a write failure, the in-memory state is already
 		// shutting-down. Still proceed with finalization to avoid getting stuck.
-		if instance.Status != vm.StateShuttingDown {
+		var postErrStatus vm.InstanceState
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { postErrStatus = v.Status })
+		if postErrStatus != vm.StateShuttingDown {
 			return
 		}
 	}
@@ -2154,9 +2230,7 @@ func (d *Daemon) finalizeTermination(instance *vm.VM) {
 		return
 	}
 
-	d.Instances.Mu.Lock()
-	instance.LastNode = d.node
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.LastNode = d.node })
 
 	if err := d.TransitionState(instance, vm.StateTerminated); err != nil {
 		slog.Error("Failed to transition failed instance to terminated", "instanceId", instance.ID, "err", err)
@@ -2173,25 +2247,16 @@ func (d *Daemon) finalizeTermination(instance *vm.VM) {
 	}
 
 	// Guard + delete: another handler may have reclaimed this instance.
-	d.Instances.Mu.Lock()
-	current, exists := d.Instances.VMS[instance.ID]
-	if !exists || current != instance {
-		d.Instances.Mu.Unlock()
+	if !d.vmMgr.DeleteIf(instance.ID, instance) {
 		slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
 			"instanceId", instance.ID, "state", "terminated")
 		return
 	}
-	delete(d.Instances.VMS, instance.ID)
-	d.Instances.Mu.Unlock()
 
 	if err := d.WriteState(); err != nil {
 		slog.Error("Failed to persist state after terminating failed instance, re-adding to local map",
 			"instanceId", instance.ID, "err", err)
-		d.Instances.Mu.Lock()
-		if _, occupied := d.Instances.VMS[instance.ID]; !occupied {
-			d.Instances.VMS[instance.ID] = instance
-		}
-		d.Instances.Mu.Unlock()
+		d.vmMgr.InsertIfAbsent(instance)
 	} else {
 		slog.Info("Released failed instance ownership to KV",
 			"instanceId", instance.ID, "lastNode", d.node)
@@ -2212,16 +2277,11 @@ func (d *Daemon) startPendingWatchdog() {
 			case <-d.ctx.Done():
 				return
 			case <-ticker.C:
-				d.Instances.Mu.Lock()
-				var stuck []*vm.VM
-				for _, instance := range d.Instances.VMS {
-					if (instance.Status == vm.StatePending || instance.Status == vm.StateProvisioning) &&
-						instance.Instance != nil && instance.Instance.LaunchTime != nil &&
-						time.Since(*instance.Instance.LaunchTime) > pendingWatchdogTimeout {
-						stuck = append(stuck, instance)
-					}
-				}
-				d.Instances.Mu.Unlock()
+				stuck := d.vmMgr.Filter(func(v *vm.VM) bool {
+					return (v.Status == vm.StatePending || v.Status == vm.StateProvisioning) &&
+						v.Instance != nil && v.Instance.LaunchTime != nil &&
+						time.Since(*v.Instance.LaunchTime) > pendingWatchdogTimeout
+				})
 
 				for _, instance := range stuck {
 					slog.Warn("Instance stuck in pending, marking failed",
@@ -2753,8 +2813,8 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 	defer rm.mu.RUnlock()
 
 	return canAllocateCount(
-		rm.availableVCPU, rm.allocatedVCPU,
-		rm.availableMem, rm.allocatedMem,
+		rm.hostVCPU-rm.reservedVCPU, rm.allocatedVCPU,
+		rm.hostMemGB-rm.reservedMem, rm.allocatedMem,
 		instanceTypeVCPUs(instanceType),
 		instanceTypeMemoryMiB(instanceType),
 		count,
@@ -2960,4 +3020,13 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.MgmtRouteGateway = d.mgmtBridgeIP
 		d.elbv2Service.MgmtRouteTarget = d.mgmtRouteVia
 	}
+
+	// Always expose mgmtBridgeIP and advertiseIP so lbVMUserData can synthesize
+	// a mgmt-NIC fallback route for internal-scheme LBs on single-node setups
+	// (where MgmtRoute{Gateway,Target} stay empty because internet-facing LBs
+	// reach AWSGW via VPC + EIP SNAT). Internal LBs have no EIP, so without
+	// this fallback the agent has no return path and the LB stays in
+	// provisioning forever.
+	d.elbv2Service.MgmtBridgeIP = d.mgmtBridgeIP
+	d.elbv2Service.AdvertiseIP = advertiseIP
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1003,15 +1004,62 @@ func TestReadPidFileFrom_EmptyDir(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestHashMAC(t *testing.T) {
-	mac := HashMAC("02:00:00", "test-id")
-	assert.Regexp(t, `^02:00:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$`, mac)
+func TestHashMAC_FirstOctetPinnedTo02(t *testing.T) {
+	// First octet must be literal 0x02 across all inputs. Anything else
+	// (e.g. 0x4a, 0xfe — technically valid LAA) visually encroaches on
+	// vendor OUI space and is rejected by ops/CI. Second-octet entropy is
+	// covered by the distribution test.
+	for i := range 1000 {
+		hw, err := net.ParseMAC(HashMAC(fmt.Sprintf("id-%d", i)))
+		require.NoError(t, err)
+		assert.Equal(t, byte(0x02), hw[0], "first octet must be 0x02, got %#x", hw[0])
+	}
+}
 
-	// Deterministic: same input → same output
-	assert.Equal(t, mac, HashMAC("02:00:00", "test-id"))
+func TestHashMAC_Determinism(t *testing.T) {
+	// Same id must produce the same MAC across calls and across goroutines.
+	// Reconcilers across nodes rely on this — non-determinism would
+	// split-brain DHCP server_mac vs LRP MAC.
+	const id = "i-abc123"
+	want := HashMAC(id)
 
-	// Different input → different output
-	assert.NotEqual(t, mac, HashMAC("02:00:00", "other-id"))
+	for range 100 {
+		assert.Equal(t, want, HashMAC(id))
+	}
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			for range 100 {
+				assert.Equal(t, want, HashMAC(id))
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestHashMAC_IdSeparates(t *testing.T) {
+	// Different ids must yield different MACs.
+	a := HashMAC("subnet-aaaaaaaaaaaaaaaaa")
+	b := HashMAC("subnet-bbbbbbbbbbbbbbbbb")
+	assert.NotEqual(t, a, b)
+}
+
+func TestHashMAC_Distribution(t *testing.T) {
+	// 100k random ids — 0 collisions expected. 46-bit space, birthday-
+	// paradox 1% at ~1.2M; 100k is well below.
+	if testing.Short() {
+		t.Skip("skipping distribution test in -short mode")
+	}
+	seen := make(map[string]string, 100_000)
+	for range 100_000 {
+		id := GenerateResourceID("res")
+		mac := HashMAC(id)
+		if prev, ok := seen[mac]; ok {
+			t.Fatalf("collision on %s: id=%s prev=%s", mac, id, prev)
+		}
+		seen[mac] = id
+	}
 }
 
 // writeTempImage writes content to a file named name under t.TempDir() and

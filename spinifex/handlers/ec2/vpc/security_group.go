@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +18,37 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
+
+// sgIDRegex must stay in lockstep with utils.GenerateResourceID("sg").
+var sgIDRegex = regexp.MustCompile(`^sg-[0-9a-f]{17}$`)
+
+// validateSGRule rejects values that could break out of an OVN ACL match-expression token.
+// CidrIp must be IPv4 and round-trip to canonical form (so "10.0.0.5/8" with host bits set is
+// rejected, as is anything containing operators/whitespace that net.ParseCIDR would not accept).
+// IPv6 is rejected because the ACL builder in vpcd/acl.go is IPv4-only — accepting an IPv6 CIDR
+// would persist a rule that OVN can never program.
+// SourceSG must match the spinifex SG-ID format. At least one source must be specified.
+func validateSGRule(r SGRule) error {
+	if r.CidrIp == "" && r.SourceSG == "" {
+		return errors.New("rule must specify CidrIp or SourceSG")
+	}
+	if r.CidrIp != "" {
+		_, ipnet, err := net.ParseCIDR(r.CidrIp)
+		if err != nil {
+			return fmt.Errorf("invalid CidrIp %q: %w", r.CidrIp, err)
+		}
+		if ipnet.IP.To4() == nil {
+			return fmt.Errorf("invalid CidrIp %q: IPv6 not supported", r.CidrIp)
+		}
+		if ipnet.String() != r.CidrIp {
+			return fmt.Errorf("invalid CidrIp %q: not canonical (expected %q)", r.CidrIp, ipnet.String())
+		}
+	}
+	if r.SourceSG != "" && !sgIDRegex.MatchString(r.SourceSG) {
+		return fmt.Errorf("invalid SourceSG %q: must match sg-<17 hex chars>", r.SourceSG)
+	}
+	return nil
+}
 
 const (
 	KVBucketSecurityGroups        = "spinifex-vpc-security-groups"
@@ -324,8 +357,11 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupIngress(input *ec2.AuthorizeSecur
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Convert AWS IpPermissions to SGRules
-	newRules := ipPermissionsToSGRules(input.IpPermissions)
+	newRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
+		slog.Warn("AuthorizeSecurityGroupIngress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	for _, nr := range newRules {
 		if slices.Contains(record.IngressRules, nr) {
 			return nil, errors.New(awserrors.ErrorInvalidPermissionDuplicate)
@@ -375,7 +411,11 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupEgress(input *ec2.AuthorizeSecuri
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	newRules := ipPermissionsToSGRules(input.IpPermissions)
+	newRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
+		slog.Warn("AuthorizeSecurityGroupEgress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	for _, nr := range newRules {
 		if slices.Contains(record.EgressRules, nr) {
 			return nil, errors.New(awserrors.ErrorInvalidPermissionDuplicate)
@@ -424,7 +464,11 @@ func (s *VPCServiceImpl) RevokeSecurityGroupIngress(input *ec2.RevokeSecurityGro
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	revokeRules := ipPermissionsToSGRules(input.IpPermissions)
+	revokeRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
+		slog.Warn("RevokeSecurityGroupIngress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	record.IngressRules = removeSGRules(record.IngressRules, revokeRules)
 
 	data, err := json.Marshal(record)
@@ -468,7 +512,11 @@ func (s *VPCServiceImpl) RevokeSecurityGroupEgress(input *ec2.RevokeSecurityGrou
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	revokeRules := ipPermissionsToSGRules(input.IpPermissions)
+	revokeRules, err := ipPermissionsToSGRules(input.IpPermissions)
+	if err != nil {
+		slog.Warn("RevokeSecurityGroupEgress: invalid rule", "groupId", groupId, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 	record.EgressRules = removeSGRules(record.EgressRules, revokeRules)
 
 	data, err := json.Marshal(record)
@@ -510,8 +558,11 @@ func (s *VPCServiceImpl) sgRecordToEC2(record *SecurityGroupRecord, accountID st
 	return sg
 }
 
-// ipPermissionsToSGRules converts AWS IpPermission slice to SGRule slice.
-func ipPermissionsToSGRules(perms []*ec2.IpPermission) []SGRule {
+// ipPermissionsToSGRules converts AWS IpPermission slice to SGRule slice, validating
+// every tenant-supplied CidrIp/SourceSG. This is the only path that constructs SGRule
+// from external input — validating here makes it impossible for a future handler to
+// bypass the check.
+func ipPermissionsToSGRules(perms []*ec2.IpPermission) ([]SGRule, error) {
 	var rules []SGRule
 	for _, perm := range perms {
 		if perm == nil {
@@ -531,42 +582,36 @@ func ipPermissionsToSGRules(perms []*ec2.IpPermission) []SGRule {
 			toPort = *perm.ToPort
 		}
 
-		// One rule per CIDR range
+		appended := false
 		for _, ipRange := range perm.IpRanges {
 			if ipRange.CidrIp == nil {
 				continue
 			}
-			rules = append(rules, SGRule{
-				IpProtocol: proto,
-				FromPort:   fromPort,
-				ToPort:     toPort,
-				CidrIp:     *ipRange.CidrIp,
-			})
+			r := SGRule{IpProtocol: proto, FromPort: fromPort, ToPort: toPort, CidrIp: *ipRange.CidrIp}
+			if err := validateSGRule(r); err != nil {
+				return nil, err
+			}
+			rules = append(rules, r)
+			appended = true
 		}
 
-		// One rule per source security group
 		for _, pair := range perm.UserIdGroupPairs {
 			if pair.GroupId == nil {
 				continue
 			}
-			rules = append(rules, SGRule{
-				IpProtocol: proto,
-				FromPort:   fromPort,
-				ToPort:     toPort,
-				SourceSG:   *pair.GroupId,
-			})
+			r := SGRule{IpProtocol: proto, FromPort: fromPort, ToPort: toPort, SourceSG: *pair.GroupId}
+			if err := validateSGRule(r); err != nil {
+				return nil, err
+			}
+			rules = append(rules, r)
+			appended = true
 		}
 
-		// If no ranges and no groups specified, add a rule with no source filter
-		if len(perm.IpRanges) == 0 && len(perm.UserIdGroupPairs) == 0 {
-			rules = append(rules, SGRule{
-				IpProtocol: proto,
-				FromPort:   fromPort,
-				ToPort:     toPort,
-			})
+		if !appended {
+			return nil, errors.New("IpPermission must specify at least one IpRange or UserIdGroupPair")
 		}
 	}
-	return rules
+	return rules, nil
 }
 
 // sgRulesToIpPermissions converts SGRule slice to AWS IpPermission slice.

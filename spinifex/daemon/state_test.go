@@ -80,9 +80,7 @@ func TestTransitionState_ValidTransitions(t *testing.T) {
 				Status: tt.from,
 			}
 
-			daemon.Instances.Mu.Lock()
-			daemon.Instances.VMS[instance.ID] = instance
-			daemon.Instances.Mu.Unlock()
+			daemon.vmMgr.Insert(instance)
 
 			err := daemon.TransitionState(instance, tt.to)
 			require.NoError(t, err)
@@ -120,9 +118,7 @@ func TestTransitionState_InvalidTransitions(t *testing.T) {
 				Status: tt.from,
 			}
 
-			daemon.Instances.Mu.Lock()
-			daemon.Instances.VMS[instance.ID] = instance
-			daemon.Instances.Mu.Unlock()
+			daemon.vmMgr.Insert(instance)
 
 			err := daemon.TransitionState(instance, tt.to)
 			assert.Error(t, err)
@@ -143,9 +139,7 @@ func TestTransitionState_NilEC2Instance(t *testing.T) {
 		Instance: nil, // no EC2 instance metadata
 	}
 
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instance.ID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 
 	err := daemon.TransitionState(instance, vm.StateRunning)
 	require.NoError(t, err)
@@ -265,9 +259,7 @@ func TestStopLifecycle_CompletesFullChain(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instance := &vm.VM{ID: "i-lifecycle-stop", Status: vm.StateProvisioning}
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instance.ID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 
 	chain := []vm.InstanceState{
 		vm.StateRunning,      // launch
@@ -292,9 +284,7 @@ func TestStopLifecycle_ErrorRecovery(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instance := &vm.VM{ID: "i-lifecycle-err", Status: vm.StateRunning}
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instance.ID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 
 	chain := []vm.InstanceState{
 		vm.StateStopping,
@@ -316,9 +306,7 @@ func TestShuttingDown_ErrorRecovery(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instance := &vm.VM{ID: "i-shutdown-err", Status: vm.StateShuttingDown}
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instance.ID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 
 	chain := []vm.InstanceState{
 		vm.StateError,        // terminate failed
@@ -334,6 +322,31 @@ func TestShuttingDown_ErrorRecovery(t *testing.T) {
 	assert.Equal(t, vm.StateTerminated, instance.Status)
 }
 
+// TestLaunchInstance_AbortedByConcurrentTerminate exercises the
+// terminate-during-pending race: a terminate request transitions
+// status to shutting-down while LaunchInstance is in flight.
+// LaunchInstance must return nil (not an error) so the concurrent
+// terminate goroutine owns cleanup without colliding with launch
+// state writes. Pre-fix this returned a non-nil error which surfaced
+// as a spurious ERROR log on every legitimate terminate-during-pending.
+func TestLaunchInstance_AbortedByConcurrentTerminate(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+
+	for _, status := range []vm.InstanceState{vm.StateShuttingDown, vm.StateTerminated, vm.StateRunning} {
+		t.Run(string(status), func(t *testing.T) {
+			instance := &vm.VM{
+				ID:     "i-abort-" + string(status),
+				Status: status,
+			}
+			daemon.vmMgr.Insert(instance)
+
+			err := daemon.LaunchInstance(instance)
+			require.NoError(t, err, "expected nil for non-launchable status %s", status)
+			assert.Equal(t, status, instance.Status, "status must not change")
+		})
+	}
+}
+
 // TestTransitionState_ConcurrentTransitions hammers the same instance with
 // concurrent transitions to verify the mutex protects against races and
 // the instance always ends in a valid state.
@@ -341,9 +354,7 @@ func TestTransitionState_ConcurrentTransitions(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instance := &vm.VM{ID: "i-concurrent", Status: vm.StateRunning}
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[instance.ID] = instance
-	daemon.Instances.Mu.Unlock()
+	daemon.vmMgr.Insert(instance)
 
 	// Multiple goroutines race to transition from running.
 	// After one succeeds, the others may chain from the new state
@@ -403,9 +414,7 @@ func TestTransitionState_DoubleTransitionSameTarget(t *testing.T) {
 	for _, state := range allStates {
 		t.Run(string(state), func(t *testing.T) {
 			instance := &vm.VM{ID: fmt.Sprintf("i-double-%s", state), Status: state}
-			daemon.Instances.Mu.Lock()
-			daemon.Instances.VMS[instance.ID] = instance
-			daemon.Instances.Mu.Unlock()
+			daemon.vmMgr.Insert(instance)
 
 			err := daemon.TransitionState(instance, state)
 			assert.Error(t, err, "self-transition %s -> %s should be rejected", state, state)
@@ -422,9 +431,7 @@ func TestTransitionState_InvalidFromTerminated(t *testing.T) {
 	for _, target := range allStates {
 		t.Run(fmt.Sprintf("terminated->%s", target), func(t *testing.T) {
 			instance := &vm.VM{ID: fmt.Sprintf("i-term-%s", target), Status: vm.StateTerminated}
-			daemon.Instances.Mu.Lock()
-			daemon.Instances.VMS[instance.ID] = instance
-			daemon.Instances.Mu.Unlock()
+			daemon.vmMgr.Insert(instance)
 
 			err := daemon.TransitionState(instance, target)
 			assert.Error(t, err, "transition from terminated to %s should be rejected", target)
@@ -441,9 +448,7 @@ func TestTransitionState_StoppingMustReachStoppedOrError(t *testing.T) {
 
 	t.Run("happy_path", func(t *testing.T) {
 		instance := &vm.VM{ID: "i-stop-happy", Status: vm.StateStopping}
-		daemon.Instances.Mu.Lock()
-		daemon.Instances.VMS[instance.ID] = instance
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Insert(instance)
 
 		err := daemon.TransitionState(instance, vm.StateStopped)
 		require.NoError(t, err)
@@ -452,9 +457,7 @@ func TestTransitionState_StoppingMustReachStoppedOrError(t *testing.T) {
 
 	t.Run("error_path", func(t *testing.T) {
 		instance := &vm.VM{ID: "i-stop-error", Status: vm.StateStopping}
-		daemon.Instances.Mu.Lock()
-		daemon.Instances.VMS[instance.ID] = instance
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Insert(instance)
 
 		err := daemon.TransitionState(instance, vm.StateError)
 		require.NoError(t, err)
@@ -463,9 +466,7 @@ func TestTransitionState_StoppingMustReachStoppedOrError(t *testing.T) {
 
 	t.Run("force_terminate_path", func(t *testing.T) {
 		instance := &vm.VM{ID: "i-stop-term", Status: vm.StateStopping}
-		daemon.Instances.Mu.Lock()
-		daemon.Instances.VMS[instance.ID] = instance
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Insert(instance)
 
 		err := daemon.TransitionState(instance, vm.StateShuttingDown)
 		require.NoError(t, err)
@@ -484,9 +485,7 @@ func TestTransitionState_ShuttingDownMustReachTerminatedOrError(t *testing.T) {
 
 	t.Run("happy_path", func(t *testing.T) {
 		instance := &vm.VM{ID: "i-shut-happy", Status: vm.StateShuttingDown}
-		daemon.Instances.Mu.Lock()
-		daemon.Instances.VMS[instance.ID] = instance
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Insert(instance)
 
 		err := daemon.TransitionState(instance, vm.StateTerminated)
 		require.NoError(t, err)
@@ -495,9 +494,7 @@ func TestTransitionState_ShuttingDownMustReachTerminatedOrError(t *testing.T) {
 
 	t.Run("error_path", func(t *testing.T) {
 		instance := &vm.VM{ID: "i-shut-error", Status: vm.StateShuttingDown}
-		daemon.Instances.Mu.Lock()
-		daemon.Instances.VMS[instance.ID] = instance
-		daemon.Instances.Mu.Unlock()
+		daemon.vmMgr.Insert(instance)
 
 		err := daemon.TransitionState(instance, vm.StateError)
 		require.NoError(t, err)
@@ -548,11 +545,8 @@ func TestTransitionState_MultipleInstancesIndependent(t *testing.T) {
 
 	inst1 := &vm.VM{ID: "i-multi-1", Status: vm.StateRunning}
 	inst2 := &vm.VM{ID: "i-multi-2", Status: vm.StateRunning}
-	daemon.Instances.Mu.Lock()
-	daemon.Instances.VMS[inst1.ID] = inst1
-	daemon.Instances.VMS[inst2.ID] = inst2
-	daemon.Instances.Mu.Unlock()
-
+	daemon.vmMgr.Insert(inst1)
+	daemon.vmMgr.Insert(inst2)
 	err := daemon.TransitionState(inst1, vm.StateStopping)
 	require.NoError(t, err)
 
@@ -583,20 +577,20 @@ func TestRestoreInstances_StoppingFinalizedToStopped(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	// Simulate: daemon was running, instance was in StateStopping, daemon crashed.
-	daemon.Instances.VMS["i-restore-stop"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-restore-stop",
 		Status: vm.StateStopping,
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
 	// Clear in-memory state to simulate fresh daemon startup.
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 
 	// restoreInstances loads from JetStream and resolves transitional states.
 	simulateCleanRestore(t, daemon)
 
 	// Stopped instances are migrated to shared KV and removed from local map
-	_, ok := daemon.Instances.VMS["i-restore-stop"]
+	_, ok := daemon.vmMgr.Get("i-restore-stop")
 	assert.False(t, ok, "stopping→stopped instance should be migrated to shared KV, not in local map")
 
 	stoppedInst, err := daemon.jsManager.LoadStoppedInstance("i-restore-stop")
@@ -611,17 +605,17 @@ func TestRestoreInstances_StoppingFinalizedToStopped(t *testing.T) {
 func TestRestoreInstances_ShuttingDownFinalizedToTerminated(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
-	daemon.Instances.VMS["i-restore-shut"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-restore-shut",
 		Status: vm.StateShuttingDown,
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// shutting-down→terminated should be migrated to terminated KV
-	_, ok := daemon.Instances.VMS["i-restore-shut"]
+	_, ok := daemon.vmMgr.Get("i-restore-shut")
 	assert.False(t, ok, "terminated instance should be removed from local map")
 
 	terminatedInst, err := daemon.jsManager.LoadTerminatedInstance("i-restore-shut")
@@ -636,16 +630,16 @@ func TestRestoreInstances_ShuttingDownFinalizedToTerminated(t *testing.T) {
 func TestRestoreInstances_TerminatedRemoved(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
-	daemon.Instances.VMS["i-restore-term"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-restore-term",
 		Status: vm.StateTerminated,
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
-	_, ok := daemon.Instances.VMS["i-restore-term"]
+	_, ok := daemon.vmMgr.Get("i-restore-term")
 	assert.False(t, ok, "terminated instance should be removed from local map")
 }
 
@@ -654,20 +648,20 @@ func TestRestoreInstances_TerminatedRemoved(t *testing.T) {
 func TestRestoreInstances_UserStoppedMigratedToSharedKV(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
-	daemon.Instances.VMS["i-restore-userstop"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-restore-userstop",
 		Status: vm.StateStopped,
 		Attributes: types.EC2CommandAttributes{
 			StopInstance: true,
 		},
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// Stopped instances should be migrated to shared KV
-	_, ok := daemon.Instances.VMS["i-restore-userstop"]
+	_, ok := daemon.vmMgr.Get("i-restore-userstop")
 	assert.False(t, ok, "user-stopped instance should be migrated to shared KV, not in local map")
 
 	stoppedInst, err := daemon.jsManager.LoadStoppedInstance("i-restore-userstop")
@@ -684,16 +678,16 @@ func TestRestoreInstances_UserStoppedMigratedToSharedKV(t *testing.T) {
 func TestRestoreInstances_RunningResetToPending(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
-	daemon.Instances.VMS["i-restore-run"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-restore-run",
 		Status: vm.StateRunning,
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
-	instance, ok := daemon.Instances.VMS["i-restore-run"]
+	instance, ok := daemon.vmMgr.Get("i-restore-run")
 	require.True(t, ok, "running instance should still be loaded")
 	// LaunchInstance fails (no QEMU), so it stays pending or gets marked failed.
 	// Either way it should NOT remain "running" — that would be a lie.
@@ -709,20 +703,20 @@ func TestRestoreInstances_RunningResetsLaunchTime(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	staleTime := time.Now().Add(-30 * time.Minute)
-	daemon.Instances.VMS["i-stale-launch"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-stale-launch",
 		Status: vm.StateRunning,
 		Instance: &ec2.Instance{
 			LaunchTime: &staleTime,
 		},
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	before := time.Now()
 	simulateCleanRestore(t, daemon)
 
-	instance, ok := daemon.Instances.VMS["i-stale-launch"]
+	instance, ok := daemon.vmMgr.Get("i-stale-launch")
 	require.True(t, ok, "instance should be loaded from state")
 	require.NotNil(t, instance.Instance)
 	require.NotNil(t, instance.Instance.LaunchTime)
@@ -740,26 +734,26 @@ func TestRestoreInstances_RunningResetsLaunchTime(t *testing.T) {
 func TestRestoreInstances_MixedStates(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
-	daemon.Instances.VMS["i-mix-stopping"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID: "i-mix-stopping", Status: vm.StateStopping,
-	}
-	daemon.Instances.VMS["i-mix-shutting"] = &vm.VM{
+	})
+	daemon.vmMgr.Insert(&vm.VM{
 		ID: "i-mix-shutting", Status: vm.StateShuttingDown,
-	}
-	daemon.Instances.VMS["i-mix-terminated"] = &vm.VM{
+	})
+	daemon.vmMgr.Insert(&vm.VM{
 		ID: "i-mix-terminated", Status: vm.StateTerminated,
-	}
-	daemon.Instances.VMS["i-mix-stopped"] = &vm.VM{
+	})
+	daemon.vmMgr.Insert(&vm.VM{
 		ID: "i-mix-stopped", Status: vm.StateStopped,
 		Attributes: types.EC2CommandAttributes{StopInstance: true},
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// Stopped instances are migrated to shared KV and removed from local map
-	assert.Nil(t, daemon.Instances.VMS["i-mix-stopping"],
+	assertVMNotPresent(t, daemon, "i-mix-stopping",
 		"stopping→stopped should be migrated to shared KV")
 	stoppedFromStopping, err := daemon.jsManager.LoadStoppedInstance("i-mix-stopping")
 	require.NoError(t, err)
@@ -767,7 +761,7 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	assert.Equal(t, vm.StateStopped, stoppedFromStopping.Status)
 
 	// shutting-down should finalize to terminated and migrate to terminated KV
-	assert.Nil(t, daemon.Instances.VMS["i-mix-shutting"],
+	assertVMNotPresent(t, daemon, "i-mix-shutting",
 		"shutting-down→terminated should be migrated to terminated KV")
 	terminatedFromShutting, err2 := daemon.jsManager.LoadTerminatedInstance("i-mix-shutting")
 	require.NoError(t, err2)
@@ -775,10 +769,10 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	assert.Equal(t, vm.StateTerminated, terminatedFromShutting.Status)
 
 	// already-terminated should be removed from local map (no migration, just cleanup)
-	assert.Nil(t, daemon.Instances.VMS["i-mix-terminated"],
+	assertVMNotPresent(t, daemon, "i-mix-terminated",
 		"terminated should be removed from local map")
 
-	assert.Nil(t, daemon.Instances.VMS["i-mix-stopped"],
+	assertVMNotPresent(t, daemon, "i-mix-stopped",
 		"user-stopped should be migrated to shared KV")
 	stoppedFromUser, err := daemon.jsManager.LoadStoppedInstance("i-mix-stopped")
 	require.NoError(t, err)
@@ -792,20 +786,20 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
-	daemon.Instances.VMS["i-persist-stop"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID: "i-persist-stop", Status: vm.StateStopping,
-	}
-	daemon.Instances.VMS["i-persist-shut"] = &vm.VM{
+	})
+	daemon.vmMgr.Insert(&vm.VM{
 		ID: "i-persist-shut", Status: vm.StateShuttingDown,
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
 	// First restart: finalize transitional states.
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// stopping→stopped migrates to shared KV
-	assert.Nil(t, daemon.Instances.VMS["i-persist-stop"],
+	assertVMNotPresent(t, daemon, "i-persist-stop",
 		"stopping→stopped should be migrated to shared KV")
 	stoppedInst, err := daemon.jsManager.LoadStoppedInstance("i-persist-stop")
 	require.NoError(t, err)
@@ -813,7 +807,7 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	assert.Equal(t, vm.StateStopped, stoppedInst.Status)
 
 	// shutting-down→terminated should be migrated to terminated KV
-	assert.Nil(t, daemon.Instances.VMS["i-persist-shut"],
+	assertVMNotPresent(t, daemon, "i-persist-shut",
 		"terminated instance should be removed from local map")
 	terminatedInst, err := daemon.jsManager.LoadTerminatedInstance("i-persist-shut")
 	require.NoError(t, err)
@@ -822,7 +816,7 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 
 	// Second restart: stopped instance is in shared KV (not per-node state),
 	// terminated instance is in terminated KV (not per-node state).
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// Stopped instance should still be in shared KV
@@ -844,9 +838,9 @@ func TestMigrateInstanceToKV(t *testing.T) {
 
 	// Test stopped migration
 	stoppedVM := &vm.VM{ID: "i-migrate-stop", Status: vm.StateStopped}
-	daemon.Instances.VMS[stoppedVM.ID] = stoppedVM
+	daemon.vmMgr.Insert(stoppedVM)
 	assert.True(t, daemon.migrateStoppedToSharedKV(stoppedVM))
-	assert.Nil(t, daemon.Instances.VMS[stoppedVM.ID], "should be removed from local map")
+	assertVMNotPresent(t, daemon, stoppedVM.ID, "should be removed from local map")
 	loaded, err := daemon.jsManager.LoadStoppedInstance(stoppedVM.ID)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
@@ -854,9 +848,9 @@ func TestMigrateInstanceToKV(t *testing.T) {
 
 	// Test terminated migration
 	terminatedVM := &vm.VM{ID: "i-migrate-term", Status: vm.StateTerminated}
-	daemon.Instances.VMS[terminatedVM.ID] = terminatedVM
+	daemon.vmMgr.Insert(terminatedVM)
 	assert.True(t, daemon.migrateTerminatedToKV(terminatedVM))
-	assert.Nil(t, daemon.Instances.VMS[terminatedVM.ID], "should be removed from local map")
+	assertVMNotPresent(t, daemon, terminatedVM.ID, "should be removed from local map")
 	loadedTerm, err := daemon.jsManager.LoadTerminatedInstance(terminatedVM.ID)
 	require.NoError(t, err)
 	require.NotNil(t, loadedTerm)
@@ -869,11 +863,11 @@ func TestMigrateInstanceToKV_NoJetStream(t *testing.T) {
 	daemon.jsManager = nil
 
 	vm1 := &vm.VM{ID: "i-no-js", Status: vm.StateStopped}
-	daemon.Instances.VMS[vm1.ID] = vm1
+	daemon.vmMgr.Insert(vm1)
 	assert.False(t, daemon.migrateStoppedToSharedKV(vm1))
 	assert.False(t, daemon.migrateTerminatedToKV(vm1))
 	// Instance should still be in local map since migration failed
-	assert.NotNil(t, daemon.Instances.VMS[vm1.ID])
+	assertVMPresent(t, daemon, vm1.ID)
 }
 
 // TestStatePersistence_RoundTrip verifies that all instance fields survive
@@ -890,14 +884,14 @@ func TestStatePersistence_RoundTrip(t *testing.T) {
 			TerminateInstance: false,
 		},
 	}
-	daemon.Instances.VMS[original.ID] = original
+	daemon.vmMgr.Insert(original)
 	require.NoError(t, daemon.WriteState())
 
 	// Simulate restart: clear and reload.
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	require.NoError(t, daemon.LoadState())
 
-	loaded := daemon.Instances.VMS["i-roundtrip"]
+	loaded, _ := daemon.vmMgr.Get("i-roundtrip")
 	require.NotNil(t, loaded)
 	assert.Equal(t, original.ID, loaded.ID)
 	assert.Equal(t, original.Status, loaded.Status)
@@ -912,20 +906,20 @@ func TestRestoreInstances_StoppedInstanceMigratedToSharedKV(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instanceID := "i-restore-start"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: "t3.micro",
 		Status:       vm.StateStopped,
 		Attributes:   types.EC2CommandAttributes{StopInstance: true},
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
 	// Simulate daemon restart: clear in-memory state and restore from JetStream.
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// Instance should not be in local map (migrated to shared KV).
-	_, ok := daemon.Instances.VMS[instanceID]
+	_, ok := daemon.vmMgr.Get(instanceID)
 	assert.False(t, ok, "stopped instance should be migrated to shared KV, not in local map")
 
 	// Instance should be in shared KV
@@ -944,20 +938,20 @@ func TestRestoreInstances_UnknownTypeMigratedToStoppedWithReason(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instanceID := "i-restore-notype"
-	daemon.Instances.VMS[instanceID] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceID,
 		InstanceType: "m7i.small", // type that won't exist on this host
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
 	// Simulate daemon restart
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	simulateCleanRestore(t, daemon)
 
 	// Instance should not be in local map (migrated to shared KV)
-	_, ok := daemon.Instances.VMS[instanceID]
+	_, ok := daemon.vmMgr.Get(instanceID)
 	assert.False(t, ok, "instance with unknown type should be migrated to shared KV")
 
 	// Instance should be stopped in shared KV with capacity reason
@@ -978,46 +972,43 @@ func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
 	staleTime := time.Now().Add(-6 * time.Minute)
 	recentTime := time.Now()
 
-	daemon.Instances.VMS["i-stuck"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-stuck",
 		Status: vm.StatePending,
 		Instance: &ec2.Instance{
 			LaunchTime: &staleTime,
 		},
-	}
-	daemon.Instances.VMS["i-fresh"] = &vm.VM{
+	})
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:     "i-fresh",
 		Status: vm.StatePending,
 		Instance: &ec2.Instance{
 			LaunchTime: &recentTime,
 		},
-	}
+	})
 
 	// Run one watchdog tick manually instead of waiting for the ticker
-	daemon.Instances.Mu.Lock()
 	var stuck []*vm.VM
-	for _, instance := range daemon.Instances.VMS {
+	for _, instance := range daemon.vmMgr.Snapshot() {
 		if (instance.Status == vm.StatePending || instance.Status == vm.StateProvisioning) &&
 			instance.Instance != nil && instance.Instance.LaunchTime != nil &&
 			time.Since(*instance.Instance.LaunchTime) > 5*time.Minute {
 			stuck = append(stuck, instance)
 		}
 	}
-	daemon.Instances.Mu.Unlock()
-
 	for _, instance := range stuck {
 		daemon.markInstanceFailed(instance, "launch_timeout")
 	}
 
 	// Stuck instance should have transitioned to shutting-down
-	stuckInst := daemon.Instances.VMS["i-stuck"]
+	stuckInst, _ := daemon.vmMgr.Get("i-stuck")
 	assert.Equal(t, vm.StateShuttingDown, stuckInst.Status)
 	require.NotNil(t, stuckInst.Instance.StateReason)
 	assert.Equal(t, "Server.InternalError", *stuckInst.Instance.StateReason.Code)
 	assert.Equal(t, "launch_timeout", *stuckInst.Instance.StateReason.Message)
 
 	// Fresh instance should still be pending
-	freshInst := daemon.Instances.VMS["i-fresh"]
+	freshInst, _ := daemon.vmMgr.Get("i-fresh")
 	assert.Equal(t, vm.StatePending, freshInst.Status)
 }
 
@@ -1110,7 +1101,7 @@ func TestMarkInstanceFailed_AlreadyShuttingDown(t *testing.T) {
 		Status:   vm.StateShuttingDown,
 		Instance: &ec2.Instance{},
 	}
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Should be a no-op — instance is already being cleaned up
 	daemon.markInstanceFailed(instance, "test_reason")
@@ -1127,7 +1118,7 @@ func TestMarkInstanceFailed_AlreadyTerminated(t *testing.T) {
 		Status:   vm.StateTerminated,
 		Instance: &ec2.Instance{},
 	}
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	daemon.markInstanceFailed(instance, "test_reason")
 
@@ -1142,14 +1133,14 @@ func TestRestoreInstances_ProvisioningInstanceLaunchTimeReset(t *testing.T) {
 	// their LaunchTime reset so the pending watchdog doesn't immediately kill
 	// them after a prolonged outage.
 	staleTime := time.Now().Add(-30 * time.Minute)
-	daemon.Instances.VMS["i-provisioning"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:       "i-provisioning",
 		Status:   vm.StateProvisioning,
 		Instance: &ec2.Instance{LaunchTime: &staleTime},
-	}
+	})
 	require.NoError(t, daemon.WriteState())
 
-	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.vmMgr.Replace(map[string]*vm.VM{})
 	before := time.Now()
 	simulateCleanRestore(t, daemon)
 
@@ -1157,7 +1148,7 @@ func TestRestoreInstances_ProvisioningInstanceLaunchTimeReset(t *testing.T) {
 	// from the map. The instance may have been removed by markInstanceFailed
 	// (launch fails in test env), so load directly from JetStream state.
 	require.NoError(t, daemon.LoadState())
-	instance := daemon.Instances.VMS["i-provisioning"]
+	instance, _ := daemon.vmMgr.Get("i-provisioning")
 	if instance == nil {
 		// Instance was cleaned up by markInstanceFailed — that's fine.
 		// The important thing is that the LaunchTime WAS reset before

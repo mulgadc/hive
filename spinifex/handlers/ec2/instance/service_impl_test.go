@@ -18,21 +18,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mgrWith returns a vm.Manager pre-populated with vms. Test fixture for
+// services that previously took a *vm.Instances; post-vm.Manager refactor we
+// build a Manager and Replace its set rather than inlining a map.
+func mgrWith(vms map[string]*vm.VM) *vm.Manager {
+	m := vm.NewManager()
+	if len(vms) > 0 {
+		m.Replace(vms)
+	}
+	return m
+}
+
 func TestNewInstanceServiceImpl(t *testing.T) {
 	cfg := &config.Config{}
 	instanceTypes := map[string]*ec2.InstanceTypeInfo{
 		"t3.micro": {InstanceType: aws.String("t3.micro")},
 	}
 	store := objectstore.NewMemoryObjectStore()
-	instances := &vm.Instances{VMS: make(map[string]*vm.VM)}
+	mgr := vm.NewManager()
 
-	svc := NewInstanceServiceImpl(cfg, instanceTypes, nil, instances, store, nil, nil)
+	svc := NewInstanceServiceImpl(cfg, instanceTypes, nil, store, mgr, nil, nil)
 
 	require.NotNil(t, svc)
 	assert.Equal(t, cfg, svc.config)
 	assert.Equal(t, instanceTypes, svc.instanceTypes)
 	assert.Nil(t, svc.natsConn)
-	assert.Equal(t, instances, svc.instances)
+	assert.Equal(t, mgr, svc.vmMgr)
 	assert.Equal(t, store, svc.objectStore)
 }
 
@@ -709,7 +720,7 @@ func TestDescribeInstanceTypes_CapacityFilterPropagates(t *testing.T) {
 }
 
 func TestDescribeInstances_Empty(t *testing.T) {
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{})}
 	out, err := svc.DescribeInstances(&ec2.DescribeInstancesInput{}, utils.GlobalAccountID)
 	require.NoError(t, err)
 	assert.Empty(t, out.Reservations)
@@ -730,7 +741,7 @@ func TestDescribeInstances_OneVisibleInstance(t *testing.T) {
 		},
 		Instance: &ec2.Instance{InstanceId: aws.String(id), InstanceType: aws.String("t3.micro")},
 	}
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{id: v}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{id: v})}
 
 	out, err := svc.DescribeInstances(&ec2.DescribeInstancesInput{}, owner)
 	require.NoError(t, err)
@@ -750,7 +761,7 @@ func TestDescribeInstances_AccountFilteringHidesOtherTenant(t *testing.T) {
 		},
 		Instance: &ec2.Instance{InstanceId: aws.String("i-other")},
 	}
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{v.ID: v}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{v.ID: v})}
 
 	out, err := svc.DescribeInstances(&ec2.DescribeInstancesInput{}, "111122223333")
 	require.NoError(t, err)
@@ -758,7 +769,7 @@ func TestDescribeInstances_AccountFilteringHidesOtherTenant(t *testing.T) {
 }
 
 func TestDescribeInstances_MalformedID(t *testing.T) {
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{})}
 	input := &ec2.DescribeInstancesInput{
 		InstanceIds: []*string{aws.String("not-an-id")},
 	}
@@ -782,10 +793,10 @@ func TestDescribeInstances_FilterByInstanceID(t *testing.T) {
 		},
 		Instance: &ec2.Instance{InstanceId: aws.String("i-drop")},
 	}
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{
 		keep.ID: keep,
 		drop.ID: drop,
-	}}}
+	})}
 
 	input := &ec2.DescribeInstancesInput{InstanceIds: []*string{aws.String("i-keep")}}
 	out, err := svc.DescribeInstances(input, utils.GlobalAccountID)
@@ -795,7 +806,7 @@ func TestDescribeInstances_FilterByInstanceID(t *testing.T) {
 }
 
 func TestDescribeInstanceAttribute_MissingInstanceID(t *testing.T) {
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{})}
 	_, err := svc.DescribeInstanceAttribute(&ec2.DescribeInstanceAttributeInput{
 		Attribute: aws.String(ec2.InstanceAttributeNameInstanceType),
 	}, "")
@@ -804,7 +815,7 @@ func TestDescribeInstanceAttribute_MissingInstanceID(t *testing.T) {
 }
 
 func TestDescribeInstanceAttribute_MissingAttribute(t *testing.T) {
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{})}
 	_, err := svc.DescribeInstanceAttribute(&ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("i-aaa"),
 	}, "")
@@ -821,7 +832,7 @@ func TestDescribeInstanceAttribute_RunningInstance(t *testing.T) {
 		AccountID:    owner,
 		UserData:     "raw-user-data",
 	}
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{id: v}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{id: v})}
 
 	tests := []struct {
 		name       string
@@ -893,7 +904,7 @@ func TestDescribeInstanceAttribute_RunningInstance(t *testing.T) {
 }
 
 func TestDescribeInstanceAttribute_NotRunning_NoStore(t *testing.T) {
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{})}
 	_, err := svc.DescribeInstanceAttribute(&ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("i-missing"),
 		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
@@ -909,7 +920,7 @@ func TestDescribeInstanceAttribute_FoundInStoppedStore(t *testing.T) {
 		id: {ID: id, InstanceType: "t3.medium", AccountID: owner},
 	}}
 	svc := &InstanceServiceImpl{
-		instances:    &vm.Instances{VMS: map[string]*vm.VM{}},
+		vmMgr:        mgrWith(map[string]*vm.VM{}),
 		stoppedStore: store,
 	}
 
@@ -923,7 +934,7 @@ func TestDescribeInstanceAttribute_FoundInStoppedStore(t *testing.T) {
 
 func TestDescribeInstanceAttribute_NotFound(t *testing.T) {
 	svc := &InstanceServiceImpl{
-		instances:    &vm.Instances{VMS: map[string]*vm.VM{}},
+		vmMgr:        mgrWith(map[string]*vm.VM{}),
 		stoppedStore: &fakeStoppedStore{loadByID: map[string]*vm.VM{}},
 	}
 	_, err := svc.DescribeInstanceAttribute(&ec2.DescribeInstanceAttributeInput{
@@ -937,7 +948,7 @@ func TestDescribeInstanceAttribute_NotFound(t *testing.T) {
 func TestDescribeInstanceAttribute_HiddenForOtherAccount(t *testing.T) {
 	id := "i-other-acct"
 	v := &vm.VM{ID: id, InstanceType: "t3.micro", AccountID: "999988887777"}
-	svc := &InstanceServiceImpl{instances: &vm.Instances{VMS: map[string]*vm.VM{id: v}}}
+	svc := &InstanceServiceImpl{vmMgr: mgrWith(map[string]*vm.VM{id: v})}
 
 	_, err := svc.DescribeInstanceAttribute(&ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(id),

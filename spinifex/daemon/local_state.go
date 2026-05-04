@@ -46,16 +46,17 @@ func LocalStatePath(dataDir string) string {
 	return filepath.Join(dataDir, DefaultLocalStateDir, LocalStateFileName)
 }
 
-// WriteLocalState atomically writes the instance state to path.
-// Caller must hold instances.Mu.
+// WriteLocalState atomically writes the instance state to path. vms must be a
+// snapshot owned by the caller (e.g. from vm.Manager.SnapshotMap) — this
+// function does not lock.
 //
 // Atomicity: marshal → write to <path>.tmp → fsync → rename. The rename is
 // atomic on POSIX so a concurrent reader sees either the old file or the new
 // one, never a half-written file.
-func WriteLocalState(path string, instances *vm.Instances) error {
+func WriteLocalState(path string, vms map[string]*vm.VM) error {
 	state := LocalState{
 		SchemaVersion: LocalStateSchemaVersion,
-		VMS:           instances.VMS,
+		VMS:           vms,
 	}
 
 	data, err := json.Marshal(state)

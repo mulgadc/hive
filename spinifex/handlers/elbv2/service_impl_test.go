@@ -3,6 +3,7 @@ package handlers_elbv2
 import (
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -414,6 +415,95 @@ func TestCreateTargetGroup_TCPWithCustomHealthCheck(t *testing.T) {
 	assert.Equal(t, "/health", *tg.HealthCheckPath)
 	assert.Equal(t, "200", *tg.Matcher.HttpCode)
 	assert.Equal(t, int64(15), *tg.HealthCheckIntervalSeconds)
+}
+
+func TestCreateTargetGroup_RejectsHealthCheckPathInjection(t *testing.T) {
+	svc := setupTestService(t)
+
+	cases := map[string]string{
+		"newline_haproxy_directive": "/x\nbind 0.0.0.0:9999",
+		"trailing_directive":        "/x\n    use_backend other",
+		"crlf":                      "/x\r\nbind 0.0.0.0:9999",
+		"cr_only":                   "/x\rbind",
+		"tab":                       "/x\tuse_backend other",
+		"semicolon_drop":            "/x; drop",
+		"jndi":                      "${jndi:ldap://x}",
+		"space":                     "/path with space",
+		"leading_space":             " /healthz",
+		"trailing_space":            "/healthz ",
+		"whitespace_only":           "   ",
+		"multibyte_utf8":            "/healthz・",
+		"empty":                     "",
+		"too_long":                  strings.Repeat("a", maxHealthCheckPathLen+1),
+		"control_byte":              "/x\x00",
+	}
+
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+				Name:            aws.String("inj-" + name),
+				HealthCheckPath: aws.String(payload),
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "InvalidParameterValue")
+		})
+	}
+}
+
+func TestCreateTargetGroup_RejectsMatcherInjection(t *testing.T) {
+	svc := setupTestService(t)
+
+	cases := map[string]string{
+		"newline_use_backend": "200\nuse_backend other",
+		"crlf":                "200\r\nuse_backend other",
+		"tab":                 "200\t201",
+		"alpha":               "abc",
+		"empty":               "",
+		"whitespace_only":     " ",
+		"multibyte_digits":    "２００",
+		"too_long":            strings.Repeat("9", maxHealthCheckMatcherLen+1),
+		"with_space":          "200 ,201",
+	}
+
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+				Name:    aws.String("matcher-" + name),
+				Matcher: &elbv2.Matcher{HttpCode: aws.String(payload)},
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "InvalidParameterValue")
+		})
+	}
+}
+
+func TestCreateTargetGroup_AcceptsValidHealthCheckInputs(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:            aws.String("ok-tg"),
+		HealthCheckPath: aws.String("/healthz?probe=lb#frag"),
+		Matcher:         &elbv2.Matcher{HttpCode: aws.String("200-299,301")},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "/healthz?probe=lb#frag", *out.TargetGroups[0].HealthCheckPath)
+	assert.Equal(t, "200-299,301", *out.TargetGroups[0].Matcher.HttpCode)
+}
+
+func TestCreateTargetGroup_AcceptsHealthCheckBoundaryLengths(t *testing.T) {
+	svc := setupTestService(t)
+
+	maxPath := "/" + strings.Repeat("a", maxHealthCheckPathLen-1)
+	maxMatcher := "2" + strings.Repeat("0", maxHealthCheckMatcherLen-1)
+
+	out, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:            aws.String("boundary-tg"),
+		HealthCheckPath: aws.String(maxPath),
+		Matcher:         &elbv2.Matcher{HttpCode: aws.String(maxMatcher)},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, maxPath, *out.TargetGroups[0].HealthCheckPath)
+	assert.Equal(t, maxMatcher, *out.TargetGroups[0].Matcher.HttpCode)
 }
 
 func TestCreateTargetGroup_DuplicateName(t *testing.T) {
@@ -1635,11 +1725,44 @@ func TestLBVMUserData_MgmtRoute(t *testing.T) {
 	svc.SystemAccessKey = "AK"
 	svc.SystemSecretKey = "SK"
 
-	data, err := svc.lbVMUserData("lb-test1")
+	data, err := svc.lbVMUserData("lb-test1", SchemeInternetFacing)
 	require.NoError(t, err)
 	assert.Contains(t, data, "bootcmd:")
 	assert.Contains(t, data, `"10.15.8.100/32"`)
 	assert.Contains(t, data, `"10.15.8.1"`)
+}
+
+// TestLBVMUserData_InternalSingleNodeFallback covers the single-node case
+// where MgmtRoute{Gateway,Target} are empty (AWSGW reachable on advertiseIP
+// via VPC for internet-facing LBs) but an internal LB has no EIP and so
+// needs a forced mgmt-NIC route to AWSGW. Internet-facing in the same setup
+// must still get no bootcmd (would steal the host's WAN return path).
+func TestLBVMUserData_InternalSingleNodeFallback(t *testing.T) {
+	mkSvc := func() *ELBv2ServiceImpl {
+		svc := setupTestService(t)
+		svc.GatewayURL = "https://192.168.1.33:9999"
+		svc.SystemAccessKey = "AK"
+		svc.SystemSecretKey = "SK"
+		svc.MgmtBridgeIP = "10.15.8.1"
+		svc.AdvertiseIP = "192.168.1.33"
+		return svc
+	}
+
+	internal, err := mkSvc().lbVMUserData("lb-int", SchemeInternal)
+	require.NoError(t, err)
+	assert.Contains(t, internal, "bootcmd:")
+	assert.Contains(t, internal, `"192.168.1.33/32"`)
+	assert.Contains(t, internal, `"10.15.8.1"`)
+
+	inetFacing, err := mkSvc().lbVMUserData("lb-inet", SchemeInternetFacing)
+	require.NoError(t, err)
+	assert.NotContains(t, inetFacing, "bootcmd:", "internet-facing single-node must not get a /32 mgmt route")
+
+	noBridge := mkSvc()
+	noBridge.MgmtBridgeIP = ""
+	out, err := noBridge.lbVMUserData("lb-int", SchemeInternal)
+	require.NoError(t, err)
+	assert.NotContains(t, out, "bootcmd:", "no fallback when br-mgmt is absent")
 }
 
 func TestIsCompatibleProtocol_UnknownListenerProtocol(t *testing.T) {

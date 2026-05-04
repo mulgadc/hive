@@ -319,11 +319,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	// Add all instances to state immediately so DescribeInstances can find them
 	// while volumes are being prepared and VMs are launching
-	d.Instances.Mu.Lock()
 	for _, instance := range instances {
-		d.Instances.VMS[instance.ID] = instance
+		d.vmMgr.Insert(instance)
 	}
-	d.Instances.Mu.Unlock()
 
 	if err := d.WriteState(); err != nil {
 		slog.Error("handleEC2RunInstances failed to write initial state", "err", err)
@@ -349,9 +347,8 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	var successCount int
 	for _, instance := range instances {
 		// Skip if instance was terminated by a concurrent request
-		d.Instances.Mu.Lock()
-		status := instance.Status
-		d.Instances.Mu.Unlock()
+		var status vm.InstanceState
+		d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 		if status != vm.StatePending && status != vm.StateProvisioning {
 			slog.Info("Instance state changed during provisioning, skipping launch",
 				"instanceId", instance.ID, "status", string(status))
@@ -406,9 +403,8 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 func (d *Daemon) handleRebootInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Rebooting instance", "id", command.ID)
 
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateRunning {
 		slog.Error("RebootInstance: instance not in running state", "instanceId", command.ID, "status", status)
@@ -434,9 +430,8 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	slog.Info("Starting instance", "id", command.ID)
 
 	// Validate instance is in stopped state
-	d.Instances.Mu.Lock()
-	status := instance.Status
-	d.Instances.Mu.Unlock()
+	var status vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
 
 	if status != vm.StateStopped {
 		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
@@ -457,9 +452,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	// Clear stop attribute before launch so WriteState inside LaunchInstance
 	// persists the correct attributes. Without this, a daemon restart after
 	// a stop→start cycle would see StopInstance=true and skip reconnecting QEMU.
-	d.Instances.Mu.Lock()
-	instance.Attributes = command.Attributes
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.Attributes = command.Attributes })
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	err := d.LaunchInstance(instance)
@@ -499,9 +492,8 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 
 	// Check state validity before attempting transition — return the correct
 	// AWS error code when the instance is already stopped/terminated/etc.
-	d.Instances.Mu.Lock()
-	currentState := instance.Status
-	d.Instances.Mu.Unlock()
+	var currentState vm.InstanceState
+	d.vmMgr.Inspect(instance, func(v *vm.VM) { currentState = v.Status })
 
 	// If instance is already shutting-down and we're asked to terminate, treat
 	// as idempotent — the finalizeTermination goroutine is already cleaning up.
@@ -543,10 +535,10 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				slog.Error("Failed to transition to error state", "instanceId", inst.ID, "err", err)
 			}
 		} else {
-			d.Instances.Mu.Lock()
-			inst.Attributes = attrs
-			inst.LastNode = d.node
-			d.Instances.Mu.Unlock()
+			d.vmMgr.Inspect(inst, func(v *vm.VM) {
+				v.Attributes = attrs
+				v.LastNode = d.node
+			})
 
 			if err := d.TransitionState(inst, finalState); err != nil {
 				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
@@ -590,16 +582,11 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				// from stopped KV, re-added it to VMS with a new pointer, and
 				// launched it. Deleting here would destroy the running instance's
 				// state — creating a "ghost instance" visible nowhere.
-				d.Instances.Mu.Lock()
-				current, exists := d.Instances.VMS[inst.ID]
-				if !exists || current != inst {
-					d.Instances.Mu.Unlock()
+				if !d.vmMgr.DeleteIf(inst.ID, inst) {
 					slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
 						"instanceId", inst.ID, "state", string(finalState))
 					return
 				}
-				delete(d.Instances.VMS, inst.ID)
-				d.Instances.Mu.Unlock()
 
 				// Unsubscribe from per-instance NATS topic. Safe to do after
 				// the delete — LaunchInstance already unsubscribes stale entries
@@ -618,11 +605,7 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 					slog.Error("Failed to persist state after releasing instance, re-adding to local map for consistency",
 						"instanceId", inst.ID, "err", err)
 					// Only re-add if another handler hasn't claimed the slot
-					d.Instances.Mu.Lock()
-					if _, occupied := d.Instances.VMS[inst.ID]; !occupied {
-						d.Instances.VMS[inst.ID] = inst
-					}
-					d.Instances.Mu.Unlock()
+					d.vmMgr.InsertIfAbsent(inst)
 				} else {
 					slog.Info("Released instance ownership to KV",
 						"instanceId", inst.ID, "state", string(finalState), "lastNode", d.node)
@@ -711,10 +694,8 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	}
 
 	// Add instance to local map and clear stop attribute before launch
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
 	instance.Attributes = types.EC2CommandAttributes{StartInstance: true}
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Insert(instance)
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	err = d.LaunchInstance(instance)
@@ -724,9 +705,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
 		}
-		d.Instances.Mu.Lock()
-		delete(d.Instances.VMS, instance.ID)
-		d.Instances.Mu.Unlock()
+		d.vmMgr.Delete(instance.ID)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
@@ -1035,7 +1014,7 @@ func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, 
 
 	if topic == "vpc.add-nat" {
 		if err := utils.RequestEvent(d.natsConn, topic, evt, 10*time.Second); err != nil {
-			slog.Warn("publishNATEvent: failed to add NAT rule (will retry via reconciliation)",
+			slog.Warn("publishNATEvent: failed to add NAT rule — OVN dnat_and_snat rule not created; restart vpcd or re-associate EIP to recover",
 				"topic", topic, "externalIP", externalIP, "logicalIP", logicalIP, "err", err)
 		}
 		return

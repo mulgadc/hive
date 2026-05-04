@@ -232,8 +232,8 @@ type InstanceServiceImpl struct {
 	config        *config.Config
 	instanceTypes map[string]*ec2.InstanceTypeInfo
 	natsConn      *nats.Conn
-	instances     *vm.Instances
 	objectStore   objectstore.ObjectStore
+	vmMgr         *vm.Manager
 	resourceMgr   ResourceCapacityProvider
 	stoppedStore  StoppedInstanceStore
 }
@@ -243,8 +243,8 @@ func NewInstanceServiceImpl(
 	cfg *config.Config,
 	instanceTypes map[string]*ec2.InstanceTypeInfo,
 	nc *nats.Conn,
-	instances *vm.Instances,
 	store objectstore.ObjectStore,
+	vmMgr *vm.Manager,
 	resourceMgr ResourceCapacityProvider,
 	stoppedStore StoppedInstanceStore,
 ) *InstanceServiceImpl {
@@ -252,8 +252,8 @@ func NewInstanceServiceImpl(
 		config:        cfg,
 		instanceTypes: instanceTypes,
 		natsConn:      nc,
-		instances:     instances,
 		objectStore:   store,
+		vmMgr:         vmMgr,
 		resourceMgr:   resourceMgr,
 		stoppedStore:  stoppedStore,
 	}
@@ -949,9 +949,6 @@ func matchTagValue(tags []*ec2.Tag, values []string) bool {
 func (s *InstanceServiceImpl) DescribeInstances(input *ec2.DescribeInstancesInput, accountID string) (*ec2.DescribeInstancesOutput, error) {
 	slog.Info("Processing DescribeInstances request from this node", "accountID", accountID)
 
-	s.instances.Mu.Lock()
-	defer s.instances.Mu.Unlock()
-
 	instanceIDFilter := make(map[string]bool)
 	for _, id := range input.InstanceIds {
 		if id != nil && *id != "" {
@@ -970,62 +967,67 @@ func (s *InstanceServiceImpl) DescribeInstances(input *ec2.DescribeInstancesInpu
 
 	reservationMap := make(map[string]*ec2.Reservation)
 
-	for _, instance := range s.instances.VMS {
-		if !IsInstanceVisible(accountID, instance.AccountID) {
-			continue
-		}
-		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
-			continue
-		}
-		if instance.Reservation == nil || instance.Instance == nil {
-			continue
-		}
-
-		resID := ""
-		if instance.Reservation.ReservationId != nil {
-			resID = *instance.Reservation.ReservationId
-		}
-
-		if _, exists := reservationMap[resID]; !exists {
-			reservation := &ec2.Reservation{}
-			reservation.SetReservationId(resID)
-			if instance.Reservation.OwnerId != nil {
-				reservation.SetOwnerId(*instance.Reservation.OwnerId)
+	// Iterate under the manager lock — VM fields (Status, Instance, Reservation,
+	// PublicIP, PlacementGroupName) are mutated through manager-locked
+	// Inspect/UpdateState elsewhere, so reading them lock-free would race.
+	s.vmMgr.View(func(vms map[string]*vm.VM) {
+		for _, instance := range vms {
+			if !IsInstanceVisible(accountID, instance.AccountID) {
+				continue
 			}
-			reservation.Instances = []*ec2.Instance{}
-			reservationMap[resID] = reservation
-		}
-
-		instanceCopy := *instance.Instance
-		instanceCopy.State = &ec2.InstanceState{}
-
-		if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
-			instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
-		}
-
-		if info, ok := vm.EC2StateCodes[instance.Status]; ok {
-			instanceCopy.State.SetCode(info.Code)
-			instanceCopy.State.SetName(info.Name)
-		} else {
-			slog.Warn("Instance has unmapped status, reporting as pending",
-				"instanceId", instance.ID, "status", string(instance.Status))
-			instanceCopy.State.SetCode(0)
-			instanceCopy.State.SetName("pending")
-		}
-
-		if instance.PlacementGroupName != "" {
-			instanceCopy.Placement = &ec2.Placement{
-				GroupName:        aws.String(instance.PlacementGroupName),
-				AvailabilityZone: aws.String(s.config.AZ),
+			if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+				continue
 			}
-		}
+			if instance.Reservation == nil || instance.Instance == nil {
+				continue
+			}
 
-		if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
-			continue
-		}
+			resID := ""
+			if instance.Reservation.ReservationId != nil {
+				resID = *instance.Reservation.ReservationId
+			}
 
-		reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
-	}
+			if _, exists := reservationMap[resID]; !exists {
+				reservation := &ec2.Reservation{}
+				reservation.SetReservationId(resID)
+				if instance.Reservation.OwnerId != nil {
+					reservation.SetOwnerId(*instance.Reservation.OwnerId)
+				}
+				reservation.Instances = []*ec2.Instance{}
+				reservationMap[resID] = reservation
+			}
+
+			instanceCopy := *instance.Instance
+			instanceCopy.State = &ec2.InstanceState{}
+
+			if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
+				instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
+			}
+
+			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+				instanceCopy.State.SetCode(info.Code)
+				instanceCopy.State.SetName(info.Name)
+			} else {
+				slog.Warn("Instance has unmapped status, reporting as pending",
+					"instanceId", instance.ID, "status", string(instance.Status))
+				instanceCopy.State.SetCode(0)
+				instanceCopy.State.SetName("pending")
+			}
+
+			if instance.PlacementGroupName != "" {
+				instanceCopy.Placement = &ec2.Placement{
+					GroupName:        aws.String(instance.PlacementGroupName),
+					AvailabilityZone: aws.String(s.config.AZ),
+				}
+			}
+
+			if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+				continue
+			}
+
+			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+		}
+	})
 
 	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
 	for _, reservation := range reservationMap {
@@ -1169,11 +1171,9 @@ func (s *InstanceServiceImpl) DescribeInstanceAttribute(input *ec2.DescribeInsta
 	attribute := *input.Attribute
 
 	var instance *vm.VM
-	s.instances.Mu.Lock()
-	if running, ok := s.instances.VMS[instanceID]; ok {
+	if running, ok := s.vmMgr.Get(instanceID); ok {
 		instance = running
 	}
-	s.instances.Mu.Unlock()
 
 	if instance == nil {
 		if s.stoppedStore == nil {

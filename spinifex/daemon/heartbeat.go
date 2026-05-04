@@ -48,12 +48,13 @@ func (d *Daemon) publishHeartbeat() {
 }
 
 // buildHeartbeat constructs a Heartbeat from the daemon's current state.
+// AvailableVCPU / AvailableMem retain "host - allocated" semantics for
+// observability continuity; the daemon's reserve is surfaced separately
+// so consumers can compute schedulable capacity.
 func (d *Daemon) buildHeartbeat() *Heartbeat {
-	totalVCPU, totalMem, allocVCPU, allocMem, _ := d.resourceMgr.GetResourceStats()
+	totalVCPU, totalMem, reservedVCPU, reservedMem, allocVCPU, allocMem, _ := d.resourceMgr.GetResourceStats()
 
-	d.Instances.Mu.Lock()
-	vmCount := len(d.Instances.VMS)
-	d.Instances.Mu.Unlock()
+	vmCount := d.vmMgr.Count()
 
 	return &Heartbeat{
 		Node:          d.node,
@@ -65,5 +66,7 @@ func (d *Daemon) buildHeartbeat() *Heartbeat {
 		AvailableVCPU: totalVCPU - allocVCPU,
 		AllocatedMem:  allocMem,
 		AvailableMem:  totalMem - allocMem,
+		ReservedVCPU:  reservedVCPU,
+		ReservedMem:   reservedMem,
 	}
 }

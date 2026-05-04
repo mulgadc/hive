@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -34,6 +35,7 @@ const (
 	ctxRegion    contextKey = "sigv4.region"
 	ctxAccessKey contextKey = "sigv4.accessKey"
 	ctxAction    contextKey = "sigv4.action"
+	ctxQueryArgs contextKey = "sigv4.queryArgs"
 )
 
 type GatewayConfig struct {
@@ -59,8 +61,10 @@ var supportedServices = map[string]bool{
 	"spinifex":             true,
 }
 
+const xmlnsEC2 = "http://ec2.amazonaws.com/doc/2016-11-15/"
+
 type ErrorResponse struct {
-	XMLName   xml.Name `xml:"Response"`
+	XMLName   xml.Name `xml:"http://ec2.amazonaws.com/doc/2016-11-15/ ErrorResponse"`
 	Errors    Errors   `xml:"Errors"`
 	RequestID string   `xml:"RequestID"`
 }
@@ -193,19 +197,21 @@ func (gw *GatewayConfig) writeThrottleError(w http.ResponseWriter, r *http.Reque
 	requestID := uuid.NewString()
 	svc, _ := r.Context().Value(ctxService).(string)
 
+	errorCode := awserrors.ErrorRequestLimitExceeded
+	if svc == "iam" {
+		errorCode = awserrors.ErrorThrottling
+	}
+	errorMsg := awserrors.ErrorLookup[errorCode]
+
 	var xmlErr []byte
-	var statusCode int
-	switch svc {
-	case "iam":
-		xmlErr = GenerateIAMErrorResponse(awserrors.ErrorThrottling, "Rate exceeded", requestID)
-		statusCode = 400
-	default: // ec2, elasticloadbalancing, account, spinifex
-		xmlErr = GenerateEC2ErrorResponse(awserrors.ErrorRequestLimitExceeded, "Request limit exceeded.", requestID)
-		statusCode = 503
+	if svc == "iam" {
+		xmlErr = GenerateIAMErrorResponse(errorCode, errorMsg.Message, requestID)
+	} else { // ec2, elasticloadbalancing, account, spinifex
+		xmlErr = GenerateEC2ErrorResponse(errorCode, errorMsg.Message, requestID)
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(statusCode)
+	w.WriteHeader(errorMsg.HTTPCode)
 	if _, err := w.Write(xmlErr); err != nil {
 		slog.Error("Failed to write throttle error response", "err", err)
 	}
@@ -379,23 +385,41 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 	}
 }
 
-// Parse AWS query arguments (used by some services like EC2/S3)
-// Properly URL-decodes both keys and values
-func ParseAWSQueryArgs(query string) map[string]string {
+// readQueryArgs returns parsed query args from context (set by SigV4) or
+// parses the body. The fallback only fires for unauthenticated/test paths.
+func readQueryArgs(r *http.Request) (map[string]string, error) {
+	if args, ok := r.Context().Value(ctxQueryArgs).(map[string]string); ok {
+		return args, nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	return ParseAWSQueryArgs(string(body))
+}
+
+// ParseAWSQueryArgs parses an AWS query-protocol body. Returns an error on
+// invalid percent-encoding so callers can surface MalformedQueryString.
+func ParseAWSQueryArgs(query string) (map[string]string, error) {
 	params := make(map[string]string)
 	pairs := strings.SplitSeq(query, "&")
 	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
+		key, err := url.QueryUnescape(kv[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid URL encoding in parameter name: %w", err)
+		}
 		if len(kv) == 2 {
-			key, _ := url.QueryUnescape(kv[0])
-			value, _ := url.QueryUnescape(kv[1])
+			value, err := url.QueryUnescape(kv[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid URL encoding in value for %q: %w", key, err)
+			}
 			params[key] = value
-		} else if len(kv) == 1 {
-			key, _ := url.QueryUnescape(kv[0])
+		} else {
 			params[key] = ""
 		}
 	}
-	return params
+	return params, nil
 }
 
 func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
@@ -413,7 +437,7 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 
 	if err != nil {
 		slog.Error("Failed to build XML", "error", err)
-		return []byte(xml.Header + "<Response><Errors><Error><Code>InternalError</Code><Message>Internal error</Message></Error></Errors><RequestID>" + requestID + "</RequestID></Response>")
+		return []byte(xml.Header + `<ErrorResponse xmlns="` + xmlnsEC2 + `"><Errors><Error><Code>InternalError</Code><Message>Internal error</Message></Error></Errors><RequestID>` + requestID + `</RequestID></ErrorResponse>`)
 	}
 
 	// Add XML header

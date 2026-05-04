@@ -39,6 +39,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// drainAndClose drains the NATS connection and waits for in-flight subscription
+// callbacks to finish before returning. Plain Close() does not wait, so handler
+// goroutines can race t.TempDir() RemoveAll cleanup and fail with
+// "directory not empty" when they write a final state/WAL file.
+func drainAndClose(t *testing.T, nc *nats.Conn) {
+	t.Helper()
+	done := make(chan struct{})
+	nc.SetClosedHandler(func(*nats.Conn) { close(done) })
+	if err := nc.Drain(); err != nil {
+		nc.Close()
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Logf("drainAndClose: drain did not complete within 5s")
+	}
+}
+
 // createTestDaemon creates a test daemon instance with minimal configuration
 func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	// Create a temporary directory for test data
@@ -82,16 +101,16 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.natsConn = nc
 	daemon.detachDelay = 0 // Skip sleep in tests
 
-	// Initialize services (needed for handler tests)
+	// Initialize services (needed for handler tests).
 	// jsManager is nil here; pass a nil literal to keep the StoppedInstanceStore
 	// interface itself nil (rather than a typed-nil pointer) so the service can
 	// short-circuit cleanly when no KV is available.
-	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore(), daemon.resourceMgr, nil)
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, objectstore.NewMemoryObjectStore(), daemon.vmMgr, daemon.resourceMgr, nil)
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, objectstore.NewMemoryObjectStore(), nc)
 
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
-			daemon.natsConn.Close()
+			drainAndClose(t, daemon.natsConn)
 		}
 	})
 
@@ -379,7 +398,7 @@ func TestDaemon_Initialization(t *testing.T) {
 
 	assert.NotNil(t, daemon)
 	assert.NotNil(t, daemon.resourceMgr)
-	assert.NotNil(t, daemon.Instances.VMS)
+	assert.NotNil(t, daemon.vmMgr)
 	assert.Equal(t, cfg, daemon.config)
 }
 
@@ -389,8 +408,8 @@ func TestResourceManager(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, rm)
-	assert.Greater(t, rm.availableVCPU, 0)
-	assert.Greater(t, rm.availableMem, float64(0))
+	assert.Greater(t, rm.hostVCPU, 0)
+	assert.Greater(t, rm.hostMemGB, float64(0))
 
 	// Test allocation using the first available instance type (dynamic based on CPU)
 	require.NotEmpty(t, rm.instanceTypes, "Should have at least one instance type")
@@ -507,24 +526,28 @@ func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 	allTypes := rm.GetInstanceTypeInfos()
 	initialAvailable := rm.GetAvailableInstanceTypeInfos(false)
 
-	t.Logf("System has %d vCPUs, %.2f GB RAM", rm.availableVCPU, rm.availableMem)
+	t.Logf("System has %d vCPUs, %.2f GB RAM (reserved: %d vCPU, %.2f GB)",
+		rm.hostVCPU, rm.hostMemGB, rm.reservedVCPU, rm.reservedMem)
 	t.Logf("All instance types: %d, Initially available: %d", len(allTypes), len(initialAvailable))
 
-	// Initially available types should only include those that fit system resources
-	// (on small machines, xlarge/2xlarge may already be filtered out)
+	// Initially available types should only include those that fit schedulable
+	// capacity (host - reserved). On small machines, xlarge/2xlarge may already
+	// be filtered out.
 	assert.LessOrEqual(t, len(initialAvailable), len(allTypes),
 		"Available types should be <= total types")
 	assert.Greater(t, len(initialAvailable), 0, "Should have at least one available type")
 
-	// Verify all initially available types fit within system resources
+	// Verify all initially available types fit within schedulable resources.
+	schedulableVCPU := rm.hostVCPU - rm.reservedVCPU
+	schedulableMem := rm.hostMemGB - rm.reservedMem
 	for _, info := range initialAvailable {
 		vcpus := int(*info.VCpuInfo.DefaultVCpus)
 		memGB := float64(*info.MemoryInfo.SizeInMiB) / 1024
 
-		assert.LessOrEqual(t, vcpus, rm.availableVCPU,
-			"Instance type %s vCPUs should fit system", *info.InstanceType)
-		assert.LessOrEqual(t, memGB, rm.availableMem,
-			"Instance type %s memory should fit system", *info.InstanceType)
+		assert.LessOrEqual(t, vcpus, schedulableVCPU,
+			"Instance type %s vCPUs should fit schedulable capacity", *info.InstanceType)
+		assert.LessOrEqual(t, memGB, schedulableMem,
+			"Instance type %s memory should fit schedulable capacity", *info.InstanceType)
 	}
 
 	// Allocate the smallest instance type (nano) to consume some resources
@@ -551,9 +574,10 @@ func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 	afterAllocation := rm.GetAvailableInstanceTypeInfos(false)
 	t.Logf("Available after allocation: %d", len(afterAllocation))
 
-	// Verify all returned types fit within REMAINING resources
-	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-	remainingMem := rm.availableMem - rm.allocatedMem
+	// Verify all returned types fit within REMAINING schedulable resources
+	// (host - reserved - allocated).
+	remainingVCPU := rm.hostVCPU - rm.reservedVCPU - rm.allocatedVCPU
+	remainingMem := rm.hostMemGB - rm.reservedMem - rm.allocatedMem
 
 	for _, info := range afterAllocation {
 		typeName := *info.InstanceType
@@ -723,9 +747,9 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		assert.LessOrEqual(t, afterAllocationCount, initialCount,
 			"Should have fewer or equal instance types after allocation")
 
-		// Calculate remaining resources
-		remainingVCPU := daemon.resourceMgr.availableVCPU - daemon.resourceMgr.allocatedVCPU
-		remainingMem := daemon.resourceMgr.availableMem - daemon.resourceMgr.allocatedMem
+		// Calculate remaining schedulable resources (host - reserved - allocated).
+		remainingVCPU := daemon.resourceMgr.hostVCPU - daemon.resourceMgr.reservedVCPU - daemon.resourceMgr.allocatedVCPU
+		remainingMem := daemon.resourceMgr.hostMemGB - daemon.resourceMgr.reservedMem - daemon.resourceMgr.allocatedMem
 
 		t.Logf("Remaining resources: %d vCPUs, %.2f GB RAM", remainingVCPU, remainingMem)
 
@@ -787,18 +811,25 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 	// Test 4: Verify "capacity" filter returns duplicates
 	t.Run("VerifyCapacityFilter_Duplicates", func(t *testing.T) {
-		// Force resources to a predictable state
+		// Force schedulable capacity to a predictable state by zeroing the
+		// reserve and pinning host figures directly.
 		daemon.resourceMgr.mu.Lock()
-		oldAvailableVCPU := daemon.resourceMgr.availableVCPU
-		oldAvailableMem := daemon.resourceMgr.availableMem
-		daemon.resourceMgr.availableVCPU = 2
-		daemon.resourceMgr.availableMem = 16.0
+		oldHostVCPU := daemon.resourceMgr.hostVCPU
+		oldHostMem := daemon.resourceMgr.hostMemGB
+		oldReservedVCPU := daemon.resourceMgr.reservedVCPU
+		oldReservedMem := daemon.resourceMgr.reservedMem
+		daemon.resourceMgr.hostVCPU = 2
+		daemon.resourceMgr.hostMemGB = 16.0
+		daemon.resourceMgr.reservedVCPU = 0
+		daemon.resourceMgr.reservedMem = 0
 		daemon.resourceMgr.mu.Unlock()
 
 		defer func() {
 			daemon.resourceMgr.mu.Lock()
-			daemon.resourceMgr.availableVCPU = oldAvailableVCPU
-			daemon.resourceMgr.availableMem = oldAvailableMem
+			daemon.resourceMgr.hostVCPU = oldHostVCPU
+			daemon.resourceMgr.hostMemGB = oldHostMem
+			daemon.resourceMgr.reservedVCPU = oldReservedVCPU
+			daemon.resourceMgr.reservedMem = oldReservedMem
 			daemon.resourceMgr.mu.Unlock()
 		}()
 
@@ -837,8 +868,8 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 		// Now increase capacity to test duplicate slots
 		daemon.resourceMgr.mu.Lock()
-		daemon.resourceMgr.availableVCPU = 4
-		daemon.resourceMgr.availableMem = 15.0
+		daemon.resourceMgr.hostVCPU = 4
+		daemon.resourceMgr.hostMemGB = 15.0
 		daemon.resourceMgr.mu.Unlock()
 
 		reply, err = daemon.natsConn.Request("ec2.DescribeInstanceTypes", msgData, 5*time.Second)
@@ -919,8 +950,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 
 	// Pre-populate the local state file with test state. Post-1a, LoadState
 	// reads from the local file (KV is best-effort cache only).
-	testInstances := &vm.Instances{VMS: vms}
-	err = WriteLocalState(daemon.localStatePath(), testInstances)
+	err = WriteLocalState(daemon.localStatePath(), vms)
 	require.NoError(t, err)
 
 	// Manually trigger the LoadState and allocation logic normally found in Start()
@@ -928,7 +958,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate the allocation loop in Start()
-	for _, instance := range daemon.Instances.VMS {
+	for _, instance := range daemon.vmMgr.Snapshot() {
 		if instance.Status != vm.StateTerminated && !instance.Attributes.StopInstance {
 			instanceType, ok := daemon.resourceMgr.instanceTypes[instance.InstanceType]
 			if ok {
@@ -960,12 +990,12 @@ func TestStopInstance_Deallocation(t *testing.T) {
 	instanceId := "i-test-stop"
 	instanceTypeStr := getTestInstanceType(t)
 	instanceType := daemon.resourceMgr.instanceTypes[instanceTypeStr]
-	daemon.Instances.VMS[instanceId] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:           instanceId,
 		InstanceType: instanceTypeStr,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-	}
+	})
 
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
@@ -1052,8 +1082,20 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 		}
 		require.NotNil(t, microType)
 
+		// Pin host capacity so the test is independent of the runner's
+		// schedulable headroom (host - reserved). CI runners have only
+		// 4 vCPU, leaving 2 schedulable after the default reserve — not
+		// enough to fit two micro instances (2 vCPU each).
+		rm.mu.Lock()
+		rm.hostVCPU = 16
+		rm.hostMemGB = 32.0
+		rm.reservedVCPU = 0
+		rm.reservedMem = 0
+		rm.mu.Unlock()
+
 		initial := rm.canAllocate(microType, 100)
 		t.Logf("Initial capacity: %d micro instances", initial)
+		require.GreaterOrEqual(t, initial, 2, "test needs at least 2 micro slots")
 
 		// Allocate one
 		err = rm.allocate(microType)
@@ -1151,13 +1193,13 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		ec2Instance.SetInstanceId(instanceID)
 		ec2Instance.SetInstanceType("t3.micro")
 
-		daemon.Instances.VMS[instanceID] = &vm.VM{
+		daemon.vmMgr.Insert(&vm.VM{
 			ID:          instanceID,
 			Status:      vm.StateRunning,
 			AccountID:   testAccountID,
 			Reservation: reservation1,
 			Instance:    ec2Instance,
-		}
+		})
 	}
 
 	// Create another reservation with 2 instances
@@ -1171,13 +1213,13 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		ec2Instance.SetInstanceId(instanceID)
 		ec2Instance.SetInstanceType("t3.small")
 
-		daemon.Instances.VMS[instanceID] = &vm.VM{
+		daemon.vmMgr.Insert(&vm.VM{
 			ID:          instanceID,
 			Status:      vm.StateRunning,
 			AccountID:   testAccountID,
 			Reservation: reservation2,
 			Instance:    ec2Instance,
-		}
+		})
 	}
 
 	// Create a single-instance reservation
@@ -1189,13 +1231,13 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 	ec2Instance.SetInstanceId("i-single-001")
 	ec2Instance.SetInstanceType("t3.large")
 
-	daemon.Instances.VMS["i-single-001"] = &vm.VM{
+	daemon.vmMgr.Insert(&vm.VM{
 		ID:          "i-single-001",
 		Status:      vm.StateStopped,
 		AccountID:   testAccountID,
 		Reservation: reservation3,
 		Instance:    ec2Instance,
-	}
+	})
 
 	// Subscribe to handle DescribeInstances
 	sub, err := daemon.natsConn.Subscribe("ec2.DescribeInstances", daemon.handleEC2DescribeInstances)
@@ -1455,8 +1497,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 		// Allocate all resources so nothing fits
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU
-		rm.allocatedMem = rm.availableMem
+		rm.allocatedVCPU = rm.hostVCPU - rm.reservedVCPU
+		rm.allocatedMem = rm.hostMemGB - rm.reservedMem
 		rm.mu.Unlock()
 
 		rm.updateInstanceSubscriptions()
@@ -1479,8 +1521,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 		// Fill all resources
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU
-		rm.allocatedMem = rm.availableMem
+		rm.allocatedVCPU = rm.hostVCPU - rm.reservedVCPU
+		rm.allocatedMem = rm.hostMemGB - rm.reservedMem
 		rm.mu.Unlock()
 		rm.updateInstanceSubscriptions()
 		assert.Equal(t, 0, len(rm.instanceSubs))
@@ -1506,10 +1548,10 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		handler := func(msg *nats.Msg) {}
 		rm.initSubscriptions(nc, handler, "test-node")
 
-		// Leave only 2 vCPUs and 1 GB free — enough for nano/micro but not larger types
+		// Leave only 2 vCPUs and 1 GB schedulable — enough for nano/micro but not larger types.
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU - 2
-		rm.allocatedMem = rm.availableMem - 1.0
+		rm.allocatedVCPU = (rm.hostVCPU - rm.reservedVCPU) - 2
+		rm.allocatedMem = (rm.hostMemGB - rm.reservedMem) - 1.0
 		rm.mu.Unlock()
 		rm.updateInstanceSubscriptions()
 
@@ -1581,8 +1623,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 		// Fill the node completely
 		rm.mu.Lock()
-		rm.allocatedVCPU = rm.availableVCPU
-		rm.allocatedMem = rm.availableMem
+		rm.allocatedVCPU = rm.hostVCPU - rm.reservedVCPU
+		rm.allocatedMem = rm.hostMemGB - rm.reservedMem
 		rm.mu.Unlock()
 		rm.updateInstanceSubscriptions()
 		assert.Equal(t, 0, len(rm.instanceSubs))
@@ -1618,9 +1660,13 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	// Goroutine 1: Allocate and deallocate
 	go func() {
 		for range iterations {
+			// canAllocate -> allocate is non-atomic; allocate re-checks under
+			// the write lock and may fail if another goroutine took the slot.
+			// Only deallocate when allocate actually succeeded.
 			if rm.canAllocate(microType, 1) >= 1 {
-				rm.allocate(microType)
-				rm.deallocate(microType)
+				if err := rm.allocate(microType); err == nil {
+					rm.deallocate(microType)
+				}
 			}
 		}
 		done <- true
@@ -1638,8 +1684,9 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	go func() {
 		for range iterations {
 			if rm.canAllocate(microType, 1) >= 1 {
-				rm.allocate(microType)
-				rm.deallocate(microType)
+				if err := rm.allocate(microType); err == nil {
+					rm.deallocate(microType)
+				}
 			}
 		}
 		done <- true
@@ -1824,7 +1871,7 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Call stopInstance with deleteVolume=true (termination)
 	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
@@ -1921,7 +1968,7 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Call stopInstance with deleteVolume=true (termination)
 	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
@@ -2004,7 +2051,7 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 
-	daemon.Instances.VMS[instance.ID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Call stopInstance with deleteVolume=false (stop, not terminate)
 	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, false)
@@ -2038,7 +2085,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Subscribe the handler to the instance's per-instance topic
 	sub, err := daemon.natsConn.Subscribe(
@@ -2071,10 +2118,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 
 	t.Run("InstanceNotRunning", func(t *testing.T) {
 		// Temporarily set status to stopped
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateStopped
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -2095,9 +2139,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 
 		// Restore running state
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateRunning
-		daemon.Instances.Mu.Unlock()
 	})
 
 	t.Run("VolumeNotFound", func(t *testing.T) {
@@ -2184,7 +2226,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Subscribe the handler to the instance's per-instance topic
 	sub, err := daemon.natsConn.Subscribe(
@@ -2215,10 +2257,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 
 	t.Run("InstanceNotRunning", func(t *testing.T) {
 		// Temporarily set status to stopped
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateStopped
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -2239,9 +2278,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 
 		// Restore running state
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateRunning
-		daemon.Instances.Mu.Unlock()
 	})
 
 	t.Run("VolumeNotAttached", func(t *testing.T) {
@@ -2533,7 +2570,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Subscribe a mock ebs.unmount handler
 	ebsUnmountCalled := make(chan string, 1)
@@ -2603,7 +2640,6 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	instance.EBSRequests.Mu.Unlock()
 
 	// Verify volume removed from BlockDeviceMappings
-	daemon.Instances.Mu.Lock()
 	for _, bdm := range instance.Instance.BlockDeviceMappings {
 		if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil {
 			assert.NotEqual(t, volumeID, *bdm.Ebs.VolumeId, "Volume should be removed from BlockDeviceMappings")
@@ -2612,7 +2648,6 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	// Root volume should still be present
 	assert.Len(t, instance.Instance.BlockDeviceMappings, 1)
 	assert.Equal(t, "vol-root", *instance.Instance.BlockDeviceMappings[0].Ebs.VolumeId)
-	daemon.Instances.Mu.Unlock()
 }
 
 // TestDetachVolume_ForceFlag tests that force=true continues past device_del failure
@@ -2676,7 +2711,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Mock ebs.unmount
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
@@ -2790,7 +2825,7 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -2831,7 +2866,6 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 	assert.True(t, found, "Volume must remain in EBSRequests when blockdev-del fails")
 
 	// Critical: BlockDeviceMappings must NOT be cleaned up
-	daemon.Instances.Mu.Lock()
 	bdmFound := false
 	for _, bdm := range instance.Instance.BlockDeviceMappings {
 		if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
@@ -2839,7 +2873,6 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 			break
 		}
 	}
-	daemon.Instances.Mu.Unlock()
 	assert.True(t, bdmFound, "Volume must remain in BlockDeviceMappings when blockdev-del fails")
 }
 
@@ -2882,7 +2915,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := types.EBSUnMountResponse{Mounted: false}
@@ -2958,7 +2991,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 			},
 		},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Mock ebs.mount to return success with a new NBDURI
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
@@ -3136,8 +3169,9 @@ func TestDaemon_WriteState_NilJSManager(t *testing.T) {
 	d := &Daemon{
 		jsManager: nil,
 		config:    &config.Config{DataDir: tmpDir},
-		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-1": {ID: "i-1"}}},
+		vmMgr:     vm.NewManager(),
 	}
+	d.vmMgr.Insert(&vm.VM{ID: "i-1"})
 	require.NoError(t, d.WriteState())
 
 	state, err := ReadLocalState(LocalStatePath(tmpDir))
@@ -3148,25 +3182,28 @@ func TestDaemon_WriteState_NilJSManager(t *testing.T) {
 
 func TestDaemon_LoadState_NilJSManager(t *testing.T) {
 	tmpDir := t.TempDir()
-	require.NoError(t, WriteLocalState(LocalStatePath(tmpDir), &vm.Instances{
-		VMS: map[string]*vm.VM{"i-seed": {ID: "i-seed"}},
+	require.NoError(t, WriteLocalState(LocalStatePath(tmpDir), map[string]*vm.VM{
+		"i-seed": {ID: "i-seed"},
 	}))
 
 	d := &Daemon{
 		jsManager: nil,
 		config:    &config.Config{DataDir: tmpDir},
+		vmMgr:     vm.NewManager(),
 	}
 	require.NoError(t, d.LoadState())
-	assert.Contains(t, d.Instances.VMS, "i-seed")
+	_, ok := d.vmMgr.Get("i-seed")
+	assert.True(t, ok)
 }
 
 func TestDaemon_LoadState_MissingFileIsFreshInstall(t *testing.T) {
 	d := &Daemon{
 		jsManager: nil,
 		config:    &config.Config{DataDir: t.TempDir()},
+		vmMgr:     vm.NewManager(),
 	}
 	require.NoError(t, d.LoadState())
-	assert.Empty(t, d.Instances.VMS)
+	assert.Equal(t, 0, d.vmMgr.Count())
 }
 
 func TestDaemon_LoadState_CorruptFileFatal(t *testing.T) {
@@ -3178,6 +3215,7 @@ func TestDaemon_LoadState_CorruptFileFatal(t *testing.T) {
 	d := &Daemon{
 		jsManager: nil,
 		config:    &config.Config{DataDir: tmpDir},
+		vmMgr:     vm.NewManager(),
 	}
 	err := d.LoadState()
 	require.Error(t, err)
@@ -3188,8 +3226,8 @@ func TestDaemon_LoadState_CorruptFileFatal(t *testing.T) {
 
 func TestGetAvailableInstanceTypeInfos_Overcommitted(t *testing.T) {
 	rm := &ResourceManager{
-		availableVCPU: 4,
-		availableMem:  8.0,
+		hostVCPU:      4,
+		hostMemGB:     8.0,
 		allocatedVCPU: 8, // Over-committed
 		allocatedMem:  16.0,
 		instanceTypes: map[string]*ec2.InstanceTypeInfo{
@@ -3210,8 +3248,8 @@ func TestGetAvailableInstanceTypeInfos_Overcommitted(t *testing.T) {
 
 func TestGetAvailableInstanceTypeInfos_ShowCapacity(t *testing.T) {
 	rm := &ResourceManager{
-		availableVCPU: 8,
-		availableMem:  16.0,
+		hostVCPU:      8,
+		hostMemGB:     16.0,
 		allocatedVCPU: 0,
 		allocatedMem:  0,
 		instanceTypes: map[string]*ec2.InstanceTypeInfo{
@@ -3285,12 +3323,9 @@ func TestMarkInstanceFailed(t *testing.T) {
 		Instance:     ec2Instance,
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	daemon.markInstanceFailed(instance, "volume_preparation_failed")
-
-	daemon.Instances.Mu.Lock()
-	defer daemon.Instances.Mu.Unlock()
 
 	// Verify state transitioned to shutting-down
 	assert.Equal(t, vm.StateShuttingDown, instance.Status)
@@ -3317,13 +3352,11 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 		Instance:     nil, // no ec2.Instance
 		QMPClient:    &qmp.QMPClient{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	// Should not panic
 	daemon.markInstanceFailed(instance, "test_failure")
 
-	daemon.Instances.Mu.Lock()
-	defer daemon.Instances.Mu.Unlock()
 	assert.Equal(t, vm.StateShuttingDown, instance.Status)
 }
 
@@ -3469,7 +3502,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 	}
-	daemon.Instances.VMS[instanceID] = instance
+	daemon.vmMgr.Insert(instance)
 
 	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
@@ -3479,10 +3512,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	t.Run("StopAlreadyStoppedInstance", func(t *testing.T) {
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateStopped
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -3502,10 +3532,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	})
 
 	t.Run("TerminateAlreadyTerminatedInstance", func(t *testing.T) {
-		daemon.Instances.Mu.Lock()
 		instance.Status = vm.StateTerminated
-		daemon.Instances.Mu.Unlock()
-
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -3644,8 +3671,10 @@ func TestCanAllocate(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		availableVCPU int
-		availableMem  float64
+		hostVCPU      int
+		hostMemGB     float64
+		reservedVCPU  int
+		reservedMem   float64
 		allocatedVCPU int
 		allocatedMem  float64
 		instanceType  *ec2.InstanceTypeInfo
@@ -3653,39 +3682,33 @@ func TestCanAllocate(t *testing.T) {
 		want          int
 	}{
 		{
-			name:          "plenty of resources",
-			availableVCPU: 16,
-			availableMem:  32.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
-			count:         3,
-			want:          3,
+			name:         "plenty of resources",
+			hostVCPU:     16,
+			hostMemGB:    32.0,
+			instanceType: makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
+			count:        3,
+			want:         3,
 		},
 		{
-			name:          "CPU limited",
-			availableVCPU: 4,
-			availableMem:  32.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048),
-			count:         5,
-			want:          2,
+			name:         "CPU limited",
+			hostVCPU:     4,
+			hostMemGB:    32.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        5,
+			want:         2,
 		},
 		{
-			name:          "memory limited",
-			availableVCPU: 16,
-			availableMem:  4.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(1, 2048), // 1 vCPU, 2 GiB
-			count:         5,
-			want:          2,
+			name:         "memory limited",
+			hostVCPU:     16,
+			hostMemGB:    4.0,
+			instanceType: makeInstanceType(1, 2048), // 1 vCPU, 2 GiB
+			count:        5,
+			want:         2,
 		},
 		{
 			name:          "no resources returns 0",
-			availableVCPU: 4,
-			availableMem:  4.0,
+			hostVCPU:      4,
+			hostMemGB:     4.0,
 			allocatedVCPU: 4,
 			allocatedMem:  4.0,
 			instanceType:  makeInstanceType(2, 2048),
@@ -3693,39 +3716,33 @@ func TestCanAllocate(t *testing.T) {
 			want:          0,
 		},
 		{
-			name:          "zero vCPU instance type returns requested count",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(0, 2048),
-			count:         4,
-			want:          4,
+			name:         "zero vCPU instance type returns requested count",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: makeInstanceType(0, 2048),
+			count:        4,
+			want:         4,
 		},
 		{
-			name:          "zero memory instance type returns requested count",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 0),
-			count:         4,
-			want:          4,
+			name:         "zero memory instance type returns requested count",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: makeInstanceType(2, 0),
+			count:        4,
+			want:         4,
 		},
 		{
-			name:          "nil VCpuInfo and MemoryInfo returns requested count",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  &ec2.InstanceTypeInfo{},
-			count:         3,
-			want:          3,
+			name:         "nil VCpuInfo and MemoryInfo returns requested count",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: &ec2.InstanceTypeInfo{},
+			count:        3,
+			want:         3,
 		},
 		{
 			name:          "partial allocation reduces available",
-			availableVCPU: 8,
-			availableMem:  8.0,
+			hostVCPU:      8,
+			hostMemGB:     8.0,
 			allocatedVCPU: 4,
 			allocatedMem:  4.0,
 			instanceType:  makeInstanceType(2, 2048),
@@ -3733,42 +3750,60 @@ func TestCanAllocate(t *testing.T) {
 			want:          2,
 		},
 		{
-			name:          "exact fit",
-			availableVCPU: 4,
-			availableMem:  4.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048),
-			count:         2,
-			want:          2,
+			name:         "exact fit",
+			hostVCPU:     4,
+			hostMemGB:    4.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        2,
+			want:         2,
 		},
 		{
-			name:          "count zero returns 0",
-			availableVCPU: 8,
-			availableMem:  16.0,
-			allocatedVCPU: 0,
-			allocatedMem:  0,
-			instanceType:  makeInstanceType(2, 2048),
-			count:         0,
-			want:          0,
+			name:         "count zero returns 0",
+			hostVCPU:     8,
+			hostMemGB:    16.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        0,
+			want:         0,
 		},
 		{
 			name:          "negative available returns 0",
-			availableVCPU: 2,
-			availableMem:  2.0,
+			hostVCPU:      2,
+			hostMemGB:     2.0,
 			allocatedVCPU: 4,
 			allocatedMem:  4.0,
 			instanceType:  makeInstanceType(2, 2048),
 			count:         1,
 			want:          0,
 		},
+		{
+			name:         "reserve subtracts from schedulable",
+			hostVCPU:     16,
+			hostMemGB:    32.0,
+			reservedVCPU: 2,
+			reservedMem:  4.0,
+			instanceType: makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
+			count:        100,
+			want:         7, // CPU: (16-2)/2=7, mem: (32-4)/2=14 → min=7
+		},
+		{
+			name:         "reserve consumes all CPU",
+			hostVCPU:     4,
+			hostMemGB:    32.0,
+			reservedVCPU: 4,
+			reservedMem:  4.0,
+			instanceType: makeInstanceType(2, 2048),
+			count:        5,
+			want:         0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := &ResourceManager{
-				availableVCPU: tt.availableVCPU,
-				availableMem:  tt.availableMem,
+				hostVCPU:      tt.hostVCPU,
+				hostMemGB:     tt.hostMemGB,
+				reservedVCPU:  tt.reservedVCPU,
+				reservedMem:   tt.reservedMem,
 				allocatedVCPU: tt.allocatedVCPU,
 				allocatedMem:  tt.allocatedMem,
 				instanceTypes: map[string]*ec2.InstanceTypeInfo{},

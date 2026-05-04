@@ -24,6 +24,8 @@ type NATSELBv2Service struct {
 	natsConn *nats.Conn
 }
 
+var _ ELBv2Service = (*NATSELBv2Service)(nil)
+
 // NewNATSELBv2Service creates a new NATS-based ELBv2 service.
 func NewNATSELBv2Service(conn *nats.Conn) ELBv2Service {
 	return &NATSELBv2Service{natsConn: conn}

@@ -226,6 +226,12 @@ func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
 }
 
 // Heartbeat represents a daemon's periodic health status published to cluster KV.
+//
+// AvailableVCPU / AvailableMem are observability-only (host - allocated,
+// raw). Scheduling routing happens at the local daemon via admission
+// control, which already accounts for the reserve; ReservedVCPU /
+// ReservedMem are exposed purely for operator dashboards and capacity
+// reporting.
 type Heartbeat struct {
 	Node          string   `json:"node"`
 	Epoch         uint64   `json:"epoch"`
@@ -236,6 +242,8 @@ type Heartbeat struct {
 	AvailableVCPU int      `json:"available_vcpu"`
 	AllocatedMem  float64  `json:"allocated_mem_gb"`
 	AvailableMem  float64  `json:"available_mem_gb"`
+	ReservedVCPU  int      `json:"reserved_vcpu"`
+	ReservedMem   float64  `json:"reserved_mem_gb"`
 }
 
 // WriteHeartbeat writes a heartbeat entry for the given node to the cluster-state KV.
@@ -382,14 +390,13 @@ func (m *JetStreamManager) WriteServiceManifest(nodeID string, services []string
 }
 
 // WriteState writes the instance state to the KV store for the given node.
-// Caller must hold instances.Mu — caller is the local-state writer and the lock
-// is needed across the local file write + KV sync to keep the snapshot consistent.
-func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) error {
+// vms must be a snapshot owned by the caller — JetStreamManager does not lock.
+func (m *JetStreamManager) WriteState(nodeID string, vms map[string]*vm.VM) error {
 	if m.kv == nil {
 		return errors.New("KV bucket not initialized")
 	}
 
-	jsonData, err := marshalInstanceState(instances)
+	jsonData, err := marshalInstanceState(vms)
 	if err != nil {
 		return err
 	}
@@ -406,34 +413,33 @@ func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) er
 			if _, retryErr := kv.Put(key, jsonData); retryErr != nil {
 				return retryErr
 			}
-			slog.Debug("Wrote state to JetStream KV (after recovery)", "key", key, "instances", len(instances.VMS))
+			slog.Debug("Wrote state to JetStream KV (after recovery)", "key", key, "instances", len(vms))
 			return nil
 		}
 		return err
 	}
 
-	slog.Debug("Wrote state to JetStream KV", "key", key, "instances", len(instances.VMS))
+	slog.Debug("Wrote state to JetStream KV", "key", key, "instances", len(vms))
 	return nil
 }
 
 // WriteStateBestEffort attempts to push instance state to KV with a deadline.
 // On timeout or error, it logs a warning and returns — never blocks the caller
 // past `timeout` and never returns an error. Used when the local state file is
-// the source of truth and KV is a best-effort cache.
-//
-// Caller must hold instances.Mu so the marshalled snapshot is consistent.
+// the source of truth and KV is a best-effort cache. vms must be a snapshot
+// owned by the caller (e.g. from vm.Manager.SnapshotMap).
 //
 // Note: kv.Put has no context API. On timeout, the in-flight Put goroutine
 // continues and completes (or fails) on its own. This leaks at most one
 // goroutine per write; under sustained partition the leak is bounded by
 // WriteState call cadence (per-state-transition, not a tight loop).
-func (m *JetStreamManager) WriteStateBestEffort(nodeID string, instances *vm.Instances, timeout time.Duration) {
+func (m *JetStreamManager) WriteStateBestEffort(nodeID string, vms map[string]*vm.VM, timeout time.Duration) {
 	if m.kv == nil {
 		slog.Debug("KV bucket not initialized, skipping cluster sync", "node", nodeID)
 		return
 	}
 
-	jsonData, err := marshalInstanceState(instances)
+	jsonData, err := marshalInstanceState(vms)
 	if err != nil {
 		slog.Warn("KV sync skipped: marshal failed", "node", nodeID, "err", err)
 		return
@@ -452,25 +458,25 @@ func (m *JetStreamManager) WriteStateBestEffort(nodeID string, instances *vm.Ins
 			slog.Warn("KV sync failed (best-effort)", "key", key, "err", putErr)
 			return
 		}
-		slog.Debug("Wrote state to KV (best-effort)", "key", key, "instances", len(instances.VMS))
+		slog.Debug("Wrote state to KV (best-effort)", "key", key, "instances", len(vms))
 	case <-time.After(timeout):
 		slog.Warn("KV sync timed out (best-effort)", "key", key, "timeout", timeout)
 	}
 }
 
-// marshalInstanceState produces the JSON wire form of instances without copying
-// the embedded sync.Mutex. Caller must hold instances.Mu.
-func marshalInstanceState(instances *vm.Instances) ([]byte, error) {
+// marshalInstanceState produces the JSON wire form of vms.
+func marshalInstanceState(vms map[string]*vm.VM) ([]byte, error) {
 	state := struct {
 		VMS map[string]*vm.VM `json:"vms"`
 	}{
-		VMS: instances.VMS,
+		VMS: vms,
 	}
 	return json.Marshal(state)
 }
 
-// LoadState loads the instance state from the KV store for the given node
-func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
+// LoadState loads the instance state from the KV store for the given node.
+// Returns an empty (non-nil) map when no state exists for the node.
+func (m *JetStreamManager) LoadState(nodeID string) (map[string]*vm.VM, error) {
 	if m.kv == nil {
 		return nil, errors.New("KV bucket not initialized")
 	}
@@ -480,7 +486,7 @@ func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			slog.Debug("No existing state in JetStream KV, returning empty state", "key", key)
-			return &vm.Instances{VMS: make(map[string]*vm.VM)}, nil
+			return make(map[string]*vm.VM), nil
 		}
 		if isStreamUnavailable(err) {
 			slog.Warn("KV stream unavailable, attempting recovery", "operation", "LoadState", "key", key, "err", err)
@@ -493,7 +499,7 @@ func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
 			if err != nil {
 				if errors.Is(err, nats.ErrKeyNotFound) {
 					slog.Warn("No state found after KV recovery", "key", key)
-					return &vm.Instances{VMS: make(map[string]*vm.VM)}, nil
+					return make(map[string]*vm.VM), nil
 				}
 				return nil, err
 			}
@@ -503,18 +509,18 @@ func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
 		}
 	}
 
-	var instances vm.Instances
-	if err := json.Unmarshal(entry.Value(), &instances); err != nil {
+	var state struct {
+		VMS map[string]*vm.VM `json:"vms"`
+	}
+	if err := json.Unmarshal(entry.Value(), &state); err != nil {
 		return nil, err
 	}
-
-	// Ensure the VMS map is initialized
-	if instances.VMS == nil {
-		instances.VMS = make(map[string]*vm.VM)
+	if state.VMS == nil {
+		state.VMS = make(map[string]*vm.VM)
 	}
 
-	slog.Debug("Loaded state from JetStream KV", "key", key, "instances", len(instances.VMS))
-	return &instances, nil
+	slog.Debug("Loaded state from JetStream KV", "key", key, "instances", len(state.VMS))
+	return state.VMS, nil
 }
 
 // DeleteState removes the instance state from the KV store for the given node

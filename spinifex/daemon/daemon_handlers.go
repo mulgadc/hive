@@ -69,10 +69,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
-	d.Instances.Mu.Lock()
-	instance, ok := d.Instances.VMS[command.ID]
-	d.Instances.Mu.Unlock()
-
+	instance, ok := d.vmMgr.Get(command.ID)
 	if !ok {
 		slog.Warn("Instance is not running on this node", "id", command.ID)
 		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
@@ -156,16 +153,14 @@ func (d *Daemon) daemonIP() string {
 // handleNodeStatus responds with this node's status and resource stats.
 // Used by the CLI: spx get nodes, spx top nodes.
 func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
-	totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps := d.resourceMgr.GetResourceStats()
+	totalVCPU, totalMemGB, reservedVCPU, reservedMemGB, allocVCPU, allocMemGB, caps := d.resourceMgr.GetResourceStats()
 
-	d.Instances.Mu.Lock()
 	vmCount := 0
-	for _, v := range d.Instances.VMS {
+	d.vmMgr.ForEach(func(v *vm.VM) {
 		if v.Status == vm.StateRunning {
 			vmCount++
 		}
-	}
-	d.Instances.Mu.Unlock()
+	})
 
 	resp := types.NodeStatusResponse{
 		Node:          d.node,
@@ -177,6 +172,8 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 		Services:      d.config.GetServices(),
 		TotalVCPU:     totalVCPU,
 		TotalMemGB:    totalMemGB,
+		ReservedVCPU:  reservedVCPU,
+		ReservedMemGB: reservedMemGB,
 		AllocVCPU:     allocVCPU,
 		AllocMemGB:    allocMemGB,
 		VMCount:       vmCount,
@@ -286,9 +283,8 @@ func fetchPredastoreRole(url string, client *http.Client) string {
 // handleNodeVMs responds with the list of VMs running on this node.
 // Used by the CLI: spx get vms.
 func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
-	d.Instances.Mu.Lock()
-	vms := make([]types.VMInfo, 0, len(d.Instances.VMS))
-	for _, v := range d.Instances.VMS {
+	vms := make([]types.VMInfo, 0, d.vmMgr.Count())
+	d.vmMgr.ForEach(func(v *vm.VM) {
 		info := types.VMInfo{
 			InstanceID:   v.ID,
 			Status:       string(v.Status),
@@ -304,8 +300,7 @@ func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 			info.LaunchTime = v.Instance.LaunchTime.Unix()
 		}
 		vms = append(vms, info)
-	}
-	d.Instances.Mu.Unlock()
+	})
 
 	resp := types.NodeVMsResponse{
 		Node: d.node,

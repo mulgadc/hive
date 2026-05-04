@@ -150,6 +150,32 @@ dump_guest_ssh_diagnostics() {
         peer_ssh "$LOCAL_IP" "sudo ovn-sbctl --columns=logical_port,chassis,mac find port_binding mac~='${mac}' 2>&1 || true" 2>&1 || true
     fi
 
+    # ----- Cross-chassis dataplane diagnostics (mulga-siv-27 follow-up) -----
+    echo "  --- OVN SB chassis registrations (from primary) ---"
+    peer_ssh "$LOCAL_IP" "sudo ovn-sbctl show 2>&1 || true" 2>&1 || true
+
+    echo "  --- OVN SB port_binding chassis claims (from primary) ---"
+    peer_ssh "$LOCAL_IP" "sudo ovn-sbctl --bare --columns=logical_port,chassis,up list Port_Binding 2>&1 | head -80 || true" 2>&1 || true
+
+    echo "  --- OVN NB gateway_chassis (from primary) ---"
+    peer_ssh "$LOCAL_IP" "sudo ovn-nbctl --bare --columns=name,chassis_name,priority list Gateway_Chassis 2>&1 || true" 2>&1 || true
+
+    if [ -n "$host_ip" ] && [ "$host_ip" != "unknown" ]; then
+        echo "  --- on hosting node ${host_ip}: ovs-vsctl show (taps + geneve) ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl show 2>&1 | grep -E 'Bridge|Port|Interface|tap-|geneve|external_ids|iface-id|attached-mac|remote_ip' | head -80 || true" 2>&1 || true
+
+        echo "  --- on hosting node ${host_ip}: ovn-controller status + system-id ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl get open_vswitch . external_ids:system-id 2>&1; \
+            sudo ovs-vsctl get open_vswitch . external_ids:ovn-encap-ip 2>&1; \
+            sudo systemctl is-active ovn-controller 2>&1 || true" 2>&1 || true
+
+        echo "  --- on hosting node ${host_ip}: Geneve tunnel ports (br-int) ---"
+        peer_ssh "$host_ip" "sudo ovs-vsctl --columns=name,type,options find Interface type=geneve 2>&1 || true" 2>&1 || true
+
+        echo "  --- on hosting node ${host_ip}: br-int output flows (tunnel) ---"
+        peer_ssh "$host_ip" "sudo ovs-ofctl dump-flows br-int 2>/dev/null | grep -E 'tun_dst|output:.*tun|table=33|table=37' | head -40 || true" 2>&1 || true
+    fi
+
     echo "  --- cloud-init / sshd from hosting node (via QEMU console log if available) ---"
     peer_ssh "$host_ip" "ls -la /var/log/libvirt/qemu/ 2>/dev/null | head -20; \
         for f in /tmp/spinifex/vms/${instance_id}/console.log /var/log/libvirt/qemu/${instance_id}.log; do \
@@ -595,10 +621,14 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         echo "  SSH via public IP: $SSH_HOST:$SSH_PORT"
     else
         SSH_HOST="$host_ip"
-        SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 10)
+        # set -e would abort on $() returning non-zero, hiding the diagnostic below
+        if ! SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 30); then
+            SSH_PORT=""
+        fi
         SSH_KEY="$HOME/.ssh/spinifex-key"
         if [ -z "$SSH_PORT" ]; then
             echo "  ERROR: Failed to get SSH port for $instance_id on $host_ip"
+            dump_guest_ssh_diagnostics "$instance_id" "$host_ip" "$SSH_HOST" ""
             fail_test "Guest SSH ($instance_id)"
             continue
         fi

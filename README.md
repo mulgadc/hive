@@ -93,9 +93,24 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 
 Installation requires an Ubuntu / Debian system. See the detailed documentation at [docs.mulgadc.com](https://docs.mulgadc.com) for maintaining and installing Spinifex.
 
+### Bare Metal ISO
+
+The recommended installation is a [bootable x86 installer](https://iso.mulgadc.com/spinifex.iso) for bare-metal hardware.
+
+```bash
+curl -fLO https://iso.mulgadc.com/spinifex.iso
+```
+
+Follow the [USB install guide](https://docs.mulgadc.com/docs/install-usb) to write the ISO to USB and install on your hardware. The install guide walks through the full process.
+
+
 ### Single Node Install
 
-The installation is straightforward to set up and running on a single node for testing purposes.
+The installation is straightforward to set up and running on a single node for testing purposes. Debian 13 is currently supported, additional Linux distributions are on the immediate roadmap.
+
+>*Prerequisite:* Linux bridge for networking.
+
+Spinifex requires a Linux bridge configured on the host for VM networking. See the [single-node install guide](https://docs.mulgadc.com/docs/install#prerequisites) prerequisites for setup details.
 
 ```bash
 curl -fsSL https://install.mulgadc.com | bash

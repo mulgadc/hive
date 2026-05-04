@@ -151,9 +151,10 @@ func TestLocalStatePath_RootedAtDataDir(t *testing.T) {
 func TestDaemonWriteState_LocalFile(t *testing.T) {
 	dataDir := t.TempDir()
 	d := &Daemon{
-		config:    &config.Config{DataDir: dataDir},
-		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-w1": {ID: "i-w1", InstanceType: "t3.micro"}}},
+		config: &config.Config{DataDir: dataDir},
+		vmMgr:  vm.NewManager(),
 	}
+	d.vmMgr.Insert(&vm.VM{ID: "i-w1", InstanceType: "t3.micro"})
 
 	require.NoError(t, d.WriteState())
 
@@ -166,12 +167,11 @@ func TestDaemonWriteState_LocalFile(t *testing.T) {
 // TestDaemonLoadState_MissingFile — fresh-install path: empty map, no error.
 func TestDaemonLoadState_MissingFile(t *testing.T) {
 	d := &Daemon{
-		config:    &config.Config{DataDir: t.TempDir()},
-		Instances: vm.Instances{VMS: nil},
+		config: &config.Config{DataDir: t.TempDir()},
+		vmMgr:  vm.NewManager(),
 	}
 	require.NoError(t, d.LoadState())
-	assert.NotNil(t, d.Instances.VMS)
-	assert.Empty(t, d.Instances.VMS)
+	assert.Equal(t, 0, d.vmMgr.Count())
 }
 
 // TestDaemonLoadState_RoundTrip — write, then read back into a fresh daemon
@@ -179,18 +179,21 @@ func TestDaemonLoadState_MissingFile(t *testing.T) {
 func TestDaemonLoadState_RoundTrip(t *testing.T) {
 	dataDir := t.TempDir()
 	writer := &Daemon{
-		config:    &config.Config{DataDir: dataDir},
-		Instances: vm.Instances{VMS: map[string]*vm.VM{"i-rt1": {ID: "i-rt1", InstanceType: "m5.large"}}},
+		config: &config.Config{DataDir: dataDir},
+		vmMgr:  vm.NewManager(),
 	}
+	writer.vmMgr.Insert(&vm.VM{ID: "i-rt1", InstanceType: "m5.large"})
 	require.NoError(t, writer.WriteState())
 
 	reader := &Daemon{
-		config:    &config.Config{DataDir: dataDir},
-		Instances: vm.Instances{VMS: nil},
+		config: &config.Config{DataDir: dataDir},
+		vmMgr:  vm.NewManager(),
 	}
 	require.NoError(t, reader.LoadState())
-	assert.Len(t, reader.Instances.VMS, 1)
-	assert.Equal(t, "m5.large", reader.Instances.VMS["i-rt1"].InstanceType)
+	assert.Equal(t, 1, reader.vmMgr.Count())
+	got, ok := reader.vmMgr.Get("i-rt1")
+	require.True(t, ok)
+	assert.Equal(t, "m5.large", got.InstanceType)
 }
 
 // TestDaemonLoadState_CorruptFile — corruption is fatal, daemon refuses start.

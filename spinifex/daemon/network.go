@@ -15,7 +15,11 @@ import (
 // sudoCommand wraps exec.Command with sudo when running as non-root.
 // OVS/OVN and ip commands require elevated privileges; in Docker and
 // production the daemon runs as root, but in dev environments it may not.
-func sudoCommand(name string, args ...string) *exec.Cmd {
+//
+// Bound to a var (not a plain func) so tests can swap in a stub — running
+// the live binary against the dev host's OVS would mutate `external_ids` on
+// the running cluster (see TestSetupComputeNode_ValidatesArgs).
+var sudoCommand = func(name string, args ...string) *exec.Cmd {
 	if os.Getuid() == 0 {
 		return exec.Command(name, args...)
 	}
@@ -36,18 +40,26 @@ type NetworkPlumber interface {
 // OVSNetworkPlumber implements NetworkPlumber using system commands.
 type OVSNetworkPlumber struct{}
 
+var _ NetworkPlumber = (*OVSNetworkPlumber)(nil)
+
 func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	tapName := TapDeviceName(eniId)
 	ifaceID := OVSIfaceID(eniId)
 
-	// 0. If tap already exists (e.g. unclean shutdown), clean it up first
+	// 0. Clear any prior state on both the OVS and kernel sides. They have
+	// independent persistence — OVS conf.db survives reboot, kernel taps
+	// don't — so a /sys/class/net check alone misses orphan OVS ports left
+	// over after a host reboot or a terminate-during-pending race. The
+	// --if-exists flag makes del-port a no-op when the port is absent, so
+	// unconditional invocation is safe. Reject --may-exist add-port: it
+	// would silently keep stale external_ids:iface-id/attached-mac from a
+	// prior launch with a different ENI.
+	if err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run(); err != nil {
+		slog.Warn("Pre-create del-port failed (continuing)", "tap", tapName, "err", err)
+	}
 	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
-		slog.Warn("Stale tap device found, cleaning up before recreate", "tap", tapName)
-		if err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run(); err != nil {
-			slog.Warn("Failed to remove stale tap from br-int", "tap", tapName, "err", err)
-		}
 		if err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); err != nil {
-			slog.Warn("Failed to delete stale tap device", "tap", tapName, "err", err)
+			slog.Warn("Pre-create tap del failed (continuing)", "tap", tapName, "err", err)
 		}
 	}
 
@@ -152,16 +164,18 @@ func OVSIfaceID(eniId string) string {
 	return "port-" + eniId
 }
 
-// generateDevMAC creates a locally-administered unicast MAC for the dev/hostfwd NIC.
-// Uses prefix 02:de:00 to distinguish from ENI MACs (02:00:00).
+// generateDevMAC creates a locally-administered unicast MAC for the
+// dev/hostfwd NIC. The "dev:" tag disambiguates from the mgmt NIC of the
+// same instance (which shares instanceId).
 func generateDevMAC(instanceId string) string {
-	return utils.HashMAC("02:de:00", instanceId)
+	return utils.HashMAC("dev:" + instanceId)
 }
 
-// generateMgmtMAC creates a locally-administered unicast MAC for the management NIC.
-// Uses prefix 02:a0:00 to distinguish from ENI MACs (02:00:00) and dev MACs (02:de:00).
+// generateMgmtMAC creates a locally-administered unicast MAC for the
+// management NIC. The "mgmt:" tag disambiguates from the dev NIC of the
+// same instance (which shares instanceId).
 func generateMgmtMAC(instanceId string) string {
-	return utils.HashMAC("02:a0:00", instanceId)
+	return utils.HashMAC("mgmt:" + instanceId)
 }
 
 // MgmtTapName returns the Linux TAP device name for a management NIC.
@@ -243,11 +257,23 @@ func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
 }
 
 // CleanupMgmtTapDevice removes a management TAP device from the mgmt OVS
-// bridge and deletes it.
+// bridge and deletes it. Tolerant of missing state on either side: OVS port
+// removal is gated by --if-exists, kernel tap deletion is gated on
+// /sys/class/net/<tap> presence so callers may invoke this for an instance
+// that never reached the SetupMgmtTapDevice step.
 func CleanupMgmtTapDevice(tapName string) error {
 	// Detach from whichever OVS bridge holds this tap (usually br-mgmt)
 	if out, err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", tapName).CombinedOutput(); err != nil {
 		slog.Warn("Failed to remove mgmt tap from bridge", "tap", tapName, "err", err, "out", strings.TrimSpace(string(out)))
+	}
+
+	// Skip kernel-side delete if the tap is already gone (or was never
+	// created) — avoids a misleading "Device does not exist" error log
+	// when finalizeTermination cleans up an instance whose mgmt tap
+	// setup never completed.
+	if _, err := os.Stat("/sys/class/net/" + tapName); os.IsNotExist(err) {
+		slog.Info("Management TAP already absent", "tap", tapName)
+		return nil
 	}
 
 	// Delete TAP

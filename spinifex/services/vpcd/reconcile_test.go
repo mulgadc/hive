@@ -8,11 +8,43 @@ import (
 
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAcquireReconcileLeader_OnlyOneWinner(t *testing.T) {
+	_, nc, _ := testutil.StartTestJetStream(t)
+
+	releaseA, electedA := AcquireReconcileLeader(nc, "node-a")
+	require.True(t, electedA, "first caller must win")
+	require.NotNil(t, releaseA)
+
+	releaseB, electedB := AcquireReconcileLeader(nc, "node-b")
+	assert.False(t, electedB, "second caller must lose while A holds the lock")
+	assert.Nil(t, releaseB)
+
+	releaseA()
+
+	// After release the next caller can claim it.
+	releaseC, electedC := AcquireReconcileLeader(nc, "node-c")
+	require.True(t, electedC, "next caller wins after release")
+	releaseC()
+}
+
+func TestAcquireReconcileLeader_NoJetStreamFallsThrough(t *testing.T) {
+	// No JetStream on this server — caller must fall through (elected=true)
+	// rather than deadlock the cluster on first boot.
+	_, nc := testutil.StartTestNATS(t)
+
+	release, elected := AcquireReconcileLeader(nc, "node-a")
+	assert.True(t, elected, "must fall through when KV unavailable")
+	assert.NotNil(t, release)
+	release() // no-op release on fallthrough path must not panic
+}
 
 func TestReconcile_NoBootstrap(t *testing.T) {
 	ovn := NewMockOVNClient()
@@ -233,7 +265,7 @@ func TestReconcileFromKV_CreatesFullTopology(t *testing.T) {
 		}},
 	)
 
-	result := ReconcileFromKV(ctx, nc, topo)
+	result := ReconcileFromKV(ctx, nc, topo, nil)
 	assert.Equal(t, 1, result.RoutersCreated)
 	assert.Equal(t, 1, result.SwitchesCreated)
 	assert.Equal(t, 1, result.IGWsCreated)
@@ -279,12 +311,12 @@ func TestReconcileFromKV_Idempotent(t *testing.T) {
 		nil, nil,
 	)
 
-	r1 := ReconcileFromKV(ctx, nc, topo)
+	r1 := ReconcileFromKV(ctx, nc, topo, nil)
 	assert.Equal(t, 1, r1.RoutersCreated)
 	assert.Equal(t, 1, r1.SwitchesCreated)
 
 	// Second run: everything exists
-	r2 := ReconcileFromKV(ctx, nc, topo)
+	r2 := ReconcileFromKV(ctx, nc, topo, nil)
 	assert.Equal(t, 0, r2.RoutersCreated)
 	assert.Equal(t, 0, r2.SwitchesCreated)
 }
@@ -314,7 +346,7 @@ func TestReconcileFromKV_SkipsDetachedIGW(t *testing.T) {
 		nil,
 	)
 
-	result := ReconcileFromKV(ctx, nc, topo)
+	result := ReconcileFromKV(ctx, nc, topo, nil)
 	assert.Equal(t, 1, result.RoutersCreated) // VPC router created
 	assert.Equal(t, 0, result.IGWsCreated)    // Detached IGW skipped
 
@@ -330,7 +362,7 @@ func TestReconcileFromKV_NoBuckets(t *testing.T) {
 	topo := NewTopologyHandler(ovn)
 
 	// No KV buckets seeded — should handle gracefully
-	result := ReconcileFromKV(context.Background(), nc, topo)
+	result := ReconcileFromKV(context.Background(), nc, topo, nil)
 	assert.Equal(t, 0, result.RoutersCreated)
 	assert.Equal(t, 0, result.SwitchesCreated)
 	assert.Equal(t, 0, result.IGWsCreated)
@@ -418,7 +450,7 @@ func TestReconcileFromKV_VersionKeysAndBadJSON(t *testing.T) {
 	_, err = eniKV.Put(utils.AccountKey("000000000001", "eni-ver1"), eniData)
 	require.NoError(t, err)
 
-	result := ReconcileFromKV(ctx, nc, topo)
+	result := ReconcileFromKV(ctx, nc, topo, nil)
 
 	// Valid records should still be reconciled despite bad records
 	assert.Equal(t, 1, result.RoutersCreated)
@@ -458,9 +490,169 @@ func TestReconcileFromKV_EmptyBuckets(t *testing.T) {
 	_, err = js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketENIs, History: 1})
 	require.NoError(t, err)
 
-	result := ReconcileFromKV(context.Background(), nc, topo)
+	result := ReconcileFromKV(context.Background(), nc, topo, nil)
 	assert.Equal(t, 0, result.RoutersCreated)
 	assert.Equal(t, 0, result.SwitchesCreated)
 	assert.Equal(t, 0, result.IGWsCreated)
 	assert.Equal(t, 0, result.PortsCreated)
+}
+
+// --- reconcileGatewayChassis tests (mulga-999) ---
+
+// seedGatewayLRP creates a router + LRP tagged spinifex:role=gateway so
+// reconcileGatewayChassis's rebind step has something to bind.
+func seedGatewayLRP(t *testing.T, ovn *MockOVNClient, routerName, lrpName string) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: routerName}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, routerName, &nbdb.LogicalRouterPort{
+		Name:        lrpName,
+		ExternalIDs: map[string]string{"spinifex:role": "gateway"},
+	}))
+}
+
+func TestReconcileGatewayChassis_RemovesStaleRows(t *testing.T) {
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+	topo := NewTopologyHandler(ovn)
+	ctx := context.Background()
+
+	seedGatewayLRP(t, ovn, "vpc-A", "gw-A")
+	// One stale (chassis-old not in valid set), one live (UUID-A is).
+	ovn.SeedGatewayChassis("gw-A", &nbdb.GatewayChassis{
+		Name:        "gw-A-chassis-old",
+		ChassisName: "chassis-old",
+		Priority:    20,
+	})
+	ovn.SeedGatewayChassis("gw-A", &nbdb.GatewayChassis{
+		Name:        "gw-A-UUID-A",
+		ChassisName: "UUID-A",
+		Priority:    20,
+	})
+
+	require.NoError(t, topo.reconcileGatewayChassis(ctx, []string{"UUID-A"}))
+
+	rows, err := ovn.ListGatewayChassis(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "stale row should be deleted, live row should remain")
+	assert.Equal(t, "UUID-A", rows[0].ChassisName)
+	assert.Equal(t, 1, ovn.DeleteGatewayChassisCalls)
+}
+
+func TestReconcileGatewayChassis_RebindsAllGatewayLRPs(t *testing.T) {
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+	topo := NewTopologyHandler(ovn)
+	ctx := context.Background()
+
+	seedGatewayLRP(t, ovn, "vpc-A", "gw-A")
+	seedGatewayLRP(t, ovn, "vpc-B", "gw-B")
+	// Untagged LRP must NOT be rebinded.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-C"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-C", &nbdb.LogicalRouterPort{
+		Name:        "rtr-subnet-C",
+		ExternalIDs: map[string]string{"spinifex:role": "internal"},
+	}))
+
+	require.NoError(t, topo.reconcileGatewayChassis(ctx, []string{"chassis-A", "chassis-B"}))
+
+	// 2 gateway LRPs × 2 chassis = 4 SetGatewayChassis create calls. The
+	// internal LRP must contribute zero.
+	assert.Equal(t, 4, ovn.SetGatewayChassisCalls)
+	rows, err := ovn.ListGatewayChassis(ctx)
+	require.NoError(t, err)
+	assert.Len(t, rows, 4)
+
+	// Verify priorities — first chassis gets 20, second 15.
+	prioByGC := make(map[string]int, len(rows))
+	for _, gc := range rows {
+		prioByGC[gc.Name] = gc.Priority
+	}
+	assert.Equal(t, 20, prioByGC["gw-A-chassis-A"])
+	assert.Equal(t, 15, prioByGC["gw-A-chassis-B"])
+	assert.Equal(t, 20, prioByGC["gw-B-chassis-A"])
+	assert.Equal(t, 15, prioByGC["gw-B-chassis-B"])
+}
+
+// TestReconcileIGW_RewritesStaleGatewayPortNetworks guards the mulga-siv-26
+// D8 self-heal path. Pre-seed an IGW topology with a stale pool-IP on the
+// gateway LRP (the buggy state shipped to env20); the startup retrofit must
+// rewrite every such LRP in place to link-local via UpdateLogicalRouterPort.
+// Internal-role LRPs and LRPs already correct must not be touched.
+func TestReconcileIGW_RewritesStaleGatewayPortNetworks(t *testing.T) {
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+	ctx := context.Background()
+	topo := NewTopologyHandler(ovn)
+
+	// Stale gateway LRP on VPC A — the buggy pool-IP CIDR.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-A"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-A", &nbdb.LogicalRouterPort{
+		Name:        "gw-A",
+		MAC:         "02:00:00:74:e8:d2",
+		Networks:    []string{"192.168.0.160/24"},
+		ExternalIDs: map[string]string{"spinifex:role": "gateway"},
+	}))
+	// Already-correct gateway LRP on VPC B — must not be touched.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-B"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-B", &nbdb.LogicalRouterPort{
+		Name:        "gw-B",
+		MAC:         "02:00:00:bb:6d:14",
+		Networks:    []string{"169.254.0.1/30"},
+		ExternalIDs: map[string]string{"spinifex:role": "gateway"},
+	}))
+	// Internal LRP on VPC C — must not be touched even though Networks differ.
+	require.NoError(t, ovn.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{Name: "vpc-C"}))
+	require.NoError(t, ovn.CreateLogicalRouterPort(ctx, "vpc-C", &nbdb.LogicalRouterPort{
+		Name:        "rtr-subnet-C",
+		Networks:    []string{"10.0.1.1/24"},
+		ExternalIDs: map[string]string{"spinifex:role": "internal"},
+	}))
+
+	topo.RetrofitAllGatewayPortNetworks(ctx)
+
+	gwA, err := ovn.GetLogicalRouterPort(ctx, "gw-A")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"169.254.0.1/30"}, gwA.Networks,
+		"stale gateway Networks must be rewritten in place")
+
+	gwB, err := ovn.GetLogicalRouterPort(ctx, "gw-B")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"169.254.0.1/30"}, gwB.Networks)
+
+	internal, err := ovn.GetLogicalRouterPort(ctx, "rtr-subnet-C")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.1.1/24"}, internal.Networks,
+		"internal LRP must be untouched")
+
+	assert.Equal(t, 1, ovn.UpdateLogicalRouterPortCalls,
+		"only the stale gateway LRP should trigger Update")
+
+	// Idempotent second pass — all gateway LRPs now correct, no Update.
+	ovn.UpdateLogicalRouterPortCalls = 0
+	topo.RetrofitAllGatewayPortNetworks(ctx)
+	assert.Equal(t, 0, ovn.UpdateLogicalRouterPortCalls,
+		"no Update expected when every gateway LRP already link-local")
+}
+
+func TestReconcileGatewayChassis_NoOpWhenAlreadyCorrect(t *testing.T) {
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+	topo := NewTopologyHandler(ovn)
+	ctx := context.Background()
+
+	seedGatewayLRP(t, ovn, "vpc-A", "gw-A")
+	require.NoError(t, topo.reconcileGatewayChassis(ctx, []string{"chassis-A"}))
+	// Reset counters from the first (creating) pass.
+	ovn.SetGatewayChassisCalls = 0
+	ovn.DeleteGatewayChassisCalls = 0
+	ovn.UpdateGatewayChassisPriorityCalls = 0
+
+	// Second pass: state is already correct; idempotent path must take no
+	// destructive or mutative action.
+	require.NoError(t, topo.reconcileGatewayChassis(ctx, []string{"chassis-A"}))
+
+	assert.Equal(t, 0, ovn.SetGatewayChassisCalls, "no new creates expected")
+	assert.Equal(t, 0, ovn.DeleteGatewayChassisCalls, "no deletes expected")
+	assert.Equal(t, 0, ovn.UpdateGatewayChassisPriorityCalls, "no priority updates expected")
 }

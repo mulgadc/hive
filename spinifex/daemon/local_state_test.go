@@ -24,14 +24,12 @@ func TestLocalStatePath_DefaultWhenEmpty(t *testing.T) {
 func TestWriteLocalState_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "instance-state.json")
 
-	instances := &vm.Instances{
-		VMS: map[string]*vm.VM{
-			"i-aaa": {ID: "i-aaa", InstanceType: "t3.micro"},
-			"i-bbb": {ID: "i-bbb", InstanceType: "m5.large"},
-		},
+	vms := map[string]*vm.VM{
+		"i-aaa": {ID: "i-aaa", InstanceType: "t3.micro"},
+		"i-bbb": {ID: "i-bbb", InstanceType: "m5.large"},
 	}
 
-	require.NoError(t, WriteLocalState(path, instances))
+	require.NoError(t, WriteLocalState(path, vms))
 
 	loaded, err := ReadLocalState(path)
 	require.NoError(t, err)
@@ -44,7 +42,7 @@ func TestWriteLocalState_RoundTrip(t *testing.T) {
 
 func TestWriteLocalState_MkdirParent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deep", "nested", "state", "instance-state.json")
-	require.NoError(t, WriteLocalState(path, &vm.Instances{VMS: map[string]*vm.VM{}}))
+	require.NoError(t, WriteLocalState(path, map[string]*vm.VM{}))
 	_, err := os.Stat(path)
 	require.NoError(t, err)
 }
@@ -52,7 +50,7 @@ func TestWriteLocalState_MkdirParent(t *testing.T) {
 func TestWriteLocalState_NoTmpLeftBehind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "instance-state.json")
-	require.NoError(t, WriteLocalState(path, &vm.Instances{VMS: map[string]*vm.VM{}}))
+	require.NoError(t, WriteLocalState(path, map[string]*vm.VM{}))
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
@@ -64,13 +62,13 @@ func TestWriteLocalState_NoTmpLeftBehind(t *testing.T) {
 func TestWriteLocalState_AtomicReplace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "instance-state.json")
 
-	require.NoError(t, WriteLocalState(path, &vm.Instances{VMS: map[string]*vm.VM{
+	require.NoError(t, WriteLocalState(path, map[string]*vm.VM{
 		"i-1": {ID: "i-1"},
-	}}))
+	}))
 
-	require.NoError(t, WriteLocalState(path, &vm.Instances{VMS: map[string]*vm.VM{
+	require.NoError(t, WriteLocalState(path, map[string]*vm.VM{
 		"i-2": {ID: "i-2"},
-	}}))
+	}))
 
 	loaded, err := ReadLocalState(path)
 	require.NoError(t, err)

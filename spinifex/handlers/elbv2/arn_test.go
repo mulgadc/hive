@@ -8,6 +8,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// extractAgentEnv parses the cloud-config user-data into the env-var map that
+// cloud-init will write to /etc/conf.d/lb-agent. We don't pull in a YAML
+// dependency just for tests — the format is stable enough that line-based
+// parsing catches the things substring matching misses (misplaced keys,
+// broken indentation, content that escaped the agent-conf block).
+//
+// Returns the parsed env map plus the `runcmd:` section's body (raw lines)
+// so callers can assert on the launch command shape.
+func extractAgentEnv(t *testing.T, ud string) (envs map[string]string, runcmd []string) {
+	t.Helper()
+	require.True(t, strings.HasPrefix(ud, "#cloud-config\n"),
+		"user-data must start with #cloud-config directive")
+
+	envs = map[string]string{}
+	const agentPathMarker = "  - path: /etc/conf.d/lb-agent"
+	const contentMarker = "    content: |"
+	const envIndent = "      " // 6 spaces under `content: |`
+
+	lines := strings.Split(ud, "\n")
+	inAgentEnv := false
+	inRuncmd := false
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		switch {
+		case line == agentPathMarker:
+			require.Less(t, i+1, len(lines), "agent path entry truncated")
+			require.Equal(t, contentMarker, lines[i+1],
+				"agent path must be followed by `content: |` block")
+			inAgentEnv = true
+			i++ // skip the content marker
+		case inAgentEnv:
+			if !strings.HasPrefix(line, envIndent) {
+				inAgentEnv = false
+				i-- // re-process this line in case it starts another section
+				continue
+			}
+			kv := strings.TrimPrefix(line, envIndent)
+			k, v, ok := strings.Cut(kv, "=")
+			require.True(t, ok, "agent env line missing '=': %q", line)
+			envs[k] = v
+		case line == "runcmd:":
+			inRuncmd = true
+		case inRuncmd:
+			if !strings.HasPrefix(line, "  ") {
+				inRuncmd = false
+				continue
+			}
+			runcmd = append(runcmd, line)
+		}
+	}
+	return envs, runcmd
+}
+
 func TestBuildLBArn(t *testing.T) {
 	arn := buildLBArn("us-east-1", "123456789012", "my-alb", "50dc6c495c0c9188", LoadBalancerTypeApplication)
 	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/50dc6c495c0c9188", arn)
@@ -33,88 +86,70 @@ func TestBuildListenerArn_NLB(t *testing.T) {
 	assert.Equal(t, "arn:aws:elasticloadbalancing:eu-west-1:999888777666:listener/net/my-nlb/lbid123/listener456", arn)
 }
 
-func TestLbVMUserData_ContainsLBID(t *testing.T) {
+// TestLbVMUserData_Structural parses the generated cloud-config and asserts
+// the structure: agent env vars land in /etc/conf.d/lb-agent, runcmd starts
+// lb-agent via OpenRC (not the bare binary), the CA cert section — owned by
+// the instance service's cloud-init template — is absent, and no bootcmd is
+// emitted in the single-node default.
+func TestLbVMUserData_Structural(t *testing.T) {
 	svc := &ELBv2ServiceImpl{
 		GatewayURL:      "https://192.168.1.33:9999",
 		SystemAccessKey: "AKIAIOSFODNN7EXAMPLE",
 		SystemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		region:          "ap-southeast-2",
 	}
-	ud, err := svc.lbVMUserData("lb-abc123")
+	ud, err := svc.lbVMUserData("lb-abc123", SchemeInternetFacing)
 	require.NoError(t, err)
-	assert.Contains(t, ud, "#cloud-config")
-	assert.Contains(t, ud, "write_files:")
-	assert.Contains(t, ud, "/etc/conf.d/lb-agent")
-	assert.Contains(t, ud, "LB_LB_ID=lb-abc123")
-	assert.Contains(t, ud, "LB_GATEWAY_URL=https://192.168.1.33:9999")
-	assert.Contains(t, ud, "LB_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE")
-	assert.Contains(t, ud, "LB_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
-	assert.Contains(t, ud, "LB_REGION=ap-southeast-2")
-	// NATS URL should no longer be present
-	assert.NotContains(t, ud, "NATS")
-}
 
-func TestLbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
-	// Cloud-init guarantees write_files runs before runcmd. The agent is NOT
-	// enabled at boot via OpenRC — cloud-init is the sole trigger.
-	svc := &ELBv2ServiceImpl{
-		GatewayURL:      "https://10.0.2.2:9999",
-		SystemAccessKey: "AKID",
-		SystemSecretKey: "SECRET",
+	envs, runcmd := extractAgentEnv(t, ud)
+	assert.Equal(t, map[string]string{
+		"LB_LB_ID":       "lb-abc123",
+		"LB_GATEWAY_URL": "https://192.168.1.33:9999",
+		"LB_ACCESS_KEY":  "AKIAIOSFODNN7EXAMPLE",
+		"LB_SECRET_KEY":  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		"LB_REGION":      "ap-southeast-2",
+	}, envs)
+	for k := range envs {
+		assert.NotContains(t, k, "NATS", "NATS URL must not leak into agent config")
 	}
-	ud, err := svc.lbVMUserData("lb-test")
-	require.NoError(t, err)
-	assert.Contains(t, ud, "write_files:")
-	assert.Contains(t, ud, "/etc/conf.d/lb-agent")
-	assert.Contains(t, ud, "rc-service")
-	// Must not invoke the binary directly — OpenRC manages the process.
+
+	// Agent is launched via OpenRC, never as a bare binary path.
+	require.Len(t, runcmd, 1)
+	assert.Contains(t, runcmd[0], `[ "rc-service", "lb-agent", "start" ]`)
 	assert.NotContains(t, ud, "/usr/local/bin/lb-agent")
 
-	// write_files must appear before runcmd in the output
-	wfIdx := strings.Index(ud, "write_files:")
-	rcIdx := strings.Index(ud, "runcmd:")
-	assert.Greater(t, rcIdx, wfIdx, "write_files must precede runcmd")
-}
-
-func TestLbVMUserData_NoCACert(t *testing.T) {
-	// CA cert is injected by the instance service's cloud-init template,
-	// not by lbVMUserData — verify it's not duplicated here.
-	svc := &ELBv2ServiceImpl{
-		GatewayURL:      "https://192.168.1.33:9999",
-		SystemAccessKey: "AKID",
-		SystemSecretKey: "SECRET",
-	}
-	ud, err := svc.lbVMUserData("lb-noca")
-	require.NoError(t, err)
+	// CA cert is injected upstream by the instance service's template.
 	assert.NotContains(t, ud, "ca_certs:")
+
+	// Single-node default: no MgmtRoute set means no bootcmd.
+	assert.NotContains(t, ud, "bootcmd:")
 }
 
-func TestLbVMUserData_EmptyGatewayURL(t *testing.T) {
-	svc := &ELBv2ServiceImpl{
-		SystemAccessKey: "AKID",
-		SystemSecretKey: "SECRET",
+// TestLbVMUserData_MissingCredentials covers the three required-field error
+// paths (gateway URL, access key, secret key) in one table-driven test.
+func TestLbVMUserData_MissingCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		svc  *ELBv2ServiceImpl
+	}{
+		{
+			name: "missing GatewayURL",
+			svc:  &ELBv2ServiceImpl{SystemAccessKey: "AKID", SystemSecretKey: "SECRET"},
+		},
+		{
+			name: "missing SystemAccessKey",
+			svc:  &ELBv2ServiceImpl{GatewayURL: "https://10.0.0.1:9999", SystemSecretKey: "SECRET"},
+		},
+		{
+			name: "missing SystemSecretKey",
+			svc:  &ELBv2ServiceImpl{GatewayURL: "https://10.0.0.1:9999", SystemAccessKey: "AKID"},
+		},
 	}
-	_, err := svc.lbVMUserData("lb-test")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing system credentials")
-}
-
-func TestLbVMUserData_EmptyAccessKey(t *testing.T) {
-	svc := &ELBv2ServiceImpl{
-		GatewayURL:      "https://10.0.0.1:9999",
-		SystemSecretKey: "SECRET",
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.svc.lbVMUserData("lb-test", SchemeInternetFacing)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "missing system credentials")
+		})
 	}
-	_, err := svc.lbVMUserData("lb-test")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing system credentials")
-}
-
-func TestLbVMUserData_EmptySecretKey(t *testing.T) {
-	svc := &ELBv2ServiceImpl{
-		GatewayURL:      "https://10.0.0.1:9999",
-		SystemAccessKey: "AKID",
-	}
-	_, err := svc.lbVMUserData("lb-test")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing system credentials")
 }

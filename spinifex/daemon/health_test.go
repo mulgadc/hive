@@ -57,14 +57,14 @@ func TestHandleInstanceCrash_SkipsNonRunning(t *testing.T) {
 	d := &Daemon{
 		natsConn:    nc,
 		resourceMgr: rm,
-		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:       vm.NewManager(),
 	}
 
 	instance := &vm.VM{
 		ID:     "i-test-stopped",
 		Status: vm.StateStopped,
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// Should return without action (no panic, no state change)
 	d.handleInstanceCrash(instance, fmt.Errorf("test error"))
@@ -82,7 +82,7 @@ func TestHandleInstanceCrash_SkipsShuttingDown(t *testing.T) {
 	d := &Daemon{
 		natsConn:    nc,
 		resourceMgr: rm,
-		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:       vm.NewManager(),
 	}
 	d.shuttingDown.Store(true)
 
@@ -90,7 +90,7 @@ func TestHandleInstanceCrash_SkipsShuttingDown(t *testing.T) {
 		ID:     "i-test-shutdown",
 		Status: vm.StateRunning,
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	d.handleInstanceCrash(instance, fmt.Errorf("test error"))
 
@@ -113,7 +113,7 @@ func TestMaybeRestart_ExceedsMaxInWindow(t *testing.T) {
 			Services: []string{"daemon"},
 		},
 		resourceMgr: rm,
-		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:       vm.NewManager(),
 	}
 
 	// Find an allocatable instance type
@@ -134,7 +134,7 @@ func TestMaybeRestart_ExceedsMaxInWindow(t *testing.T) {
 			RestartCount:   maxRestartsInWindow,
 		},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// Should not schedule a restart (no panic, instance stays in error)
 	d.maybeRestartInstance(instance)
@@ -158,7 +158,7 @@ func TestMaybeRestart_ResetsAfterWindow(t *testing.T) {
 			Services: []string{"daemon"},
 		},
 		resourceMgr: rm,
-		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:       vm.NewManager(),
 	}
 
 	// Find an allocatable instance type
@@ -179,7 +179,7 @@ func TestMaybeRestart_ResetsAfterWindow(t *testing.T) {
 			RestartCount:   5,
 		},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// maybeRestartInstance should reset counters and schedule a restart
 	// (restart will fail because there's no real QEMU, but counters should reset)
@@ -228,7 +228,7 @@ func newTestDaemon(t *testing.T) (*Daemon, func()) {
 			Services: []string{"daemon"},
 		},
 		resourceMgr: rm,
-		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
+		vmMgr:       vm.NewManager(),
 	}
 	return d, func() { nc.Close() }
 }
@@ -284,7 +284,7 @@ func TestHandleInstanceCrash_CoreFlow(t *testing.T) {
 		InstanceType: allocType,
 		Config:       vm.Config{QMPSocket: qmpPath},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	d.handleInstanceCrash(instance, fmt.Errorf("test crash"))
 
@@ -325,7 +325,7 @@ func TestHandleInstanceCrash_FirstCrashSetsTime(t *testing.T) {
 		PID:          111,
 		InstanceType: allocType,
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// First crash
 	d.handleInstanceCrash(instance, fmt.Errorf("crash 1"))
@@ -334,11 +334,11 @@ func TestHandleInstanceCrash_FirstCrashSetsTime(t *testing.T) {
 	assert.Equal(t, 1, instance.Health.CrashCount)
 
 	// Reset to running for a second crash
-	d.Instances.Mu.Lock()
-	instance.Status = vm.StateRunning
-	instance.Running = true
-	instance.PID = 222
-	d.Instances.Mu.Unlock()
+	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		v.Status = vm.StateRunning
+		v.Running = true
+		v.PID = 222
+	})
 
 	time.Sleep(time.Millisecond) // ensure time advances
 	d.handleInstanceCrash(instance, fmt.Errorf("crash 2"))
@@ -359,7 +359,7 @@ func TestHandleInstanceCrash_UnknownInstanceType(t *testing.T) {
 		PID:          333,
 		InstanceType: "z99.nonexistent",
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// Should not panic even though instance type is not in resourceMgr
 	d.handleInstanceCrash(instance, fmt.Errorf("crash"))
@@ -386,7 +386,7 @@ func TestMaybeRestart_SkipsShuttingDown(t *testing.T) {
 			FirstCrashTime: time.Now(),
 		},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	d.maybeRestartInstance(instance)
 
@@ -407,7 +407,7 @@ func TestMaybeRestart_UnknownInstanceType(t *testing.T) {
 			FirstCrashTime: time.Now(),
 		},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// Should not panic — just log and return
 	d.maybeRestartInstance(instance)
@@ -422,10 +422,11 @@ func TestMaybeRestart_InsufficientResources(t *testing.T) {
 
 	allocType := smallestAllocType(t, d.resourceMgr)
 
-	// Exhaust all resources by setting allocated = available
+	// Exhaust all schedulable resources (host - reserved) so canAllocate
+	// returns 0, matching what's actually achievable at runtime.
 	d.resourceMgr.mu.Lock()
-	d.resourceMgr.allocatedVCPU = d.resourceMgr.availableVCPU
-	d.resourceMgr.allocatedMem = d.resourceMgr.availableMem
+	d.resourceMgr.allocatedVCPU = d.resourceMgr.hostVCPU - d.resourceMgr.reservedVCPU
+	d.resourceMgr.allocatedMem = d.resourceMgr.hostMemGB - d.resourceMgr.reservedMem
 	d.resourceMgr.mu.Unlock()
 
 	instance := &vm.VM{
@@ -437,7 +438,7 @@ func TestMaybeRestart_InsufficientResources(t *testing.T) {
 			FirstCrashTime: time.Now(),
 		},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	d.maybeRestartInstance(instance)
 
@@ -461,7 +462,7 @@ func TestMaybeRestart_SchedulesRestart(t *testing.T) {
 			RestartCount:   0,
 		},
 	}
-	d.Instances.VMS[instance.ID] = instance
+	d.vmMgr.Insert(instance)
 
 	// maybeRestartInstance should pass all guards and call time.AfterFunc.
 	// The scheduled restartCrashedInstance will increment RestartCount and
