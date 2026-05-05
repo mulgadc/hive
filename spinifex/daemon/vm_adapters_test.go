@@ -1,0 +1,114 @@
+package daemon
+
+import (
+	"testing"
+
+	"github.com/mulgadc/spinifex/spinifex/vm"
+	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// newHookTestDaemon returns a Daemon with the minimum surface required to
+// drive onInstanceUpHook / onInstanceDownHook: a live NATS connection and an
+// initialised natsSubscriptions map. The hook handlers themselves are never
+// invoked here — the assertions inspect the subscription map and topics.
+func newHookTestDaemon(t *testing.T) (*Daemon, *nats.Conn) {
+	t.Helper()
+	nc, err := nats.Connect(sharedNATSURL)
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	d := &Daemon{
+		natsConn:          nc,
+		natsSubscriptions: make(map[string]*nats.Subscription),
+	}
+	return d, nc
+}
+
+func TestOnInstanceUpHook_RegistersBothPerInstanceTopics(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	instance := &vm.VM{ID: "i-up-basic"}
+
+	d.onInstanceUpHook()(instance)
+
+	cmdSub, ok := d.natsSubscriptions[instance.ID]
+	require.True(t, ok, "ec2.cmd subscription must be registered under instance ID")
+	assert.Equal(t, "ec2.cmd.i-up-basic", cmdSub.Subject)
+
+	consoleSub, ok := d.natsSubscriptions[instance.ID+".console"]
+	require.True(t, ok, "console subscription must be registered under <id>.console key")
+	assert.Equal(t, "ec2.i-up-basic.GetConsoleOutput", consoleSub.Subject)
+}
+
+func TestOnInstanceUpHook_ReplacesExistingSubsOnDoubleUp(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	instance := &vm.VM{ID: "i-up-twice"}
+
+	d.onInstanceUpHook()(instance)
+	first := d.natsSubscriptions[instance.ID]
+	firstConsole := d.natsSubscriptions[instance.ID+".console"]
+	require.NotNil(t, first)
+	require.NotNil(t, firstConsole)
+
+	d.onInstanceUpHook()(instance)
+	second := d.natsSubscriptions[instance.ID]
+	secondConsole := d.natsSubscriptions[instance.ID+".console"]
+	require.NotNil(t, second)
+	require.NotNil(t, secondConsole)
+
+	// Second call must have unsubscribed the originals (so they're no longer
+	// receiving on the topic) and replaced the map entries with fresh subs.
+	assert.False(t, first.IsValid(), "first command sub should be unsubscribed")
+	assert.False(t, firstConsole.IsValid(), "first console sub should be unsubscribed")
+	assert.True(t, second.IsValid(), "second command sub should be live")
+	assert.True(t, secondConsole.IsValid(), "second console sub should be live")
+	assert.NotSame(t, first, second, "command sub map entry must be replaced")
+	assert.NotSame(t, firstConsole, secondConsole, "console sub map entry must be replaced")
+}
+
+func TestOnInstanceDownHook_UnsubscribesAndDeletes(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	instance := &vm.VM{ID: "i-down"}
+
+	d.onInstanceUpHook()(instance)
+	cmdSub := d.natsSubscriptions[instance.ID]
+	consoleSub := d.natsSubscriptions[instance.ID+".console"]
+	require.NotNil(t, cmdSub)
+	require.NotNil(t, consoleSub)
+
+	d.onInstanceDownHook()(instance.ID)
+
+	_, cmdPresent := d.natsSubscriptions[instance.ID]
+	_, consolePresent := d.natsSubscriptions[instance.ID+".console"]
+	assert.False(t, cmdPresent, "command sub must be deleted from map")
+	assert.False(t, consolePresent, "console sub must be deleted from map")
+	assert.False(t, cmdSub.IsValid(), "command sub must be unsubscribed")
+	assert.False(t, consoleSub.IsValid(), "console sub must be unsubscribed")
+}
+
+func TestOnInstanceDownHook_NoOpWhenAbsent(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+
+	// Down on an unknown instance must not panic and must leave the map empty.
+	d.onInstanceDownHook()("i-never-up")
+
+	assert.Empty(t, d.natsSubscriptions)
+}
+
+func TestOnInstanceDownHook_OnlyRemovesTargetedInstance(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	keep := &vm.VM{ID: "i-keep"}
+	drop := &vm.VM{ID: "i-drop"}
+
+	d.onInstanceUpHook()(keep)
+	d.onInstanceUpHook()(drop)
+	require.Len(t, d.natsSubscriptions, 4)
+
+	d.onInstanceDownHook()(drop.ID)
+
+	assert.Len(t, d.natsSubscriptions, 2)
+	assert.NotNil(t, d.natsSubscriptions[keep.ID])
+	assert.NotNil(t, d.natsSubscriptions[keep.ID+".console"])
+	_, dropPresent := d.natsSubscriptions[drop.ID]
+	assert.False(t, dropPresent)
+}

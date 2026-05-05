@@ -359,7 +359,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		// Pre-compute dev MAC so cloud-init can generate per-interface netplan
 		// that suppresses the default route on the dev/hostfwd NIC.
 		if d.config.Daemon.DevNetworking && instance.ENIId != "" {
-			instance.DevMAC = generateDevMAC(instance.ID)
+			instance.DevMAC = vm.GenerateDevMAC(instance.ID)
 		}
 
 		// Prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
@@ -384,9 +384,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		}
 
 		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-		err = d.LaunchInstance(instance)
+		err = d.vmMgr.Run(instance)
 		if err != nil {
-			slog.Error("handleEC2RunInstances LaunchInstance failed", "instanceId", instance.ID, "err", err)
+			slog.Error("handleEC2RunInstances vmMgr.Run failed", "instanceId", instance.ID, "err", err)
 			d.markInstanceFailed(instance, "launch_failed")
 			continue
 		}
@@ -450,17 +450,14 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 		}
 	}
 
-	// Clear stop attribute before launch so WriteState inside LaunchInstance
+	// Clear stop attribute before launch so WriteState inside the manager
 	// persists the correct attributes. Without this, a daemon restart after
 	// a stop→start cycle would see StopInstance=true and skip reconnecting QEMU.
 	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.Attributes = command.Attributes })
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-	err := d.LaunchInstance(instance)
-
-	if err != nil {
-		slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-		// Free the resource on failure
+	if err := d.vmMgr.Start(instance.ID); err != nil {
+		slog.Error("handleStartInstance: vmMgr.Start failed", "err", err)
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
 		}
@@ -951,9 +948,9 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	d.vmMgr.Insert(instance)
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-	err = d.LaunchInstance(instance)
+	err = d.vmMgr.Run(instance)
 	if err != nil {
-		slog.Error("handleEC2StartStoppedInstance: LaunchInstance failed", "instanceId", req.InstanceID, "err", err)
+		slog.Error("handleEC2StartStoppedInstance: vmMgr.Run failed", "instanceId", req.InstanceID, "err", err)
 		// Rollback: deallocate resources and remove from local map
 		if ok {
 			d.resourceMgr.deallocate(instanceType)

@@ -322,14 +322,12 @@ func TestShuttingDown_ErrorRecovery(t *testing.T) {
 	assert.Equal(t, vm.StateTerminated, instance.Status)
 }
 
-// TestLaunchInstance_AbortedByConcurrentTerminate exercises the
-// terminate-during-pending race: a terminate request transitions
-// status to shutting-down while LaunchInstance is in flight.
-// LaunchInstance must return nil (not an error) so the concurrent
-// terminate goroutine owns cleanup without colliding with launch
-// state writes. Pre-fix this returned a non-nil error which surfaced
-// as a spurious ERROR log on every legitimate terminate-during-pending.
-func TestLaunchInstance_AbortedByConcurrentTerminate(t *testing.T) {
+// TestRun_AbortedByConcurrentTerminate exercises the terminate-during-pending
+// race: a terminate request transitions status to shutting-down while
+// vmMgr.Run is in flight. Run must return nil (not an error) so the
+// concurrent terminate goroutine owns cleanup without colliding with launch
+// state writes.
+func TestRun_AbortedByConcurrentTerminate(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	for _, status := range []vm.InstanceState{vm.StateShuttingDown, vm.StateTerminated, vm.StateRunning} {
@@ -340,7 +338,7 @@ func TestLaunchInstance_AbortedByConcurrentTerminate(t *testing.T) {
 			}
 			daemon.vmMgr.Insert(instance)
 
-			err := daemon.LaunchInstance(instance)
+			err := daemon.vmMgr.Run(instance)
 			require.NoError(t, err, "expected nil for non-launchable status %s", status)
 			assert.Equal(t, status, instance.Status, "status must not change")
 		})
