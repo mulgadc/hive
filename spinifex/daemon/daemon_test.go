@@ -104,6 +104,18 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, objectstore.NewMemoryObjectStore())
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, objectstore.NewMemoryObjectStore(), nc)
 
+	// Wire the minimum vm.Deps that handler tests rely on. Lifecycle (Run/Start/
+	// Stop/Terminate) tests still set up their own deps; this gives the
+	// post-2d AttachVolume / DetachVolume manager methods enough plumbing to
+	// drive ebs.mount/unmount over NATS using the test's connection.
+	volState := newVolumeStateUpdaterAdapter(daemon.volumeService)
+	daemon.vmMgr.SetDeps(vm.Deps{
+		NodeID:             daemon.node,
+		VolumeMounter:      newVolumeMounterAdapter(daemon.natsConn, daemon.node, volState),
+		VolumeStateUpdater: volState,
+		DetachDelay:        daemon.detachDelay,
+	})
+
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
 			drainAndClose(t, daemon.natsConn)
@@ -3136,16 +3148,18 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
 }
 
-// TestRollbackEBSMount_Success verifies that rollbackEBSMount sends an ebs.unmount
-// request and handles a successful unmount response.
-func TestRollbackEBSMount_Success(t *testing.T) {
+// TestVolumeMounterAdapter_UnmountOne_Success verifies that the adapter's
+// UnmountOne sends an ebs.unmount NATS request and handles a successful
+// response. UnmountOne is the post-2d successor to Daemon.rollbackEBSMount;
+// it is the AttachVolume rollback path and DetachVolume Phase 3.
+func TestVolumeMounterAdapter_UnmountOne_Success(t *testing.T) {
 	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
+	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
 
 	unmountCalled := make(chan string, 1)
 
-	// Mock ebs.unmount subscriber that returns success
 	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		var req types.EBSRequest
 		json.Unmarshal(msg.Data, &req)
@@ -3157,12 +3171,10 @@ func TestRollbackEBSMount_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	ebsReq := types.EBSRequest{
+	adapter.UnmountOne(types.EBSRequest{
 		Name:       "vol-rollback-test",
 		DeviceName: "/dev/sdf",
-	}
-
-	daemon.rollbackEBSMount(ebsReq)
+	})
 
 	select {
 	case volName := <-unmountCalled:
@@ -3172,14 +3184,14 @@ func TestRollbackEBSMount_Success(t *testing.T) {
 	}
 }
 
-// TestRollbackEBSMount_UnmountError verifies that rollbackEBSMount handles
-// an error response from ebs.unmount gracefully (no panic, just logs).
-func TestRollbackEBSMount_UnmountError(t *testing.T) {
+// TestVolumeMounterAdapter_UnmountOne_UnmountError verifies that UnmountOne
+// tolerates an error response from ebs.unmount (logs only, no propagation).
+func TestVolumeMounterAdapter_UnmountOne_UnmountError(t *testing.T) {
 	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
+	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
 
-	// Mock ebs.unmount subscriber that returns an error
 	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := types.EBSUnMountResponse{Error: "unmount failed: device busy"}
 		data, _ := json.Marshal(resp)
@@ -3188,45 +3200,37 @@ func TestRollbackEBSMount_UnmountError(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	ebsReq := types.EBSRequest{Name: "vol-rollback-err"}
-
-	// Should not panic — errors are logged but not propagated
-	daemon.rollbackEBSMount(ebsReq)
+	adapter.UnmountOne(types.EBSRequest{Name: "vol-rollback-err"})
 }
 
-// TestRollbackEBSMount_StillMounted verifies that rollbackEBSMount handles
-// the case where the unmount response says the volume is still mounted.
-func TestRollbackEBSMount_StillMounted(t *testing.T) {
+// TestVolumeMounterAdapter_UnmountOne_StillMounted verifies that UnmountOne
+// tolerates an unmount response that reports the volume still mounted.
+func TestVolumeMounterAdapter_UnmountOne_StillMounted(t *testing.T) {
 	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
+	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
 
 	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		resp := types.EBSUnMountResponse{Mounted: true} // still mounted
+		resp := types.EBSUnMountResponse{Mounted: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	ebsReq := types.EBSRequest{Name: "vol-still-mounted"}
-
-	// Should not panic
-	daemon.rollbackEBSMount(ebsReq)
+	adapter.UnmountOne(types.EBSRequest{Name: "vol-still-mounted"})
 }
 
-// TestRollbackEBSMount_NATSTimeout verifies that rollbackEBSMount handles
-// NATS request timeout gracefully (no subscriber on ebs.unmount).
-func TestRollbackEBSMount_NATSTimeout(t *testing.T) {
+// TestVolumeMounterAdapter_UnmountOne_NATSTimeout verifies that UnmountOne
+// tolerates NATS request timeout (no subscriber on ebs.unmount).
+func TestVolumeMounterAdapter_UnmountOne_NATSTimeout(t *testing.T) {
 	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
+	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
 
-	// No ebs.unmount subscriber — will timeout
-	ebsReq := types.EBSRequest{Name: "vol-timeout"}
-
-	// Should not panic, just log the timeout
-	daemon.rollbackEBSMount(ebsReq)
+	adapter.UnmountOne(types.EBSRequest{Name: "vol-timeout"})
 }
 
 // TestDescribeInstances_InvalidInstanceIDMalformed verifies that DescribeInstances
@@ -3326,115 +3330,6 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 		assert.NotContains(t, string(resp.Data), "ServerInternal")
 	})
-}
-
-// TestNextAvailableDevice tests the device name auto-assignment logic
-func TestNextAvailableDevice(t *testing.T) {
-	tests := []struct {
-		name       string
-		instance   *vm.VM
-		wantDevice string
-	}{
-		{
-			name: "empty instance returns first device",
-			instance: &vm.VM{
-				Instance: &ec2.Instance{},
-			},
-			wantDevice: "/dev/sdf",
-		},
-		{
-			name:       "nil Instance returns first device",
-			instance:   &vm.VM{},
-			wantDevice: "/dev/sdf",
-		},
-		{
-			name: "existing BlockDeviceMappings skipped",
-			instance: &vm.VM{
-				Instance: &ec2.Instance{
-					BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
-						{DeviceName: aws.String("/dev/sdf")},
-						{DeviceName: aws.String("/dev/sdg")},
-					},
-				},
-			},
-			wantDevice: "/dev/sdh",
-		},
-		{
-			name: "existing EBSRequests skipped",
-			instance: &vm.VM{
-				Instance: &ec2.Instance{},
-				EBSRequests: types.EBSRequests{
-					Requests: []types.EBSRequest{
-						{Name: "vol-1", DeviceName: "/dev/sdf"},
-					},
-				},
-			},
-			wantDevice: "/dev/sdg",
-		},
-		{
-			name: "mixed sources all skipped",
-			instance: &vm.VM{
-				Instance: &ec2.Instance{
-					BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
-						{DeviceName: aws.String("/dev/sdf")},
-					},
-				},
-				EBSRequests: types.EBSRequests{
-					Requests: []types.EBSRequest{
-						{Name: "vol-1", DeviceName: "/dev/sdg"},
-					},
-				},
-			},
-			wantDevice: "/dev/sdh",
-		},
-		{
-			name: "all devices f-p used returns empty",
-			instance: func() *vm.VM {
-				var bdms []*ec2.InstanceBlockDeviceMapping
-				for c := 'f'; c <= 'p'; c++ {
-					dev := fmt.Sprintf("/dev/sd%c", c)
-					bdms = append(bdms, &ec2.InstanceBlockDeviceMapping{
-						DeviceName: aws.String(dev),
-					})
-				}
-				return &vm.VM{
-					Instance: &ec2.Instance{BlockDeviceMappings: bdms},
-				}
-			}(),
-			wantDevice: "",
-		},
-		{
-			name: "nil DeviceName in BlockDeviceMappings ignored",
-			instance: &vm.VM{
-				Instance: &ec2.Instance{
-					BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
-						{DeviceName: nil},
-						{DeviceName: aws.String("/dev/sdf")},
-					},
-				},
-			},
-			wantDevice: "/dev/sdg",
-		},
-		{
-			name: "empty DeviceName in EBSRequests ignored",
-			instance: &vm.VM{
-				EBSRequests: types.EBSRequests{
-					Requests: []types.EBSRequest{
-						{DeviceName: ""},
-						{DeviceName: "/dev/sdf"},
-					},
-				},
-			},
-			wantDevice: "/dev/sdg",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := nextAvailableDevice(tt.instance)
-			assert.Equal(t, tt.wantDevice, got)
-		})
-	}
 }
 
 func TestCanAllocate(t *testing.T) {

@@ -38,6 +38,27 @@ func (m *Manager) Start(id string) error {
 	return m.launch(instance)
 }
 
+// Reboot issues a QMP system_reset to a running instance. The VM stays
+// in StateRunning across the reset; QEMU re-runs firmware and the guest
+// kernel reboots in place. Returns ErrInstanceNotFound when id is unknown
+// and ErrInvalidTransition when the instance is not Running.
+func (m *Manager) Reboot(id string) error {
+	instance, ok := m.Get(id)
+	if !ok {
+		return ErrInstanceNotFound
+	}
+	var status InstanceState
+	m.Inspect(instance, func(v *VM) { status = v.Status })
+	if status != StateRunning {
+		return fmt.Errorf("%w: cannot reboot instance %s in state %s",
+			ErrInvalidTransition, id, status)
+	}
+	if _, err := sendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_reset"}, id); err != nil {
+		return fmt.Errorf("QMP system_reset: %w", err)
+	}
+	return nil
+}
+
 // launchStillValid returns true while the launch pipeline may continue
 // setting up resources for instance. Returns false if a concurrent terminate
 // has flipped status out of pending/stopped/provisioning — at that point the

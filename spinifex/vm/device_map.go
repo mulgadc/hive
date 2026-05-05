@@ -1,4 +1,4 @@
-package daemon
+package vm
 
 import (
 	"encoding/json"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/qmp"
-	"github.com/mulgadc/spinifex/spinifex/vm"
 )
 
 // pciAddrRegexp extracts the device index from a boot-time QDev path.
@@ -33,8 +32,8 @@ var hotplugPortRegexp = regexp.MustCompile(`hotplug(\d+)`)
 // The mapping is derived from PCI address order: virtio-blk-pci devices are
 // enumerated by the guest kernel in PCI bus order, which corresponds to the
 // device index in the QDev path.
-func queryGuestDeviceMap(d *Daemon, qmpClient *qmp.QMPClient, instanceID string) (map[string]string, error) {
-	resp, err := d.SendQMPCommand(qmpClient, qmp.QMPCommand{Execute: "query-block"}, instanceID)
+func queryGuestDeviceMap(qmpClient *qmp.QMPClient, instanceID string) (map[string]string, error) {
+	resp, err := sendQMPCommand(qmpClient, qmp.QMPCommand{Execute: "query-block"}, instanceID)
 	if err != nil {
 		return nil, fmt.Errorf("query-block failed: %w", err)
 	}
@@ -50,12 +49,12 @@ func queryGuestDeviceMap(d *Daemon, qmpClient *qmp.QMPClient, instanceID string)
 // queryGuestDeviceMapWait retries queryGuestDeviceMap until expectedDevice
 // appears in the result. This handles the race where query-block is called
 // immediately after device_add, before QEMU has registered the new device.
-func queryGuestDeviceMapWait(d *Daemon, qmpClient *qmp.QMPClient, instanceID, expectedDevice string) (map[string]string, error) {
+func queryGuestDeviceMapWait(qmpClient *qmp.QMPClient, instanceID, expectedDevice string) (map[string]string, error) {
 	const maxAttempts = 5
 	const retryDelay = 200 * time.Millisecond
 
 	for attempt := range maxAttempts {
-		deviceMap, err := queryGuestDeviceMap(d, qmpClient, instanceID)
+		deviceMap, err := queryGuestDeviceMap(qmpClient, instanceID)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +69,7 @@ func queryGuestDeviceMapWait(d *Daemon, qmpClient *qmp.QMPClient, instanceID, ex
 	}
 
 	// Return the last result even though the device wasn't found — caller decides fallback.
-	return queryGuestDeviceMap(d, qmpClient, instanceID)
+	return queryGuestDeviceMap(qmpClient, instanceID)
 }
 
 // buildDeviceMap takes a list of BlockDevices from QMP and returns a map
@@ -140,16 +139,18 @@ func buildDeviceMap(devices []qmp.BlockDevice) map[string]string {
 	return result
 }
 
-// updateGuestDeviceNames queries the running VM's QMP to discover actual guest device
-// paths and updates the instance's BlockDeviceMappings accordingly.
-func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
+// UpdateGuestDeviceNames queries the running VM's QMP to discover actual
+// guest device paths and updates the instance's BlockDeviceMappings
+// accordingly. Persists running state on success. No-op when QMPClient is
+// nil. Errors are logged; callers do not need to react.
+func (m *Manager) UpdateGuestDeviceNames(instance *VM) {
 	if instance.QMPClient == nil {
-		slog.Warn("updateGuestDeviceNames: QMPClient is nil, cannot discover guest device names",
+		slog.Warn("UpdateGuestDeviceNames: QMPClient is nil, cannot discover guest device names",
 			"instanceId", instance.ID)
 		return
 	}
 
-	deviceMap, err := queryGuestDeviceMap(d, instance.QMPClient, instance.ID)
+	deviceMap, err := queryGuestDeviceMap(instance.QMPClient, instance.ID)
 	if err != nil {
 		slog.Warn("Failed to query guest device map, BlockDeviceMappings will use API names",
 			"instanceId", instance.ID, "err", err)
@@ -157,8 +158,8 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 	}
 
 	// Build volume ID → guest device path mapping from EBSRequests.
-	// Collect under EBSRequests lock, then release before acquiring Instances lock
-	// to maintain consistent lock ordering.
+	// Collect under EBSRequests lock, then release before acquiring the
+	// manager lock to maintain consistent lock ordering.
 	instance.EBSRequests.Mu.Lock()
 	volToGuest := make(map[string]string, len(instance.EBSRequests.Requests))
 	for _, req := range instance.EBSRequests.Requests {
@@ -176,8 +177,7 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// Update BlockDeviceMappings using the mapping
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+	m.Inspect(instance, func(v *VM) {
 		if v.Instance == nil {
 			return
 		}
@@ -191,8 +191,9 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 		}
 	})
 
-	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to persist state after guest device name update", "instanceId", instance.ID, "err", err)
+	if err := m.writeRunningState(); err != nil {
+		slog.Error("Failed to persist state after guest device name update",
+			"instanceId", instance.ID, "err", err)
 	}
 
 	slog.Info("Updated guest device names", "instanceId", instance.ID, "deviceMap", deviceMap)
@@ -215,7 +216,6 @@ func extractPCIIndex(qdev string) int {
 // extractPeripheralName extracts the device ID from a hot-plugged QDev path.
 // For example: "/machine/peripheral/vdisk-vol-abc123/virtio-backend" → "vdisk-vol-abc123"
 func extractPeripheralName(qdev string) string {
-	// Path format: /machine/peripheral/<name>/virtio-backend
 	const prefix = "/machine/peripheral/"
 	if !strings.HasPrefix(qdev, prefix) {
 		return ""
@@ -240,4 +240,36 @@ func extractHotplugPort(qdev string) int {
 		return -1
 	}
 	return idx
+}
+
+// nextAvailableDevice finds the next available /dev/sd[f-p] device name
+// for instance. AWS convention reserves f-p for attached volumes. Returns
+// an empty string when every slot is occupied.
+func nextAvailableDevice(instance *VM) string {
+	usedDevices := make(map[string]bool)
+
+	if instance.Instance != nil {
+		for _, bdm := range instance.Instance.BlockDeviceMappings {
+			if bdm.DeviceName != nil {
+				usedDevices[*bdm.DeviceName] = true
+			}
+		}
+	}
+
+	instance.EBSRequests.Mu.Lock()
+	for _, req := range instance.EBSRequests.Requests {
+		if req.DeviceName != "" {
+			usedDevices[req.DeviceName] = true
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
+
+	for c := 'f'; c <= 'p'; c++ {
+		dev := fmt.Sprintf("/dev/sd%c", c)
+		if !usedDevices[dev] {
+			return dev
+		}
+	}
+
+	return ""
 }

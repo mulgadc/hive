@@ -4,6 +4,8 @@ import (
 	"errors"
 	"maps"
 	"testing"
+
+	"github.com/mulgadc/spinifex/spinifex/types"
 )
 
 // fakeStateStore is a minimal in-memory StateStore used to verify Deps wiring.
@@ -135,8 +137,11 @@ func TestManagerHooks_InitiallyNil(t *testing.T) {
 
 // fakeVolumeMounter records every call so lifecycle tests can assert ordering.
 type fakeVolumeMounter struct {
-	mounted, unmounted []string
-	mountErr           error
+	mounted, unmounted       []string
+	mountedOne, unmountedOne []string
+	mountErr                 error
+	mountOneErr              error
+	mountOneURI              string
 }
 
 func (f *fakeVolumeMounter) Mount(v *VM) error {
@@ -147,6 +152,21 @@ func (f *fakeVolumeMounter) Mount(v *VM) error {
 func (f *fakeVolumeMounter) Unmount(v *VM) error {
 	f.unmounted = append(f.unmounted, v.ID)
 	return nil
+}
+
+func (f *fakeVolumeMounter) MountOne(req *types.EBSRequest) error {
+	f.mountedOne = append(f.mountedOne, req.Name)
+	if f.mountOneErr != nil {
+		return f.mountOneErr
+	}
+	if f.mountOneURI != "" {
+		req.NBDURI = f.mountOneURI
+	}
+	return nil
+}
+
+func (f *fakeVolumeMounter) UnmountOne(req types.EBSRequest) {
+	f.unmountedOne = append(f.unmountedOne, req.Name)
 }
 
 var _ VolumeMounter = (*fakeVolumeMounter)(nil)

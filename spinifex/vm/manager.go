@@ -3,6 +3,7 @@ package vm
 import (
 	"maps"
 	"sync"
+	"time"
 )
 
 // ManagerHooks are callbacks the manager fires synchronously on every
@@ -48,6 +49,11 @@ type Deps struct {
 	// BindHost is the daemon's listen IP, used when wiring user-mode
 	// hostfwd rules. Empty / "0.0.0.0" falls back to 127.0.0.1.
 	BindHost string
+
+	// DetachDelay is the pause between QMP device_del and blockdev-del
+	// during DetachVolume, and the polling interval for blockdev-del retry.
+	// Zero is acceptable in tests; production uses 1s.
+	DetachDelay time.Duration
 }
 
 // Manager owns the in-memory map of running VMs on this node and every
