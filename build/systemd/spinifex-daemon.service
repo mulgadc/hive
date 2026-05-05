@@ -8,7 +8,9 @@ Wants=spinifex-nats.service
 Type=simple
 User=spinifex-daemon
 Group=spinifex
-ExecStartPre=/var/lib/spinifex/wait-for-nats.sh
+# DDIL Tier 1 (siv-17): no ExecStartPre wait-for-nats. The daemon starts in
+# standalone mode and reconnects to NATS in the background — process-exiting
+# on a missing NATS would kill the local VM management plane.
 ExecStart=/usr/local/bin/spx service spinifex start
 Restart=on-failure
 RestartSec=5

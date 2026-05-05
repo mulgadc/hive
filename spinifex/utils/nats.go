@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -90,10 +91,13 @@ func ConnectNATS(host, token, caCertPath string, opts ...RetryOption) (*nats.Con
 // callback fields wrap nats.go's connection-state handlers so callers can
 // react to disconnects/reconnects without losing the default log lines.
 type retryConfig struct {
-	maxWait      time.Duration
-	retryDelay   time.Duration
-	onDisconnect func(*nats.Conn, error)
-	onReconnect  func(*nats.Conn)
+	maxWait       time.Duration
+	retryDelay    time.Duration
+	maxRetryDelay time.Duration
+	onDisconnect  func(*nats.Conn, error)
+	onReconnect   func(*nats.Conn)
+	onAttemptErr  func(err error, attempt int)
+	ctx           context.Context
 }
 
 // RetryOption configures ConnectNATS / ConnectNATSWithRetry behavior.
@@ -109,6 +113,12 @@ func WithRetryDelay(d time.Duration) RetryOption {
 	return func(c *retryConfig) { c.retryDelay = d }
 }
 
+// WithMaxRetryDelay overrides the upper bound on the exponential backoff
+// (default 10s).
+func WithMaxRetryDelay(d time.Duration) RetryOption {
+	return func(c *retryConfig) { c.maxRetryDelay = d }
+}
+
 // WithDisconnectHandler registers an optional callback invoked after the
 // default disconnect log line. Callback runs on a NATS client goroutine; keep
 // it non-blocking (atomic stores, channel sends, goroutine spawns).
@@ -122,21 +132,41 @@ func WithReconnectHandler(fn func(*nats.Conn)) RetryOption {
 	return func(c *retryConfig) { c.onReconnect = fn }
 }
 
+// WithAttemptErrHandler registers an optional callback invoked after each
+// failed connect attempt during ConnectNATSWithRetry's outer loop. Used by the
+// daemon to surface initial-connect retries as a counter on /local/status.
+func WithAttemptErrHandler(fn func(err error, attempt int)) RetryOption {
+	return func(c *retryConfig) { c.onAttemptErr = fn }
+}
+
+// WithContext lets callers cancel the retry loop. When ctx is done,
+// ConnectNATSWithRetry returns ctx.Err().
+func WithContext(ctx context.Context) RetryOption {
+	return func(c *retryConfig) { c.ctx = ctx }
+}
+
 // ConnectNATSWithRetry calls ConnectNATS in a retry loop with exponential
-// backoff. It retries for up to 5 minutes (default) before giving up. TLS
+// backoff. It retries for up to 5 minutes (default) before giving up; pass
+// WithMaxWait(0) to retry indefinitely (cancel via WithContext). TLS
 // configuration errors (ErrCACertRead, ErrCACertParse) are permanent and
 // cause an immediate return without retrying.
 func ConnectNATSWithRetry(host, token, caCertPath string, opts ...RetryOption) (*nats.Conn, error) {
 	cfg := retryConfig{
-		maxWait:    5 * time.Minute,
-		retryDelay: 500 * time.Millisecond,
+		maxWait:       5 * time.Minute,
+		retryDelay:    500 * time.Millisecond,
+		maxRetryDelay: 10 * time.Second,
 	}
 	for _, o := range opts {
 		o(&cfg)
 	}
+	if cfg.maxRetryDelay <= 0 {
+		cfg.maxRetryDelay = 10 * time.Second
+	}
 
 	start := time.Now()
+	attempt := 0
 	for {
+		attempt++
 		nc, err := ConnectNATS(host, token, caCertPath, opts...)
 		if err == nil {
 			if time.Since(start) > time.Second {
@@ -150,14 +180,27 @@ func ConnectNATSWithRetry(host, token, caCertPath string, opts ...RetryOption) (
 			return nil, fmt.Errorf("NATS TLS configuration error: %w", err)
 		}
 
+		if cfg.onAttemptErr != nil {
+			cfg.onAttemptErr(err, attempt)
+		}
+
 		elapsed := time.Since(start)
-		if elapsed >= cfg.maxWait {
+		if cfg.maxWait > 0 && elapsed >= cfg.maxWait {
 			return nil, fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
 		}
 
-		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", cfg.retryDelay)
-		time.Sleep(cfg.retryDelay)
-		cfg.retryDelay = min(cfg.retryDelay*2, 10*time.Second)
+		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", cfg.retryDelay, "attempt", attempt)
+
+		if cfg.ctx != nil {
+			select {
+			case <-cfg.ctx.Done():
+				return nil, fmt.Errorf("NATS connect cancelled after %s: %w", elapsed.Round(time.Second), cfg.ctx.Err())
+			case <-time.After(cfg.retryDelay):
+			}
+		} else {
+			time.Sleep(cfg.retryDelay)
+		}
+		cfg.retryDelay = min(cfg.retryDelay*2, cfg.maxRetryDelay)
 	}
 }
 

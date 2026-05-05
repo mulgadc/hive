@@ -561,12 +561,14 @@ func TestTransitionState_MultipleInstancesIndependent(t *testing.T) {
 // running, isInstanceProcessRunning returns false for all instances, which
 // exercises the recovery state resolution logic.
 
-// simulateCleanRestore writes a clean shutdown marker then calls restoreInstances.
-// Without the marker, restoreInstances sleeps 3s waiting for stale QEMU PIDs —
-// unnecessary in tests since no QEMU process ever runs.
+// simulateCleanRestore writes a clean shutdown marker, reloads local state
+// (mirrors startLocal()), then calls restoreInstances. Without the marker,
+// restoreInstances sleeps 3s waiting for stale QEMU PIDs — unnecessary in
+// tests since no QEMU process ever runs.
 func simulateCleanRestore(t *testing.T, daemon *Daemon) {
 	t.Helper()
 	require.NoError(t, daemon.jsManager.WriteShutdownMarker(daemon.node))
+	require.NoError(t, daemon.LoadState())
 	require.NoError(t, daemon.restoreInstances())
 }
 

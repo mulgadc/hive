@@ -1,13 +1,18 @@
 package daemon
 
 import (
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/assert"
@@ -214,4 +219,110 @@ func writeCorruptStateFile(path string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte("{not json"), 0o600)
+}
+
+// TestStartLocal_SucceedsWithoutNATS — §1d: startLocal() brings the daemon up
+// (cluster manager HTTPS, local state load, ready flag) without contacting
+// NATS. /local/status reports standalone mode immediately.
+func TestStartLocal_SucceedsWithoutNATS(t *testing.T) {
+	tmpDir := t.TempDir()
+	certPEM, keyPEM := generateTestCert(t)
+	certPath := filepath.Join(tmpDir, "server.pem")
+	keyPath := filepath.Join(tmpDir, "server.key")
+	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
+
+	addr, err := freeAddrForTest()
+	require.NoError(t, err)
+
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				BaseDir: tmpDir,
+				DataDir: tmpDir,
+				NATS:    config.NATSConfig{Host: "nats://127.0.0.1:1"}, // unreachable
+				Daemon: config.DaemonConfig{
+					Host:    addr,
+					TLSCert: certPath,
+					TLSKey:  keyPath,
+				},
+			},
+		},
+	}
+
+	d, err := NewDaemon(cfg)
+	require.NoError(t, err)
+	d.configPath = filepath.Join(tmpDir, "spinifex.toml")
+
+	require.NoError(t, d.startLocal())
+	defer func() {
+		if d.clusterServer != nil {
+			_ = d.clusterServer.Close()
+		}
+	}()
+
+	assert.True(t, d.ready.Load(), "ready flag should be set after startLocal")
+	assert.Equal(t, DaemonModeStandalone, d.Mode())
+
+	// /local/status served via the cluster manager TLS listener.
+	client := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   2 * time.Second,
+	}
+	resp, err := client.Get(fmt.Sprintf("https://%s/local/status", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body LocalStatus
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, DaemonModeStandalone, body.Mode)
+	assert.Equal(t, natsDisconnected, body.NATS)
+}
+
+// TestStartCluster_RetriesUntilContextCancelled — §1d: startCluster's NATS
+// connect loop honours d.ctx. Cancelling the daemon context unblocks an
+// otherwise-infinite retry.
+func TestStartCluster_RetriesUntilContextCancelled(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				BaseDir: tmpDir,
+				DataDir: tmpDir,
+				NATS:    config.NATSConfig{Host: "nats://127.0.0.1:1"}, // unreachable
+			},
+		},
+	}
+
+	d, err := NewDaemon(cfg)
+	require.NoError(t, err)
+	// Bound retry delay so ctx-cancel unblocks promptly.
+	d.natsRetryOpts = []utils.RetryOption{utils.WithRetryDelay(50 * time.Millisecond)}
+
+	done := make(chan error, 1)
+	go func() { done <- d.startCluster() }()
+
+	time.Sleep(200 * time.Millisecond)
+	d.cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "connect NATS")
+	case <-time.After(3 * time.Second):
+		t.Fatal("startCluster did not return after ctx cancellation")
+	}
+}
+
+func freeAddrForTest() (string, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr, nil
 }

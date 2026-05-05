@@ -660,20 +660,108 @@ func (d *Daemon) subscribeAll() error {
 	return nil
 }
 
-// Start initializes and starts the daemon
+// Start brings the daemon up in two phases (DDIL Tier 1, §1d):
+//
+//  1. startLocal — bootstraps everything that does not need NATS (cluster
+//     manager HTTPS, mgmt bridge + IP allocator, OVS plumber, OOM score,
+//     local instance state via 1a). The daemon is reachable on /local/* and
+//     /health as soon as this returns.
+//  2. startCluster — runs in the background, retries NATS forever, then
+//     initialises JetStream + cluster-scoped services, restores instances,
+//     and subscribes to NATS topics. Mode flips to "cluster" once connected.
+//
+// Process-exit on NATS failure is no longer possible; staying up degraded is
+// always better than killing the local VM management plane.
 func (d *Daemon) Start() error {
-	if err := d.connectNATS(); err != nil {
-		return fmt.Errorf("failed to connect to NATS: %w", err)
+	if err := d.startLocal(); err != nil {
+		return err
 	}
 
-	// ClusterManager must start before JetStream init so peers can reach
-	// /health during bootstrap.
+	d.setupShutdown()
+
+	d.shutdownWg.Go(func() {
+		if err := d.startCluster(); err != nil {
+			slog.Warn("Cluster bootstrap aborted", "err", err)
+		}
+	})
+
+	d.awaitShutdown()
+	return nil
+}
+
+// startLocal performs the no-NATS bootstrap: HTTPS cluster manager,
+// management bridge detection, network plumber, OOM protection, and local
+// instance-state recovery. Failures here are fatal — these are local
+// configuration errors (TLS misconfig, bad config path) that retry would not
+// fix. The daemon is reachable via /local/* and /health once this returns.
+func (d *Daemon) startLocal() error {
+	// ClusterManager serves /health and /local/* over HTTPS. NATS-independent.
 	if err := d.ClusterManager(); err != nil {
 		return fmt.Errorf("failed to start cluster manager: %w", err)
 	}
 
+	// Detect management bridge for system instance control plane NICs.
+	mgmtBridge := "br-mgmt"
+	if d.config.Daemon.MgmtBridge != "" {
+		mgmtBridge = d.config.Daemon.MgmtBridge
+	}
+	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
+	if bridgeErr != nil {
+		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
+	} else if bridgeIP == "" {
+		slog.Warn("Management bridge not found, system instances will not get mgmt NIC", "bridge", mgmtBridge)
+	} else {
+		d.mgmtBridgeIP = bridgeIP
+		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
+		if allocErr != nil {
+			slog.Error("Failed to create mgmt IP allocator", "bridgeIP", bridgeIP, "err", allocErr)
+		} else {
+			d.mgmtIPAllocator = alloc
+			slog.Info("Management bridge detected", "bridge", mgmtBridge, "ip", bridgeIP)
+		}
+	}
+
+	// Initialise OVS network plumber (no NATS dep).
+	if d.networkPlumber == nil {
+		d.networkPlumber = &OVSNetworkPlumber{}
+	}
+
+	// Protect daemon from OOM killer (prefer killing QEMU VMs instead).
+	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
+		slog.Warn("Failed to set daemon OOM score", "err", err)
+	}
+
+	// Recover local instance state from disk (1a). Read-only — KV migrations,
+	// QMP reconnects, NATS subscriptions and crashed-VM relaunches happen in
+	// startCluster() once NATS is reachable. Fatal if the file is corrupt:
+	// silently dropping instance state would orphan running VMs.
+	if err := d.LoadState(); err != nil {
+		return fmt.Errorf("load local instance state: %w", err)
+	}
+	slog.Info("Loaded local instance state", "instance count", d.vmMgr.Count())
+
+	// Rebuild mgmt IP allocator from restored VMs.
+	if d.mgmtIPAllocator != nil {
+		d.mgmtIPAllocator.Rebuild(d.vmMgr.SnapshotMap())
+		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
+	}
+
+	d.ready.Store(true)
+	slog.Info("Daemon local-bootstrap complete", "node", d.node, "elapsed", time.Since(d.startTime).Round(time.Second))
+	return nil
+}
+
+// startCluster performs the cluster-integration phase asynchronously. It
+// retries NATS indefinitely (cap 60s backoff) and only returns once the node
+// is fully participating in the cluster or d.ctx is cancelled. Errors here
+// are logged, never propagated as a process-exit.
+func (d *Daemon) startCluster() error {
+	if err := d.connectNATS(); err != nil {
+		return fmt.Errorf("connect NATS: %w", err)
+	}
+
 	if err := d.initJetStream(); err != nil {
-		return fmt.Errorf("failed to initialize JetStream: %w", err)
+		return fmt.Errorf("initialize JetStream: %w", err)
 	}
 
 	// Write service manifest so other nodes know what this node runs
@@ -840,28 +928,6 @@ func (d *Daemon) Start() error {
 	// Wire LB VM lifecycle: instance launcher for system VMs.
 	d.elbv2Service.InstanceLauncher = d
 
-	// Detect management bridge for system instance control plane NICs.
-	// Must run before wireLBAgentConfig so the gateway URL uses br-mgmt IP.
-	mgmtBridge := "br-mgmt"
-	if d.config.Daemon.MgmtBridge != "" {
-		mgmtBridge = d.config.Daemon.MgmtBridge
-	}
-	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
-	if bridgeErr != nil {
-		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
-	} else if bridgeIP == "" {
-		slog.Warn("Management bridge not found, system instances will not get mgmt NIC", "bridge", mgmtBridge)
-	} else {
-		d.mgmtBridgeIP = bridgeIP
-		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
-		if allocErr != nil {
-			slog.Error("Failed to create mgmt IP allocator", "bridgeIP", bridgeIP, "err", allocErr)
-		} else {
-			d.mgmtIPAllocator = alloc
-			slog.Info("Management bridge detected", "bridge", mgmtBridge, "ip", bridgeIP)
-		}
-	}
-
 	// Wire system credentials + gateway URL for LB agent SigV4 auth.
 	d.wireLBAgentConfig()
 
@@ -914,27 +980,10 @@ func (d *Daemon) Start() error {
 		d.ensureDefaultVPCInfrastructure()
 	}
 
-	// Initialize network plumber for VPC tap device management
-	if d.networkPlumber == nil {
-		d.networkPlumber = &OVSNetworkPlumber{}
-	}
-
-	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
-	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
-		slog.Warn("Failed to set daemon OOM score", "err", err)
-	}
-
 	d.waitForClusterReady()
 	d.upgradeJetStreamReplicas()
 	if err := d.restoreInstances(); err != nil {
 		return fmt.Errorf("restore instances: %w", err)
-	}
-
-	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
-	// that are already in use by running system instances.
-	if d.mgmtIPAllocator != nil {
-		d.mgmtIPAllocator.Rebuild(d.vmMgr.SnapshotMap())
-		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
 	}
 
 	if err := d.subscribeAll(); err != nil {
@@ -949,23 +998,24 @@ func (d *Daemon) Start() error {
 	d.startHeartbeat()
 	d.startPendingWatchdog()
 
-	d.ready.Store(true)
-	slog.Info("Daemon fully initialized", "node", d.node, "startupTime", time.Since(d.startTime).Round(time.Second))
-
-	d.setupShutdown()
-	d.awaitShutdown()
-
+	slog.Info("Daemon cluster integration complete", "node", d.node, "startupTime", time.Since(d.startTime).Round(time.Second))
 	return nil
 }
 
-// connectNATS establishes a connection to the NATS server with retry and
-// exponential backoff. On multi-node clusters, the local NATS server may not
-// be ready immediately after daemon start (e.g. if start-dev.sh is still
-// launching services). This retries for up to 5 minutes before giving up.
+// connectNATS establishes a connection to the NATS server. Defaults to
+// infinite retry with exponential backoff (cap 60s) so the daemon stays up
+// in standalone mode through extended NATS outages instead of process-exiting
+// (DDIL Tier 1). Tests override d.natsRetryOpts to bound the wait.
 func (d *Daemon) connectNATS() error {
 	opts := append([]utils.RetryOption{
+		utils.WithMaxWait(0), // infinite retry; cancelled via d.ctx
+		utils.WithMaxRetryDelay(60 * time.Second),
+		utils.WithContext(d.ctx),
 		utils.WithDisconnectHandler(d.onNATSDisconnect),
 		utils.WithReconnectHandler(d.onNATSReconnect),
+		utils.WithAttemptErrHandler(func(_ error, _ int) {
+			d.natsRetryCount.Add(1)
+		}),
 	}, d.natsRetryOpts...)
 	nc, err := utils.ConnectNATSWithRetry(admin.DialTarget(d.config.NATS.Host), d.config.NATS.ACL.Token, d.config.NATS.CACert, opts...)
 	if err != nil {
@@ -1161,10 +1211,10 @@ func (d *Daemon) migrateTerminatedToKV(instance *vm.VM) bool {
 // maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
 const maxConcurrentRecovery = 2
 
-// restoreInstances loads persisted VM state and re-launches instances that are
-// neither terminated nor flagged as user-stopped. Returns an error only when
-// local state is unreadable (corrupt JSON or unknown schema_version) — those
-// are fatal because silently dropping instance state would orphan running VMs.
+// restoreInstances reattaches to running QEMU processes, finalises
+// transitional states, migrates terminated/stopped VMs to KV, and re-launches
+// crashed VMs. The local state file is already loaded by startLocal; this is
+// the cluster-coupled recovery work that depends on NATS + JetStream.
 func (d *Daemon) restoreInstances() error {
 	// Check for clean shutdown marker
 	cleanShutdown := false
@@ -1182,12 +1232,6 @@ func (d *Daemon) restoreInstances() error {
 		slog.Warn("No clean shutdown marker — possible crash recovery, validating QEMU PIDs carefully")
 		time.Sleep(3 * time.Second)
 	}
-
-	if err := d.LoadState(); err != nil {
-		return fmt.Errorf("load state: %w", err)
-	}
-
-	slog.Info("Loaded state", "instance count", d.vmMgr.Count())
 
 	// Phase 1: Reconnect running QEMU, finalize transitional states, collect VMs to relaunch
 	var toLaunch []*vm.VM
