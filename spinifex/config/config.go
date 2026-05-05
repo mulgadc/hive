@@ -133,6 +133,9 @@ type GPUModelOverride struct {
 	Manufacturer string `json:"Manufacturer" mapstructure:"manufacturer"`
 	Name         string `json:"Name" mapstructure:"name"`
 	MemoryMiB    int64  `json:"MemoryMiB" mapstructure:"memory_mib"`
+	// XVGAOff forces x-vga=off for this GPU in QEMU passthrough, overriding the
+	// default (on for consumer GPUs, off for known datacenter cards).
+	XVGAOff bool `json:"XVGAOff" mapstructure:"xvga_off"`
 }
 
 // DaemonConfig holds the daemon configuration

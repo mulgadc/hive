@@ -57,6 +57,15 @@ func bindVFIO(sysfsRoot, addr string) (string, error) {
 func unbindVFIO(sysfsRoot, addr, originalDriver string) error {
 	devPath := filepath.Join(sysfsRoot, "bus/pci/devices", addr)
 
+	current, err := readDriver(devPath)
+	if err != nil {
+		return fmt.Errorf("read driver for %s: %w", addr, err)
+	}
+	if current != "vfio-pci" {
+		// Already unbound from vfio-pci (e.g. released by QEMU before Release was called).
+		return nil
+	}
+
 	if err := writeSysfs(filepath.Join(sysfsRoot, "bus/pci/drivers/vfio-pci/unbind"), addr); err != nil {
 		return fmt.Errorf("unbind %s from vfio-pci: %w", addr, err)
 	}

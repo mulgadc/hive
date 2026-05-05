@@ -121,6 +121,9 @@ type VM struct {
 	// GPUPCIAddress is the PCI address of the GPU bound to this instance via VFIO
 	// (e.g. "0000:03:00.0"). Empty for non-GPU instances.
 	GPUPCIAddress string `json:"gpu_pci_address,omitempty"`
+	// GPUXVGAEnabled controls whether x-vga=on is passed to QEMU for this instance's
+	// GPU device. True for consumer GPUs; false for headless datacenter cards.
+	GPUXVGAEnabled bool `json:"gpu_xvga_enabled,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

@@ -60,9 +60,8 @@ func init() {
 	adminGpuCmd.AddCommand(adminGpuSetupCmd)
 
 	adminGpuStatusCmd.Flags().String("node", "", "Target node name (default: local node)")
-	adminGpuEnableCmd.Flags().String("node", "", "Target node name (default: local node)")
-	adminGpuDisableCmd.Flags().String("node", "", "Target node name (default: local node)")
-	adminGpuSetupCmd.Flags().String("node", "", "Target node name (default: local node)")
+	// enable, disable, and setup write to the local spinifex.toml and signal the
+	// local daemon — they must be run directly on the target host.
 }
 
 // gpuNodeStatus queries NATS and returns the NodeStatusResponse for the target node.
@@ -140,9 +139,8 @@ func runAdminGpuStatus(cmd *cobra.Command, _ []string) {
 }
 
 // gpuToggle writes the TOML setting, sends SIGHUP, and polls until the daemon confirms the new state.
-func gpuToggle(cmd *cobra.Command, enable bool) {
-	targetNode, _ := cmd.Flags().GetString("node")
-
+// enable/disable always operate on the local node; run the command directly on the target host.
+func gpuToggle(_ *cobra.Command, enable bool) {
 	cfgPath := viper.GetString("config")
 	if cfgPath == "" {
 		cfgPath = DefaultConfigFile()
@@ -152,12 +150,10 @@ func gpuToggle(cmd *cobra.Command, enable bool) {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if targetNode == "" {
-		targetNode = cfg.Node
-	}
+	localNode := cfg.Node
 
 	// Check current state first.
-	resp, err := gpuNodeStatus(targetNode)
+	resp, err := gpuNodeStatus(localNode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -170,9 +166,7 @@ func gpuToggle(cmd *cobra.Command, enable bool) {
 		}
 		if !resp.GPUCapable {
 			fmt.Fprintln(os.Stderr, "Error: prerequisites not met on this node.")
-			if !resp.GPUCapable {
-				fmt.Fprintln(os.Stderr, "  Run 'sudo spx admin gpu setup' to configure the host.")
-			}
+			fmt.Fprintln(os.Stderr, "  Run 'sudo spx admin gpu setup' to configure the host.")
 			os.Exit(1)
 		}
 	} else {
@@ -187,7 +181,7 @@ func gpuToggle(cmd *cobra.Command, enable bool) {
 	}
 
 	// Write the TOML setting.
-	if err := admin.SetGPUPassthrough(cfgPath, targetNode, enable); err != nil {
+	if err := admin.SetGPUPassthrough(cfgPath, localNode, enable); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing config: %v\n", err)
 		os.Exit(1)
 	}
@@ -209,13 +203,13 @@ func gpuToggle(cmd *cobra.Command, enable bool) {
 	for time.Now().Before(deadline) {
 		time.Sleep(1 * time.Second)
 		fmt.Print(".")
-		r, err := gpuNodeStatus(targetNode)
+		r, err := gpuNodeStatus(localNode)
 		if err != nil {
 			continue
 		}
 		if r.GPUPassthrough == enable {
 			fmt.Println(" done.")
-			runAdminGpuStatus(cmd, nil)
+			runAdminGpuStatus(adminGpuStatusCmd, nil)
 			return
 		}
 	}
@@ -232,7 +226,7 @@ func runAdminGpuDisable(cmd *cobra.Command, _ []string) {
 	gpuToggle(cmd, false)
 }
 
-func runAdminGpuSetup(cmd *cobra.Command, _ []string) {
+func runAdminGpuSetup(_ *cobra.Command, _ []string) {
 	if os.Getuid() != 0 {
 		fmt.Fprintln(os.Stderr, "Error: spx admin gpu setup must be run as root.")
 		os.Exit(1)
@@ -264,7 +258,7 @@ func runAdminGpuSetup(cmd *cobra.Command, _ []string) {
 	if len(iommuEntries) > 0 {
 		fmt.Println("    Active")
 	} else {
-		params := gpuSetupIOMMMUParams()
+		params := gpuSetupIOMMUParams()
 		changed, err := gpuSetupAddGRUBParams(params)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to update GRUB: %v\n", err)
@@ -381,7 +375,7 @@ func runAdminGpuSetup(cmd *cobra.Command, _ []string) {
 	}
 
 	fmt.Println("==> Enabling GPU passthrough")
-	gpuToggle(cmd, true)
+	gpuToggle(nil, true)
 }
 
 // gpuSetupCollectVFIOIDs collects vendor:device PCI ID pairs for each GPU and
@@ -391,7 +385,11 @@ func gpuSetupCollectVFIOIDs(devices []gpu.GPUDevice) []string {
 	seen := make(map[string]bool)
 	var ids []string
 	for _, d := range devices {
-		prefix := d.PCIAddress[:strings.LastIndex(d.PCIAddress, ".")]
+		dot := strings.LastIndex(d.PCIAddress, ".")
+		if dot < 0 {
+			continue
+		}
+		prefix := d.PCIAddress[:dot]
 		matches, _ := filepath.Glob("/sys/bus/pci/devices/" + prefix + ".*")
 		for _, m := range matches {
 			vb, err1 := os.ReadFile(m + "/vendor")
@@ -411,7 +409,7 @@ func gpuSetupCollectVFIOIDs(devices []gpu.GPUDevice) []string {
 	return ids
 }
 
-func gpuSetupIOMMMUParams() string {
+func gpuSetupIOMMUParams() string {
 	data, _ := os.ReadFile("/proc/cpuinfo")
 	if strings.Contains(string(data), "GenuineIntel") {
 		return "intel_iommu=on iommu=pt"
@@ -432,7 +430,13 @@ func gpuSetupAddGRUBParams(params string) (bool, error) {
 		return false, nil
 	}
 	re := regexp.MustCompile(`(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*)"`)
-	updated := re.ReplaceAllString(content, `${1} `+params+`"`)
+	updated := re.ReplaceAllStringFunc(content, func(match string) string {
+		groups := re.FindStringSubmatch(match)
+		if len(groups) < 2 {
+			return match
+		}
+		return groups[1] + " " + params + `"`
+	})
 	if updated == content {
 		return false, fmt.Errorf("GRUB_CMDLINE_LINUX_DEFAULT not found in %s", grubFile)
 	}

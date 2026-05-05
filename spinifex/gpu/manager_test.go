@@ -130,6 +130,15 @@ func TestManagerRelease_FailureMarksUnavailable(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 
+	// Simulate what the kernel does after vfio-pci binding: update the driver
+	// symlink for each IOMMU group member to point to vfio-pci.
+	vfioDriverPath := filepath.Join(root, "bus/pci/drivers/vfio-pci")
+	for _, addr := range []string{"0000:03:00.0", "0000:03:00.1"} {
+		devPath := filepath.Join(root, "bus/pci/devices", addr)
+		_ = os.Remove(filepath.Join(devPath, "driver"))
+		must(t, os.Symlink(vfioDriverPath, filepath.Join(devPath, "driver")))
+	}
+
 	// Make the vfio-pci driver directory non-writable so the unbind write fails.
 	vfioDir := filepath.Join(root, "bus/pci/drivers/vfio-pci")
 	must(t, os.Chmod(vfioDir, 0o555))

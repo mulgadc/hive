@@ -2148,7 +2148,9 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 			return fmt.Errorf("claim GPU for instance %s: %w", instance.ID, gpuErr)
 		}
 		instance.GPUPCIAddress = gpuDevice.PCIAddress
-		slog.Info("GPU claimed for instance", "instanceId", instance.ID, "gpu", gpuDevice.PCIAddress)
+		instance.GPUXVGAEnabled = gpuXVGAEnabled(gpuDevice, d.config.Daemon.GPUModelOverrides)
+		slog.Info("GPU claimed for instance", "instanceId", instance.ID, "gpu", gpuDevice.PCIAddress,
+			"xvga", instance.GPUXVGAEnabled)
 	}
 
 	// Step 6: Launch the instance via QEMU/KVM
@@ -2502,10 +2504,15 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	// Inject GPU passthrough device when a GPU has been claimed for this instance.
 	if instance.GPUPCIAddress != "" {
+		xvga := "off"
+		if instance.GPUXVGAEnabled {
+			xvga = "on"
+		}
 		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-			Value: fmt.Sprintf("vfio-pci,host=%s,id=gpu0,x-vga=on", instance.GPUPCIAddress),
+			Value: fmt.Sprintf("vfio-pci,host=%s,id=gpu0,x-vga=%s", instance.GPUPCIAddress, xvga),
 		})
-		slog.Info("GPU passthrough device configured", "pci", instance.GPUPCIAddress, "instanceId", instance.ID)
+		slog.Info("GPU passthrough device configured", "pci", instance.GPUPCIAddress,
+			"instanceId", instance.ID, "xvga", xvga)
 	}
 
 	// QMP socket
@@ -3158,6 +3165,18 @@ func resolveGPUModel(dev gpu.GPUDevice, overrides []config.GPUModelOverride) ins
 		Name:         name,
 		MemoryMiB:    dev.MemoryMiB,
 	}
+}
+
+// gpuXVGAEnabled returns true when the QEMU device should include x-vga=on.
+// Consumer GPUs default to true; known datacenter/compute cards default to false.
+// A GPUModelOverride with XVGAOff=true forces false regardless of the model table.
+func gpuXVGAEnabled(dev *gpu.GPUDevice, overrides []config.GPUModelOverride) bool {
+	for _, o := range overrides {
+		if o.VendorID == dev.VendorID && o.DeviceID == dev.DeviceID {
+			return !o.XVGAOff
+		}
+	}
+	return !gpu.IsComputeGPU(dev.VendorID, dev.DeviceID)
 }
 
 func gpuVendorDisplayName(v gpu.Vendor) string {

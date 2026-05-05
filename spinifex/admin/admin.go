@@ -958,7 +958,7 @@ func SetGPUPassthrough(tomlPath, node string, enabled bool) error {
 		// No daemon section — append one.
 		text = strings.TrimRight(text, "\n") +
 			"\n\n[nodes." + node + ".daemon]\ngpu_passthrough = " + value + "\n"
-		return os.WriteFile(tomlPath, []byte(text), 0600)
+		return os.WriteFile(tomlPath, []byte(text), 0640) //nolint:gosec // spinifex.toml is root:spinifex 0640 so the daemon can read it
 	}
 
 	// Extract body of just this section (stops at the next section header).
@@ -989,5 +989,5 @@ func SetGPUPassthrough(tomlPath, node string, enabled bool) error {
 	}
 
 	text = text[:bodyStart] + newBody + suffix
-	return os.WriteFile(tomlPath, []byte(text), 0600)
+	return os.WriteFile(tomlPath, []byte(text), 0640) //nolint:gosec // spinifex.toml is root:spinifex 0640 so the daemon can read it
 }

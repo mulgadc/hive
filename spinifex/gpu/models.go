@@ -32,6 +32,34 @@ var knownModels = map[string]modelInfo{
 	"1002:73bf": {"AMD Radeon RX 6900 XT", 16384},
 }
 
+// computeModels is the set of "vendorID:deviceID" keys for datacenter/compute-only
+// GPUs that have no display output and must use x-vga=off for QEMU passthrough.
+// Consumer GPUs not in this set default to x-vga=on.
+var computeModels = map[string]bool{
+	// NVIDIA datacenter
+	"10de:2236": true, // A10
+	"10de:20b2": true, // A100 SXM 40GB
+	"10de:20b5": true, // A100 SXM 80GB
+	"10de:20f1": true, // A100 PCIe 40GB
+	"10de:20f3": true, // A100 PCIe 80GB
+	"10de:2331": true, // H100 SXM
+	"10de:2330": true, // H100 PCIe
+	"10de:233a": true, // H100 NVL
+	"10de:2233": true, // A30
+	"10de:26b5": true, // L40
+	"10de:26b9": true, // L40S
+	// AMD datacenter
+	"1002:7448": true, // MI300X
+	"1002:740c": true, // MI250X
+}
+
+// IsComputeGPU reports whether vendorID:deviceID identifies a headless compute GPU
+// that should use x-vga=off in QEMU. Consumer/display GPUs return false.
+// Both IDs must be lowercase hex without a "0x" prefix.
+func IsComputeGPU(vendorID, deviceID string) bool {
+	return computeModels[vendorID+":"+deviceID]
+}
+
 // lookupModel returns the model name and VRAM for a known vendorID:deviceID pair.
 // Both IDs are expected as lowercase hex without a "0x" prefix.
 // Returns zero values if the pair is not in the table.
