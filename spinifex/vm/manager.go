@@ -9,9 +9,21 @@ import (
 // ManagerHooks are callbacks the manager fires synchronously on every
 // running/terminated transition. The daemon uses these to drive per-instance
 // NATS subscription/unsubscription. Hook fields may be nil; nil hooks are no-ops.
+//
+// OnInstanceUp returns an error so callers can distinguish a soft launch
+// (subscribe failures only logged) from a reconnect (failures must roll back
+// QMP and abort the reconnect). Callers that don't care about the error may
+// ignore it.
 type ManagerHooks struct {
-	OnInstanceUp   func(*VM)
+	OnInstanceUp   func(*VM) error
 	OnInstanceDown func(id string)
+	// OnInstanceRecovering fires from Restore once per instance that is
+	// about to be relaunched. The daemon subscribes only the command
+	// topic (ec2.cmd.<id>) here so concurrent terminate commands can
+	// reach this node while the relaunch is in flight; the subsequent
+	// OnInstanceUp on launch success is idempotent and reinstalls both
+	// the command and console subscriptions.
+	OnInstanceRecovering func(*VM)
 }
 
 // Deps bundles every collaborator the manager uses to drive lifecycle.
@@ -54,6 +66,13 @@ type Deps struct {
 	// during DetachVolume, and the polling interval for blockdev-del retry.
 	// Zero is acceptable in tests; production uses 1s.
 	DetachDelay time.Duration
+
+	// ConsumeCleanShutdownMarker reports whether the previous daemon run
+	// recorded a clean shutdown marker for this node, deleting it as a
+	// side effect. Restore uses the result to decide whether to wait
+	// briefly for stale QEMU PIDs to die before classifying state. Nil
+	// is treated as "no marker" (cautious recovery).
+	ConsumeCleanShutdownMarker func() bool
 }
 
 // Manager owns the in-memory map of running VMs on this node and every

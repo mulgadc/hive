@@ -360,6 +360,14 @@ func (a *resourceControllerAdapter) Deallocate(instanceType string) {
 	a.rm.deallocate(it)
 }
 
+func (a *resourceControllerAdapter) CanAllocate(instanceType string, count int) int {
+	it := a.rm.instanceTypes[instanceType]
+	if it == nil {
+		return 0
+	}
+	return a.rm.canAllocate(it, count)
+}
+
 // volumeStateUpdaterAdapter satisfies vm.VolumeStateUpdater by delegating to
 // the daemon's volume service.
 type volumeStateUpdaterAdapter struct {
@@ -383,11 +391,59 @@ func (a *volumeStateUpdaterAdapter) UpdateVolumeState(volumeID, state, instanceI
 	return a.svc.UpdateVolumeState(volumeID, state, instanceID, attachmentDevice)
 }
 
+// onInstanceRecoveringHook returns the daemon's OnInstanceRecovering
+// callback. Restore fires it once per instance about to be relaunched so
+// concurrent terminate commands can land on this node before launch
+// completes — without it, ec2.cmd.<id> would only be subscribed by
+// onInstanceUpHook after launch success, leaving a window where the
+// instance is reachable by DescribeInstances (in StatePending) but not
+// by EC2 commands. Mirrors the pre-2e early-subscribe block in
+// daemon.restoreInstances.
+func (d *Daemon) onInstanceRecoveringHook() func(*vm.VM) {
+	return func(instance *vm.VM) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+
+		if _, ok := d.natsSubscriptions[instance.ID]; ok {
+			return
+		}
+		sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+		if err != nil {
+			slog.Error("OnInstanceRecovering: failed to early-subscribe per-instance topic",
+				"instanceId", instance.ID, "err", err)
+			return
+		}
+		d.natsSubscriptions[instance.ID] = sub
+	}
+}
+
+// consumeCleanShutdownMarker returns the daemon's
+// ConsumeCleanShutdownMarker callback. Returns true (and deletes the
+// marker) when a clean shutdown was recorded for this node on the
+// previous run; returns false otherwise so Restore takes the cautious
+// "validate stale PIDs" path.
+func (d *Daemon) consumeCleanShutdownMarker() func() bool {
+	return func() bool {
+		if d.jsManager == nil {
+			return false
+		}
+		marker, err := d.jsManager.ReadShutdownMarker(d.node)
+		if err != nil || !marker {
+			return false
+		}
+		slog.Info("Clean shutdown marker found, trusting KV state")
+		_ = d.jsManager.DeleteShutdownMarker(d.node)
+		return true
+	}
+}
+
 // onInstanceUpHook returns the daemon's OnInstanceUp callback. Subscribing
 // per-instance NATS topics is the only side-effect; the manager fires this
-// synchronously after a successful Pending→Running transition.
-func (d *Daemon) onInstanceUpHook() func(*vm.VM) {
-	return func(instance *vm.VM) {
+// synchronously after a successful Pending→Running transition. Returns the
+// first subscribe error so the manager (specifically reconnectInstance) can
+// roll back QMP rather than persist a half-reachable instance to KV.
+func (d *Daemon) onInstanceUpHook() func(*vm.VM) error {
+	return func(instance *vm.VM) error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 
@@ -403,7 +459,7 @@ func (d *Daemon) onInstanceUpHook() func(*vm.VM) {
 		if err != nil {
 			slog.Error("OnInstanceUp: failed to subscribe to per-instance topic",
 				"instanceId", instance.ID, "err", err)
-			return
+			return fmt.Errorf("subscribe ec2.cmd.%s: %w", instance.ID, err)
 		}
 		d.natsSubscriptions[instance.ID] = sub
 
@@ -414,9 +470,10 @@ func (d *Daemon) onInstanceUpHook() func(*vm.VM) {
 		if err != nil {
 			slog.Error("OnInstanceUp: failed to subscribe to console output topic",
 				"instanceId", instance.ID, "err", err)
-			return
+			return fmt.Errorf("subscribe ec2.%s.GetConsoleOutput: %w", instance.ID, err)
 		}
 		d.natsSubscriptions[consoleSubKey] = consoleSub
+		return nil
 	}
 }
 
@@ -463,15 +520,17 @@ func (d *Daemon) buildVMManagerDeps() vm.Deps {
 		VolumeStateUpdater: volState,
 		InstanceCleaner:    newInstanceCleanerAdapter(d),
 		Hooks: vm.ManagerHooks{
-			OnInstanceUp:   d.onInstanceUpHook(),
-			OnInstanceDown: d.onInstanceDownHook(),
+			OnInstanceUp:         d.onInstanceUpHook(),
+			OnInstanceDown:       d.onInstanceDownHook(),
+			OnInstanceRecovering: d.onInstanceRecoveringHook(),
 		},
-		ShutdownSignal:  d.shuttingDown.Load,
-		CrashHandler:    d.handleInstanceCrash,
-		TransitionState: d.TransitionState,
-		DevNetworking:   d.config.Daemon.DevNetworking,
-		BindHost:        d.config.Host,
-		DetachDelay:     d.detachDelay,
+		ShutdownSignal:             d.shuttingDown.Load,
+		CrashHandler:               d.handleInstanceCrash,
+		TransitionState:            d.TransitionState,
+		DevNetworking:              d.config.Daemon.DevNetworking,
+		BindHost:                   d.config.Host,
+		DetachDelay:                d.detachDelay,
+		ConsumeCleanShutdownMarker: d.consumeCleanShutdownMarker(),
 	}
 }
 

@@ -42,13 +42,17 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	require.NoError(t, daemon.jsManager.InitTerminatedInstanceBucket())
 
 	// Wire just enough vm.Deps for manager-driven state operations to work
-	// (migrate, MarkFailed). Full wiring (network plumber, instance cleaner,
-	// volume mounter) is a Daemon.Start responsibility and is not needed
-	// here since these tests don't drive a real VM lifecycle.
+	// (migrate, MarkFailed, Restore classification). Full wiring (network
+	// plumber, instance cleaner, volume mounter) is a Daemon.Start
+	// responsibility and is not needed here since these tests don't drive
+	// a real VM lifecycle.
 	daemon.vmMgr.SetDeps(vm.Deps{
-		NodeID:          daemon.node,
-		StateStore:      newStateStoreAdapter(daemon.jsManager),
-		TransitionState: daemon.TransitionState,
+		NodeID:                     daemon.node,
+		StateStore:                 newStateStoreAdapter(daemon.jsManager),
+		TransitionState:            daemon.TransitionState,
+		InstanceTypes:              newInstanceTypeResolverAdapter(daemon.resourceMgr),
+		Resources:                  newResourceControllerAdapter(daemon.resourceMgr),
+		ConsumeCleanShutdownMarker: daemon.consumeCleanShutdownMarker(),
 	})
 
 	return daemon
