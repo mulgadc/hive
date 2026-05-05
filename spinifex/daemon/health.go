@@ -1,301 +1,46 @@
 package daemon
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"log/slog"
-	"os"
-	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/vm"
 )
 
+// classifyCrashReason is preserved as a daemon-side shim so the existing
+// classify-crash-reason tests keep their bare-function call shape while
+// the implementation moved into the vm package alongside the manager.
+//
+// Phase 2f cleanup: migrate TestClassifyCrashReason_* into vm/ and delete.
+func classifyCrashReason(waitErr error) string {
+	return vm.ClassifyCrashReason(waitErr)
+}
+
+// Daemon-side aliases for vm package crash-recovery constants. Tests in
+// health_test.go reference these by their pre-2e bare names. Phase 2f
+// cleanup migrates those tests into vm/ and removes the aliases.
 const (
-	maxRestartsInWindow = 3
-	restartWindow       = 10 * time.Minute
-	restartBackoffBase  = 5 * time.Second
-	restartBackoffMax   = 2 * time.Minute
+	maxRestartsInWindow = vm.MaxRestartsInWindow
+	restartWindow       = vm.RestartWindow
 )
 
-// restartBackoff computes the exponential backoff delay for the given
-// restart count. Pure function — no side effects.
+// restartBackoff is a daemon-side shim mirroring classifyCrashReason; the
+// pure implementation lives on vm so the manager's MaybeRestart can use
+// it without a daemon import.
 func restartBackoff(restartCount int) time.Duration {
-	delay := restartBackoffBase
-	for range restartCount {
-		delay *= 2
-		if delay > restartBackoffMax {
-			return restartBackoffMax
-		}
-	}
-	return delay
+	return vm.RestartBackoff(restartCount)
 }
 
-// classifyCrashReason extracts a human-readable crash reason from the error
-// returned by cmd.Wait(). Uses exec.ExitError + syscall.WaitStatus to
-// distinguish OOM kills (SIGKILL), segfaults (SIGSEGV), etc.
-func classifyCrashReason(waitErr error) string {
-	if waitErr == nil {
-		return "clean-exit"
-	}
-
-	var exitErr *exec.ExitError
-	if !errors.As(waitErr, &exitErr) {
-		return "unknown"
-	}
-
-	status, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok {
-		return "unknown"
-	}
-
-	if status.Signaled() {
-		switch status.Signal() {
-		case syscall.SIGKILL:
-			return "oom-killed"
-		case syscall.SIGSEGV:
-			return "segfault"
-		case syscall.SIGABRT:
-			return "abort"
-		default:
-			return fmt.Sprintf("signal-%d", status.Signal())
-		}
-	}
-
-	if status.Exited() {
-		return fmt.Sprintf("exit-%d", status.ExitStatus())
-	}
-
-	return "unknown"
-}
-
-// handleInstanceCrash is called by the QEMU launch goroutine after cmd.Wait()
-// returns during runtime (after startup was confirmed successful). It detects
-// the crash reason, transitions the instance to error state, cleans up resources,
-// and schedules a restart if policy allows.
+// handleInstanceCrash and maybeRestartInstance are daemon-side shims
+// around the manager methods that own crash recovery. Pre-2f tests still
+// invoke them through the daemon receiver; the bodies live in
+// vm/crash_recovery.go.
+//
+// Phase 2f cleanup: migrate the daemon health_test.go cases into vm/ and
+// delete the shims.
 func (d *Daemon) handleInstanceCrash(instance *vm.VM, waitErr error) {
-	// Guard: if instance is not running, this was an expected exit
-	// (stopInstance/terminateInstance set status before QEMU exits)
-	var status vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
-
-	if status != vm.StateRunning {
-		slog.Debug("QEMU exited but instance not in running state, skipping crash handler",
-			"instance", instance.ID, "status", status)
-		return
-	}
-
-	// Guard: coordinated shutdown in progress
-	if d.shuttingDown.Load() {
-		slog.Debug("QEMU exited during coordinated shutdown, skipping crash handler",
-			"instance", instance.ID)
-		return
-	}
-
-	reason := classifyCrashReason(waitErr)
-	slog.Error("VM process crashed", "instance", instance.ID, "reason", reason, "err", waitErr)
-
-	// Transition to error state
-	if err := d.TransitionState(instance, vm.StateError); err != nil {
-		slog.Error("Failed to transition crashed instance to error state",
-			"instance", instance.ID, "err", err)
-	}
-
-	// Update health tracking
-	now := time.Now()
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
-		v.Health.CrashCount++
-		v.Health.LastCrashTime = now
-		v.Health.LastCrashReason = reason
-		if v.Health.FirstCrashTime.IsZero() {
-			v.Health.FirstCrashTime = now
-		}
-		v.Running = false
-		v.PID = 0
-	})
-
-	// Deallocate resources to fix phantom reservation
-	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-	if ok && instanceType != nil {
-		slog.Info("Deallocating resources for crashed instance",
-			"instance", instance.ID, "type", instance.InstanceType)
-		d.resourceMgr.deallocate(instanceType)
-	}
-
-	// Clean up stale QMP socket so QEMU can rebind on restart
-	if instance.Config.QMPSocket != "" {
-		_ = os.Remove(instance.Config.QMPSocket)
-	}
-
-	// Unmount EBS volumes (same pattern as stopInstance)
-	d.unmountInstanceVolumes(instance)
-
-	// Persist state
-	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to persist state after crash handling",
-			"instance", instance.ID, "err", err)
-	}
-
-	d.maybeRestartInstance(instance)
+	d.vmMgr.HandleCrash(instance, waitErr)
 }
 
-// unmountInstanceVolumes sends NATS unmount requests for all volumes attached
-// to the instance and updates their state to "available".
-func (d *Daemon) unmountInstanceVolumes(instance *vm.VM) {
-	instance.EBSRequests.Mu.Lock()
-	defer instance.EBSRequests.Mu.Unlock()
-
-	for _, ebsRequest := range instance.EBSRequests.Requests {
-		ebsUnMountRequest, err := json.Marshal(ebsRequest)
-		if err != nil {
-			slog.Error("Failed to marshal volume payload for crash cleanup",
-				"err", err)
-			continue
-		}
-
-		msg, err := d.natsConn.Request(d.ebsTopic("unmount"), ebsUnMountRequest, 30*time.Second)
-		if err != nil {
-			slog.Error("Failed to unmount volume after crash",
-				"name", ebsRequest.Name, "instance", instance.ID, "err", err)
-		} else {
-			slog.Info("Unmounted volume after crash",
-				"instance", instance.ID, "volume", ebsRequest.Name, "data", string(msg.Data))
-		}
-
-		// Update user-visible volume state to "available"
-		if !ebsRequest.EFI && !ebsRequest.CloudInit {
-			if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", "", ""); err != nil {
-				slog.Error("Failed to update volume state to available after crash",
-					"volumeId", ebsRequest.Name, "err", err)
-			}
-		}
-	}
-}
-
-// maybeRestartInstance checks restart policy and schedules a restart if allowed.
 func (d *Daemon) maybeRestartInstance(instance *vm.VM) {
-	if d.shuttingDown.Load() {
-		slog.Info("Skipping restart during shutdown", "instance", instance.ID)
-		return
-	}
-
-	now := time.Now()
-
-	var (
-		crashCount   int
-		restartCount int
-		exceeded     bool
-	)
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
-		health := &v.Health
-		if !health.FirstCrashTime.IsZero() && now.Sub(health.FirstCrashTime) > restartWindow {
-			slog.Info("Crash window expired, resetting counters", "instance", v.ID)
-			health.CrashCount = 1
-			health.FirstCrashTime = now
-			health.RestartCount = 0
-		}
-		if health.CrashCount > maxRestartsInWindow {
-			exceeded = true
-			crashCount = health.CrashCount
-			return
-		}
-		restartCount = health.RestartCount
-	})
-	if exceeded {
-		slog.Error("Instance exceeded max restarts in window, leaving in error state",
-			"instance", instance.ID,
-			"crashes", crashCount,
-			"window", restartWindow,
-			"max", maxRestartsInWindow)
-		return
-	}
-
-	// Check resource availability
-	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-	if !ok || instanceType == nil {
-		slog.Error("Unknown instance type, cannot restart",
-			"instance", instance.ID, "type", instance.InstanceType)
-		return
-	}
-
-	if d.resourceMgr.canAllocate(instanceType, 1) < 1 {
-		slog.Error("Insufficient resources to restart instance",
-			"instance", instance.ID, "type", instance.InstanceType)
-		return
-	}
-
-	delay := restartBackoff(restartCount)
-
-	slog.Info("Scheduling instance restart",
-		"instance", instance.ID,
-		"delay", delay,
-		"restartCount", restartCount+1)
-
-	time.AfterFunc(delay, func() {
-		d.restartCrashedInstance(instance)
-	})
-}
-
-// restartCrashedInstance re-verifies the instance is still in error state
-// and relaunches it via LaunchInstance.
-func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
-	var skipReason string
-	var restartCount int
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
-		if v.Status != vm.StateError {
-			skipReason = fmt.Sprintf("not in error state (%s)", v.Status)
-			return
-		}
-		if d.shuttingDown.Load() {
-			skipReason = "shutting down"
-			return
-		}
-		v.Health.RestartCount++
-		restartCount = v.Health.RestartCount
-	})
-	if skipReason != "" {
-		slog.Info("Skipping restart of crashed instance",
-			"instance", instance.ID, "reason", skipReason)
-		return
-	}
-
-	slog.Info("Restarting crashed instance",
-		"instance", instance.ID,
-		"restartCount", restartCount)
-
-	// Re-allocate resources before relaunch — handleCrashedInstance deallocates
-	// them, so we must re-reserve before starting the VM again.
-	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-	if !ok || instanceType == nil {
-		slog.Error("Unknown instance type during restart, cannot re-allocate resources",
-			"instance", instance.ID, "type", instance.InstanceType)
-		return
-	}
-	if err := d.resourceMgr.allocate(instanceType); err != nil {
-		slog.Error("Insufficient resources to restart crashed instance",
-			"instance", instance.ID, "type", instance.InstanceType, "err", err)
-		return
-	}
-
-	// Transition Error → Pending (valid now that we added it to the transitions map)
-	if err := d.TransitionState(instance, vm.StatePending); err != nil {
-		slog.Error("Failed to transition instance to pending for restart",
-			"instance", instance.ID, "err", err)
-		d.resourceMgr.deallocate(instanceType)
-		return
-	}
-
-	// vmMgr.Run handles the full relaunch flow:
-	// check PID → mount → exec QEMU → attach QMP → NATS subscribe (via hook) → Running
-	if err := d.vmMgr.Run(instance); err != nil {
-		slog.Error("Failed to restart crashed instance",
-			"instance", instance.ID, "err", err)
-		d.resourceMgr.deallocate(instanceType)
-		if err := d.TransitionState(instance, vm.StateError); err != nil {
-			slog.Error("Failed to transition instance back to error after restart failure",
-				"instance", instance.ID, "err", err)
-		}
-	}
+	d.vmMgr.MaybeRestart(instance)
 }

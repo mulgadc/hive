@@ -230,6 +230,18 @@ func newTestDaemon(t *testing.T) (*Daemon, func()) {
 		resourceMgr: rm,
 		vmMgr:       vm.NewManager(),
 	}
+	// Wire the dependencies the manager-internal crash handler relies on
+	// (TransitionState, ResourceController, InstanceTypes, ShutdownSignal).
+	// jsManager is still nil so TransitionState's WriteState will fail —
+	// matching the pre-2e shape where the in-memory status flip survives a
+	// write failure.
+	d.vmMgr.SetDeps(vm.Deps{
+		NodeID:          d.node,
+		TransitionState: d.TransitionState,
+		Resources:       newResourceControllerAdapter(rm),
+		InstanceTypes:   newInstanceTypeResolverAdapter(rm),
+		ShutdownSignal:  d.shuttingDown.Load,
+	})
 	return d, func() { nc.Close() }
 }
 

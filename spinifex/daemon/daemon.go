@@ -15,7 +15,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -872,7 +871,7 @@ func (d *Daemon) Start() error {
 	d.resourceMgr.initSubscriptions(d.natsConn, d.handleEC2RunInstances, d.node)
 
 	d.startHeartbeat()
-	d.startPendingWatchdog()
+	d.vmMgr.StartPendingWatchdog(d.ctx)
 
 	d.ready.Store(true)
 	slog.Info("Daemon fully initialized", "node", d.node, "startupTime", time.Since(d.startTime).Round(time.Second))
@@ -1049,305 +1048,17 @@ func (d *Daemon) checkPredastoreReady() bool {
 	return true
 }
 
-// maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
-const maxConcurrentRecovery = 2
-
-// restoreInstances loads persisted VM state and re-launches instances that are
-// neither terminated nor flagged as user-stopped.
+// restoreInstances delegates to vm.Manager.Restore. Daemon-side shim
+// preserved so existing tests keep their bare-method call shape; phase 2f
+// migrates them into vm/ and removes the wrapper.
 func (d *Daemon) restoreInstances() {
-	// Check for clean shutdown marker
-	cleanShutdown := false
-	if d.jsManager != nil {
-		if marker, err := d.jsManager.ReadShutdownMarker(d.node); err == nil {
-			cleanShutdown = marker
-			if marker {
-				slog.Info("Clean shutdown marker found, trusting KV state")
-				_ = d.jsManager.DeleteShutdownMarker(d.node)
-			}
-		}
-	}
-
-	if !cleanShutdown {
-		slog.Warn("No clean shutdown marker — possible crash recovery, validating QEMU PIDs carefully")
-		time.Sleep(3 * time.Second)
-	}
-
-	err := d.LoadState()
-	if err != nil {
-		slog.Warn("Failed to load state, continuing with empty state", "error", err)
-		return
-	}
-
-	slog.Info("Loaded state", "instance count", d.vmMgr.Count())
-
-	// Phase 1: Reconnect running QEMU, finalize transitional states, collect VMs to relaunch
-	var toLaunch []*vm.VM
-
-	for _, instance := range d.vmMgr.Snapshot() {
-		instance.EBSRequests.Mu = sync.Mutex{}
-		instance.QMPClient = &qmp.QMPClient{}
-
-		if instance.Status == vm.StateTerminated {
-			if !d.vmMgr.MigrateTerminatedToKV(instance) {
-				// KV write failed — keep in local state so the next restart
-				// retries the migration. Deleting here would create a "void":
-				// the instance disappears from both local state and the
-				// terminated KV, making it invisible to DescribeInstances.
-				slog.Warn("Terminated instance KV migration failed, will retry on next restart",
-					"instance", instance.ID)
-			}
-			continue
-		}
-
-		if instance.Status == vm.StateStopped {
-			d.vmMgr.MigrateStoppedToSharedKV(instance)
-			continue
-		}
-
-		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-		if !ok && instance.InstanceType != "" {
-			slog.Warn("Instance type not available on this node, moving to stopped",
-				"instanceId", instance.ID, "instanceType", instance.InstanceType)
-			instance.Status = vm.StateStopped
-			if instance.Instance != nil {
-				instance.Instance.StateReason = &ec2.StateReason{}
-				instance.Instance.StateReason.SetCode("Server.InsufficientInstanceCapacity")
-				instance.Instance.StateReason.SetMessage(
-					fmt.Sprintf("instance type %s is not available on this node", instance.InstanceType))
-			}
-			d.vmMgr.MigrateStoppedToSharedKV(instance)
-			continue
-		}
-
-		if ok {
-			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
-			if err := d.resourceMgr.allocate(instanceType); err != nil {
-				slog.Error("Failed to re-allocate resources for instance on startup, moving to stopped",
-					"instanceId", instance.ID, "err", err)
-				instance.Status = vm.StateStopped
-				if instance.Instance != nil {
-					instance.Instance.StateReason = &ec2.StateReason{}
-					instance.Instance.StateReason.SetCode("Server.InsufficientInstanceCapacity")
-					instance.Instance.StateReason.SetMessage(
-						fmt.Sprintf("insufficient resources to restore instance: %v", err))
-				}
-				d.vmMgr.MigrateStoppedToSharedKV(instance)
-				continue
-			}
-		}
-
-		// Check if QEMU process is still alive from before the restart
-		if d.isInstanceProcessRunning(instance) {
-			// Verify NBD sockets are still valid. After a viperblock restart,
-			// old sockets are gone and QEMU's block devices are broken. Kill
-			// the orphaned QEMU and relaunch from scratch instead of
-			// reconnecting to an instance with dead storage.
-			if !d.areVolumeSocketsValid(instance) {
-				slog.Warn("QEMU alive but NBD sockets are stale, killing orphaned process for relaunch",
-					"instance", instance.ID)
-				pid, pidErr := utils.ReadPidFile(instance.ID)
-				if pidErr != nil || pid <= 0 {
-					slog.Error("Cannot read PID for orphaned QEMU, skipping relaunch",
-						"instanceId", instance.ID, "err", pidErr)
-					continue
-				}
-				// SIGKILL directly — orphaned QEMU with dead storage has no
-				// state worth a graceful shutdown, and KillProcess's 120s
-				// SIGTERM timeout would block daemon startup.
-				if proc, err := os.FindProcess(pid); err == nil {
-					_ = proc.Signal(syscall.SIGKILL)
-				}
-				// Wait for the process to actually die, then remove the PID
-				// file ourselves. SIGKILL cannot be caught, so QEMU never
-				// runs its cleanup handler and the PID file stays on disk.
-				if err := utils.WaitForProcessExit(pid, 10*time.Second); err != nil {
-					slog.Error("Orphaned QEMU did not exit after SIGKILL, skipping relaunch",
-						"instanceId", instance.ID, "pid", pid, "err", err)
-					continue
-				}
-				_ = utils.RemovePidFile(instance.ID)
-			} else {
-				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
-				if err := d.reconnectInstance(instance); err != nil {
-					slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
-				}
-				continue
-			}
-		}
-
-		// QEMU is not running -- resolve transitional states from interrupted operations
-		switch instance.Status {
-		case vm.StateStopping, vm.StateShuttingDown:
-			prevStatus := instance.Status
-			if instance.Status == vm.StateStopping {
-				instance.Status = vm.StateStopped
-			} else {
-				instance.Status = vm.StateTerminated
-			}
-			slog.Info("QEMU exited during transition, finalizing state",
-				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
-
-			if instance.Status == vm.StateStopped && d.vmMgr.MigrateStoppedToSharedKV(instance) {
-				continue
-			}
-
-			if instance.Status == vm.StateTerminated && d.vmMgr.MigrateTerminatedToKV(instance) {
-				continue
-			}
-
-			if err := d.WriteState(); err != nil {
-				slog.Error("Failed to persist state, will retry on next restart",
-					"instance", instance.ID, "error", err)
-				instance.Status = prevStatus // revert so next restart retries
-			}
-			continue
-		case vm.StateRunning:
-			// Was running but QEMU died - reset to pending so LaunchInstance can transition to running
-			instance.Status = vm.StatePending
-			slog.Info("Instance was running but QEMU exited, relaunching", "instance", instance.ID)
-		}
-
-		// Reset LaunchTime so the pending watchdog gives a fresh timeout window.
-		// Without this, the stale LaunchTime from the original launch causes the
-		// watchdog to immediately mark the instance as failed after a prolonged outage.
-		now := time.Now()
-		if instance.Instance != nil {
-			instance.Instance.LaunchTime = &now
-		}
-		toLaunch = append(toLaunch, instance)
-	}
-
-	// Phase 2: Relaunch crashed VMs with semaphore-based throttling
-	if len(toLaunch) > 0 {
-		// Subscribe to per-instance NATS topics before launching so that
-		// terminate/stop commands can reach this daemon while instances are
-		// still being relaunched. Without this, pending instances are
-		// unreachable via ec2.cmd.<id> and TerminateInstances fails.
-		d.mu.Lock()
-		for _, instance := range toLaunch {
-			sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-			if subErr != nil {
-				slog.Error("Failed to early-subscribe during recovery", "instanceId", instance.ID, "err", subErr)
-			} else {
-				d.natsSubscriptions[instance.ID] = sub
-			}
-		}
-		d.mu.Unlock()
-
-		slog.Info("Launching instances (recovery)", "count", len(toLaunch), "maxConcurrent", maxConcurrentRecovery)
-		sem := make(chan struct{}, maxConcurrentRecovery)
-		var wg sync.WaitGroup
-
-		for _, instance := range toLaunch {
-			sem <- struct{}{} // acquire
-			wg.Add(1)
-			go func(inst *vm.VM) {
-				defer wg.Done()
-				defer func() { <-sem }() // release
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r, "stack", string(debug.Stack()))
-					}
-				}()
-				// Skip if instance was terminated while waiting for semaphore
-				var status vm.InstanceState
-				d.vmMgr.Inspect(inst, func(v *vm.VM) { status = v.Status })
-				if status != vm.StatePending && status != vm.StateProvisioning {
-					slog.Info("Instance state changed during recovery, skipping launch",
-						"instanceId", inst.ID, "status", string(status))
-					return
-				}
-				slog.Info("Launching instance (recovery)", "instance", inst.ID)
-				if err := d.vmMgr.Run(inst); err != nil {
-					slog.Error("Failed to launch instance during recovery", "instanceId", inst.ID, "err", err)
-					d.vmMgr.MarkFailed(inst, "recovery_launch_failed")
-				}
-			}(instance)
-		}
-		wg.Wait()
-	}
-
-	// Persist state after any migrations/removals during restore
-	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to persist state after restore", "error", err)
-	}
+	d.vmMgr.Restore()
 }
 
-// isInstanceProcessRunning checks if the QEMU process for an instance is still alive.
-func (d *Daemon) isInstanceProcessRunning(instance *vm.VM) bool {
-	pid, err := utils.ReadPidFile(instance.ID)
-	if err != nil || pid <= 0 {
-		return false
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return process.Signal(syscall.Signal(0)) == nil
-}
-
-// areVolumeSocketsValid checks whether the NBD Unix sockets backing an
-// instance's volumes are reachable. A dial probe (not just os.Stat) is used
-// because viperblock may restart with sockets at the same paths — the file
-// exists but no process is listening on the old fd that QEMU holds.
+// areVolumeSocketsValid is a daemon-side shim around vm.AreVolumeSocketsValid
+// kept so the existing TestAreVolumeSocketsValid_* cases call the same name.
 func (d *Daemon) areVolumeSocketsValid(instance *vm.VM) bool {
-	instance.EBSRequests.Mu.Lock()
-	defer instance.EBSRequests.Mu.Unlock()
-
-	for _, req := range instance.EBSRequests.Requests {
-		if req.NBDURI == "" {
-			continue
-		}
-		serverType, sockPath, _, _, err := utils.ParseNBDURI(req.NBDURI)
-		if err != nil || serverType != "unix" {
-			continue // TCP or unparseable — can't validate locally
-		}
-		conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
-		if err != nil {
-			slog.Debug("NBD socket unreachable", "volume", req.Name, "socket", sockPath, "err", err)
-			return false
-		}
-		_ = conn.Close()
-	}
-	return true
-}
-
-// reconnectInstance re-establishes QMP and NATS connections to a running QEMU instance
-// after a daemon restart. This bypasses the state machine since recovery is not a
-// normal state transition.
-func (d *Daemon) reconnectInstance(instance *vm.VM) error {
-	if err := d.vmMgr.AttachQMP(instance); err != nil {
-		return fmt.Errorf("failed to reconnect QMP: %w", err)
-	}
-
-	d.mu.Lock()
-	sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-	if err != nil {
-		d.mu.Unlock()
-		if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
-			_ = instance.QMPClient.Conn.Close()
-			instance.QMPClient = nil
-		}
-		return fmt.Errorf("failed to subscribe to NATS: %w", err)
-	}
-	d.natsSubscriptions[instance.ID] = sub
-
-	consoleSub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.%s.GetConsoleOutput", instance.ID), d.handleEC2GetConsoleOutput)
-	if err != nil {
-		d.mu.Unlock()
-		return fmt.Errorf("failed to subscribe to console output NATS: %w", err)
-	}
-	d.natsSubscriptions[instance.ID+".console"] = consoleSub
-	d.mu.Unlock()
-
-	instance.Status = vm.StateRunning
-
-	if err := d.WriteState(); err != nil {
-		return fmt.Errorf("failed to persist reconnected instance state: %w", err)
-	}
-
-	slog.Info("Successfully reconnected to running instance", "instance", instance.ID)
-	return nil
+	return vm.AreVolumeSocketsValid(instance)
 }
 
 // awaitShutdown blocks until the daemon's shutdown wait group completes.
@@ -1649,43 +1360,12 @@ func (d *Daemon) setupShutdown() {
 	})
 }
 
-const pendingWatchdogInterval = 60 * time.Second
-const pendingWatchdogTimeout = 5 * time.Minute
-
-// startPendingWatchdog runs a background goroutine that periodically checks for
-// instances stuck in pending/provisioning beyond a timeout and marks them failed.
-func (d *Daemon) startPendingWatchdog() {
-	ticker := time.NewTicker(pendingWatchdogInterval)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-d.ctx.Done():
-				return
-			case <-ticker.C:
-				stuck := d.vmMgr.Filter(func(v *vm.VM) bool {
-					return (v.Status == vm.StatePending || v.Status == vm.StateProvisioning) &&
-						v.Instance != nil && v.Instance.LaunchTime != nil &&
-						time.Since(*v.Instance.LaunchTime) > pendingWatchdogTimeout
-				})
-
-				for _, instance := range stuck {
-					slog.Warn("Instance stuck in pending, marking failed",
-						"instanceId", instance.ID, "status", instance.Status,
-						"elapsed", time.Since(*instance.Instance.LaunchTime))
-					d.vmMgr.MarkFailed(instance, "launch_timeout")
-				}
-			}
-		}
-	}()
-}
-
-// ebsTopic returns a node-specific EBS NATS topic, e.g. "ebs.node1.mount".
-// This ensures mount/unmount requests are routed to the viperblock instance
-// running on the same node as the daemon (NBD sockets are local).
-func (d *Daemon) ebsTopic(action string) string {
-	return fmt.Sprintf("ebs.%s.%s", d.node, action)
-}
+// pendingWatchdogTimeout aliases the manager's exported watchdog timeout so
+// daemon-side tests (currently asserting LaunchTime is within the watchdog
+// window after restore) keep working without reaching into the vm package.
+//
+// Phase 2f cleanup: migrate the assertion into vm/ and delete the alias.
+const pendingWatchdogTimeout = vm.PendingWatchdogTimeout
 
 // respondWithVolumeAttachment builds an ec2.VolumeAttachment, marshals it to JSON, and
 // responds on the NATS message. Used by both AttachVolume and DetachVolume handlers.
