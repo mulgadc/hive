@@ -1,0 +1,130 @@
+name: E2E Bare-Metal
+
+# 3-node bare-metal E2E cluster (banksia-hosted controller + 3 mini-PCs).
+# See docs/development/feature/e2e-baremetal-cluster.md.
+#
+# workflow_dispatch only for now; nightly schedule + e2e_status aggregation
+# land with mulga-siv-42.8 (bm-ci-2).
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "PR head SHA to report status on (optional)"
+        required: false
+
+permissions:
+  statuses: write
+
+env:
+  GIT_BRANCH: ${{ github.ref_name }}
+
+jobs:
+  e2e_baremetal:
+    name: Bare-Metal Multi-Node E2E
+    runs-on: [ self-hosted, ci-baremetal ]
+    timeout-minutes: 60
+    concurrency:
+      group: e2e-baremetal-cluster
+      cancel-in-progress: false
+    env:
+      BM_LOG: /tmp/e2e-baremetal-${{ github.run_id }}.log
+      # Dummy WAN params: the CI ISO's grub-ci.cfg path is unused under PXE
+      # (boot-handler emits the kernel cmdline directly), but the Makefile
+      # still requires these env vars to render the grub template.
+      CI_WAN_IP: 192.168.0.50
+      CI_WAN_MASK: 255.255.254.0
+      CI_WAN_GW: 192.168.1.1
+      CI_WAN_DNS: 192.168.1.1
+    steps:
+      - name: Clean Workspace
+        run: rm -rf "$GITHUB_WORKSPACE"/*
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: mulga
+
+      - uses: actions/checkout@v6
+        with:
+          repository: mulgadc/mulga
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: |
+            scripts/baremetal
+            scripts/iso-builder
+            scripts/tofu-iso
+            scripts/tofu-cluster
+          path: mulga
+
+      - name: Build CI ISO + PXE artifacts
+        working-directory: mulga/scripts/tofu-iso
+        env:
+          CI_PASSWORD: ${{ secrets.BM_CI_PASSWORD }}
+        run: |
+          ./build-iso-artifacts.sh "${GIT_BRANCH}" \
+            "${RUNNER_TEMP}/spinifex-ci.iso" \
+            "${RUNNER_TEMP}/lb-alpine.raw" \
+            "${RUNNER_TEMP}/spinifex-tests.tar"
+
+      - name: Build distro tarball + setup.sh
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          ./build-install-artifacts.sh "${GIT_BRANCH}" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-tests.tar"
+
+      - name: Run bare-metal E2E
+        working-directory: mulga/scripts/baremetal
+        env:
+          BM_CI_PASSWORD: ${{ secrets.BM_CI_PASSWORD }}
+          SPX_EXTERNAL_POOL: ${{ secrets.SPINIFEX_BM_POOL }}
+        run: |
+          flock /var/lock/bm-cluster.lock \
+            ./run-baremetal-e2e.sh \
+              --vmlinuz    ../iso-builder/.cache/vmlinuz \
+              --initrd     ../iso-builder/.cache/initrd.img \
+              --squashfs   ../iso-builder/.cache/spinifex.squashfs \
+              --setup-sh   "${RUNNER_TEMP}/setup.sh" \
+              --distro-tar "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+              --tests-tar  "${RUNNER_TEMP}/spinifex-tests.tar" \
+              2>&1 | tee "${BM_LOG}"
+
+      - name: Dump cluster journals on failure
+        if: failure()
+        working-directory: mulga/scripts/baremetal
+        run: |
+          for ip in $(jq -r '.nodes[].ip' controller/nodes.json); do
+            echo "===== ${ip} ====="
+            for svc in spinifex-nats spinifex-predastore spinifex-viperblock \
+                       spinifex-daemon spinifex-awsgw spinifex-vpcd; do
+              echo "--- ${svc} ---"
+              sshpass -p "${{ secrets.BM_CI_PASSWORD }}" ssh \
+                -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+                "spinifex@${ip}" \
+                "sudo journalctl -u ${svc} --no-pager -n 200 2>/dev/null || echo '(not found)'" \
+                2>&1 || echo "(node unreachable)"
+            done
+          done
+
+      - name: Report status to PR
+        if: always() && inputs.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BM_RESULT: ${{ job.status }}
+        run: |
+          if [[ "$BM_RESULT" == "success" ]]; then
+            STATE="success"
+            DESC="Bare-metal E2E passed"
+          else
+            STATE="failure"
+            DESC="Bare-metal E2E failed (${BM_RESULT})"
+          fi
+          gh api "repos/${{ github.repository }}/statuses/${{ inputs.sha }}" \
+            -f state="$STATE" \
+            -f context=e2e-baremetal \
+            -f description="$DESC" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
