@@ -346,7 +346,7 @@ func TestReboot_DoesNotFireHooks(t *testing.T) {
 
 	var upCalls, downCalls int
 	hooks := ManagerHooks{
-		OnInstanceUp:   func(*VM) { upCalls++ },
+		OnInstanceUp:   func(*VM) error { upCalls++; return nil },
 		OnInstanceDown: func(string) { downCalls++ },
 	}
 	m := NewManagerWithDeps(Deps{Hooks: hooks})

@@ -9,8 +9,13 @@ import (
 // ManagerHooks are callbacks the manager fires synchronously on every
 // running/terminated transition. The daemon uses these to drive per-instance
 // NATS subscription/unsubscription. Hook fields may be nil; nil hooks are no-ops.
+//
+// OnInstanceUp returns an error so callers can distinguish a soft launch
+// (subscribe failures only logged) from a reconnect (failures must roll back
+// QMP and abort the reconnect). Callers that don't care about the error may
+// ignore it.
 type ManagerHooks struct {
-	OnInstanceUp   func(*VM)
+	OnInstanceUp   func(*VM) error
 	OnInstanceDown func(id string)
 	// OnInstanceRecovering fires from Restore once per instance that is
 	// about to be relaunched. The daemon subscribes only the command

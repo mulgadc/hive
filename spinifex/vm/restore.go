@@ -297,16 +297,30 @@ func (m *Manager) relaunchAll(toLaunch []*VM) {
 // reinstalls per-instance NATS subscriptions, and persists the running
 // state. Bypasses the state-machine validation because reconnect is not a
 // modelled transition.
+//
+// Subscribe failure during the hook is treated as a hard error: the QMP
+// connection is closed (so the heartbeat goroutine exits on the next tick
+// when status leaves StateRunning) and the error is propagated. The caller
+// in classifyRestoredInstances logs and moves on; the instance remains in
+// the loaded map and will be retried on the next daemon restart. Status is
+// only flipped to StateRunning after subscribes are confirmed live so a
+// failed reconnect does not advertise a half-working instance to peers.
 func (m *Manager) reconnectInstance(instance *VM) error {
 	if err := m.AttachQMP(instance); err != nil {
 		return fmt.Errorf("failed to reconnect QMP: %w", err)
 	}
 
-	instance.Status = StateRunning
-
 	if m.deps.Hooks.OnInstanceUp != nil {
-		m.deps.Hooks.OnInstanceUp(instance)
+		if err := m.deps.Hooks.OnInstanceUp(instance); err != nil {
+			if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
+				_ = instance.QMPClient.Conn.Close()
+				instance.QMPClient = nil
+			}
+			return fmt.Errorf("failed to reinstall per-instance NATS subscriptions: %w", err)
+		}
 	}
+
+	instance.Status = StateRunning
 
 	if err := m.writeRunningState(); err != nil {
 		return fmt.Errorf("failed to persist reconnected instance state: %w", err)

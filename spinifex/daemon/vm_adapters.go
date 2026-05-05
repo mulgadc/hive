@@ -439,9 +439,11 @@ func (d *Daemon) consumeCleanShutdownMarker() func() bool {
 
 // onInstanceUpHook returns the daemon's OnInstanceUp callback. Subscribing
 // per-instance NATS topics is the only side-effect; the manager fires this
-// synchronously after a successful Pending→Running transition.
-func (d *Daemon) onInstanceUpHook() func(*vm.VM) {
-	return func(instance *vm.VM) {
+// synchronously after a successful Pending→Running transition. Returns the
+// first subscribe error so the manager (specifically reconnectInstance) can
+// roll back QMP rather than persist a half-reachable instance to KV.
+func (d *Daemon) onInstanceUpHook() func(*vm.VM) error {
+	return func(instance *vm.VM) error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 
@@ -457,7 +459,7 @@ func (d *Daemon) onInstanceUpHook() func(*vm.VM) {
 		if err != nil {
 			slog.Error("OnInstanceUp: failed to subscribe to per-instance topic",
 				"instanceId", instance.ID, "err", err)
-			return
+			return fmt.Errorf("subscribe ec2.cmd.%s: %w", instance.ID, err)
 		}
 		d.natsSubscriptions[instance.ID] = sub
 
@@ -468,9 +470,10 @@ func (d *Daemon) onInstanceUpHook() func(*vm.VM) {
 		if err != nil {
 			slog.Error("OnInstanceUp: failed to subscribe to console output topic",
 				"instanceId", instance.ID, "err", err)
-			return
+			return fmt.Errorf("subscribe ec2.%s.GetConsoleOutput: %w", instance.ID, err)
 		}
 		d.natsSubscriptions[consoleSubKey] = consoleSub
+		return nil
 	}
 }
 

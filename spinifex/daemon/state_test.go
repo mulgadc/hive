@@ -47,11 +47,12 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	// responsibility and is not needed here since these tests don't drive
 	// a real VM lifecycle.
 	daemon.vmMgr.SetDeps(vm.Deps{
-		NodeID:          daemon.node,
-		StateStore:      newStateStoreAdapter(daemon.jsManager),
-		TransitionState: daemon.TransitionState,
-		InstanceTypes:   newInstanceTypeResolverAdapter(daemon.resourceMgr),
-		Resources:       newResourceControllerAdapter(daemon.resourceMgr),
+		NodeID:                     daemon.node,
+		StateStore:                 newStateStoreAdapter(daemon.jsManager),
+		TransitionState:            daemon.TransitionState,
+		InstanceTypes:              newInstanceTypeResolverAdapter(daemon.resourceMgr),
+		Resources:                  newResourceControllerAdapter(daemon.resourceMgr),
+		ConsumeCleanShutdownMarker: daemon.consumeCleanShutdownMarker(),
 	})
 
 	return daemon

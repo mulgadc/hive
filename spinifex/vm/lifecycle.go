@@ -151,7 +151,15 @@ func (m *Manager) launch(instance *VM) error {
 	}
 
 	if m.deps.Hooks.OnInstanceUp != nil {
-		m.deps.Hooks.OnInstanceUp(instance)
+		// Launch path: per-instance subscribe failures are logged and the
+		// launch still succeeds, mirroring the pre-2e early-subscribe block
+		// in handleEC2RunInstances. The instance is reachable via cluster
+		// fan-out (DescribeInstances) and the next OnInstanceUp on a
+		// state-touching event will reinstall the subs idempotently.
+		if err := m.deps.Hooks.OnInstanceUp(instance); err != nil {
+			slog.Error("OnInstanceUp hook reported error during launch",
+				"instance", instance.ID, "err", err)
+		}
 	}
 
 	return nil

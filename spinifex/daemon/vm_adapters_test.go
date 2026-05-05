@@ -29,7 +29,7 @@ func TestOnInstanceUpHook_RegistersBothPerInstanceTopics(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	instance := &vm.VM{ID: "i-up-basic"}
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 
 	cmdSub, ok := d.natsSubscriptions[instance.ID]
 	require.True(t, ok, "ec2.cmd subscription must be registered under instance ID")
@@ -44,13 +44,13 @@ func TestOnInstanceUpHook_ReplacesExistingSubsOnDoubleUp(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	instance := &vm.VM{ID: "i-up-twice"}
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 	first := d.natsSubscriptions[instance.ID]
 	firstConsole := d.natsSubscriptions[instance.ID+".console"]
 	require.NotNil(t, first)
 	require.NotNil(t, firstConsole)
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 	second := d.natsSubscriptions[instance.ID]
 	secondConsole := d.natsSubscriptions[instance.ID+".console"]
 	require.NotNil(t, second)
@@ -70,7 +70,7 @@ func TestOnInstanceDownHook_UnsubscribesAndDeletes(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	instance := &vm.VM{ID: "i-down"}
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 	cmdSub := d.natsSubscriptions[instance.ID]
 	consoleSub := d.natsSubscriptions[instance.ID+".console"]
 	require.NotNil(t, cmdSub)
@@ -100,8 +100,8 @@ func TestOnInstanceDownHook_OnlyRemovesTargetedInstance(t *testing.T) {
 	keep := &vm.VM{ID: "i-keep"}
 	drop := &vm.VM{ID: "i-drop"}
 
-	d.onInstanceUpHook()(keep)
-	d.onInstanceUpHook()(drop)
+	require.NoError(t, d.onInstanceUpHook()(keep))
+	require.NoError(t, d.onInstanceUpHook()(drop))
 	require.Len(t, d.natsSubscriptions, 4)
 
 	d.onInstanceDownHook()(drop.ID)

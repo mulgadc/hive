@@ -72,18 +72,8 @@ func TestHandleInstanceCrash_SkipsNonRunning(t *testing.T) {
 }
 
 func TestHandleInstanceCrash_SkipsShuttingDown(t *testing.T) {
-	nc, err := nats.Connect(sharedNATSURL)
-	require.NoError(t, err)
-	defer nc.Close()
-
-	rm, err := NewResourceManager()
-	require.NoError(t, err)
-
-	d := &Daemon{
-		natsConn:    nc,
-		resourceMgr: rm,
-		vmMgr:       vm.NewManager(),
-	}
+	d, cleanup := newTestDaemon(t)
+	defer cleanup()
 	d.shuttingDown.Store(true)
 
 	instance := &vm.VM{
