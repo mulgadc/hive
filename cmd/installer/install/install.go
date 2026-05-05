@@ -667,6 +667,11 @@ func (c *Config) toFirstbootConfig() firstboot.Config {
 		ClusterRole: c.ClusterRole,
 		JoinAddr:    c.JoinAddr,
 		Email:       c.Email,
+		// Read directly from the live-environment env (populated from the
+		// kernel cmdline by spinifex-init.sh). Generic phone-home hook used
+		// by PXE/MAAS-style provisioning controllers; absent on interactive
+		// installs and prod USB-stick installs, present on automated PXE.
+		InstallCallback: strings.TrimSpace(os.Getenv("SPINIFEX_INSTALL_CALLBACK")),
 	}
 }
 
