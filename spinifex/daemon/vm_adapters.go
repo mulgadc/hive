@@ -525,7 +525,7 @@ func (d *Daemon) buildVMManagerDeps() vm.Deps {
 			OnInstanceRecovering: d.onInstanceRecoveringHook(),
 		},
 		ShutdownSignal:             d.shuttingDown.Load,
-		CrashHandler:               d.handleInstanceCrash,
+		CrashHandler:               d.vmMgr.HandleCrash,
 		TransitionState:            d.TransitionState,
 		DevNetworking:              d.config.Daemon.DevNetworking,
 		BindHost:                   d.config.Host,

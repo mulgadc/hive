@@ -1360,13 +1360,6 @@ func (d *Daemon) setupShutdown() {
 	})
 }
 
-// pendingWatchdogTimeout aliases the manager's exported watchdog timeout so
-// daemon-side tests (currently asserting LaunchTime is within the watchdog
-// window after restore) keep working without reaching into the vm package.
-//
-// Phase 2f cleanup: migrate the assertion into vm/ and delete the alias.
-const pendingWatchdogTimeout = vm.PendingWatchdogTimeout
-
 // respondWithVolumeAttachment builds an ec2.VolumeAttachment, marshals it to JSON, and
 // responds on the NATS message. Used by both AttachVolume and DetachVolume handlers.
 func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, volumeID, instanceID, device, state string) {
