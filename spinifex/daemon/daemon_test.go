@@ -1954,8 +1954,9 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 	})
 
 	t.Run("InstanceNotRunning", func(t *testing.T) {
-		// Temporarily set status to stopped
-		instance.Status = vm.StateStopped
+		// Temporarily set status to stopped under the manager lock so -race
+		// reflects production discipline.
+		daemon.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Status = vm.StateStopped })
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -1976,7 +1977,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 
 		// Restore running state
-		instance.Status = vm.StateRunning
+		daemon.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Status = vm.StateRunning })
 	})
 
 	t.Run("VolumeNotFound", func(t *testing.T) {
@@ -2093,8 +2094,9 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	})
 
 	t.Run("InstanceNotRunning", func(t *testing.T) {
-		// Temporarily set status to stopped
-		instance.Status = vm.StateStopped
+		// Temporarily set status to stopped under the manager lock so -race
+		// reflects production discipline.
+		daemon.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Status = vm.StateStopped })
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -2115,7 +2117,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 
 		// Restore running state
-		instance.Status = vm.StateRunning
+		daemon.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Status = vm.StateRunning })
 	})
 
 	t.Run("VolumeNotAttached", func(t *testing.T) {
@@ -3118,9 +3120,7 @@ func TestMarkInstanceFailed(t *testing.T) {
 	assert.Equal(t, "Server.InternalError", *instance.Instance.StateReason.Code)
 	assert.Equal(t, "volume_preparation_failed", *instance.Instance.StateReason.Message)
 	require.Eventually(t, func() bool {
-		var status vm.InstanceState
-		daemon.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
-		return status == vm.StateTerminated
+		return daemon.vmMgr.Status(instance) == vm.StateTerminated
 	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
 }
 
@@ -3142,9 +3142,7 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 	daemon.vmMgr.MarkFailed(instance, "test_failure")
 
 	require.Eventually(t, func() bool {
-		var status vm.InstanceState
-		daemon.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
-		return status == vm.StateTerminated
+		return daemon.vmMgr.Status(instance) == vm.StateTerminated
 	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
 }
 
@@ -3292,7 +3290,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	t.Run("StopAlreadyStoppedInstance", func(t *testing.T) {
-		instance.Status = vm.StateStopped
+		daemon.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Status = vm.StateStopped })
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -3312,7 +3310,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	})
 
 	t.Run("TerminateAlreadyTerminatedInstance", func(t *testing.T) {
-		instance.Status = vm.StateTerminated
+		daemon.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Status = vm.StateTerminated })
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{

@@ -38,7 +38,7 @@ func (m *Manager) Stop(id string) error {
 
 	m.stopCleanup(instance)
 
-	m.Inspect(instance, func(v *VM) { v.LastNode = m.deps.NodeID })
+	m.UpdateState(instance.ID, func(v *VM) { v.LastNode = m.deps.NodeID })
 
 	if err := m.transitionWithPrecheck(instance, StateStopped); err != nil {
 		slog.Error("Failed to transition to stopped", "instanceId", instance.ID, "err", err)
@@ -110,9 +110,7 @@ func (m *Manager) Terminate(id string) error {
 		return ErrInstanceNotFound
 	}
 
-	var current InstanceState
-	m.Inspect(instance, func(v *VM) { current = v.Status })
-	if current == StateShuttingDown {
+	if current := m.Status(instance); current == StateShuttingDown {
 		// Concurrent failed-launch goroutine already owns cleanup.
 		return nil
 	}
@@ -161,9 +159,7 @@ func (m *Manager) MarkFailed(instance *VM, reason string) {
 		slog.Error("MarkFailed transition failed", "instanceId", instance.ID, "err", err)
 		// If this was a persistence-only failure, in-memory state is now
 		// shutting-down and we still want to finalize. Otherwise bail.
-		var postErr InstanceState
-		m.Inspect(instance, func(v *VM) { postErr = v.Status })
-		if postErr != StateShuttingDown {
+		if m.Status(instance) != StateShuttingDown {
 			return
 		}
 	}
@@ -182,6 +178,8 @@ func (m *Manager) MarkFailed(instance *VM, reason string) {
 // OnInstanceDown, and persists the running set. Shared by Terminate and
 // MarkFailed.
 func (m *Manager) finalizeTerminated(instance *VM) error {
+	// Inspect (not UpdateState): MarkFailed may invoke this for an
+	// instance that was never inserted into the local map.
 	m.Inspect(instance, func(v *VM) { v.LastNode = m.deps.NodeID })
 
 	if err := m.transitionWithPrecheck(instance, StateTerminated); err != nil {
@@ -323,13 +321,14 @@ func (m *Manager) deallocateResources(instance *VM) {
 // as a persistence failure on a transition whose memory mutation
 // already succeeded.
 func (m *Manager) transitionWithPrecheck(instance *VM, target InstanceState) error {
-	var current InstanceState
-	m.Inspect(instance, func(v *VM) { current = v.Status })
+	current := m.Status(instance)
 	if !IsValidTransition(current, target) {
 		return fmt.Errorf("%w: %s -> %s for instance %s",
 			ErrInvalidTransition, current, target, instance.ID)
 	}
 	if m.deps.TransitionState == nil {
+		// Inspect (not UpdateState): MarkFailed may run this on an instance
+		// that was never inserted into the local map.
 		m.Inspect(instance, func(v *VM) { v.Status = target })
 		return nil
 	}
@@ -337,9 +336,7 @@ func (m *Manager) transitionWithPrecheck(instance *VM, target InstanceState) err
 		// Could be persistence failure (memory state already updated) or a
 		// racing transition that invalidated the precheck. Re-inspect to
 		// distinguish.
-		var observed InstanceState
-		m.Inspect(instance, func(v *VM) { observed = v.Status })
-		if observed != target {
+		if m.Status(instance) != target {
 			return fmt.Errorf("%w: %s -> %s for instance %s (raced)",
 				ErrInvalidTransition, current, target, instance.ID)
 		}

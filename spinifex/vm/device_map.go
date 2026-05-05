@@ -177,7 +177,7 @@ func (m *Manager) UpdateGuestDeviceNames(instance *VM) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	m.Inspect(instance, func(v *VM) {
+	m.UpdateState(instance.ID, func(v *VM) {
 		if v.Instance == nil {
 			return
 		}

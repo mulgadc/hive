@@ -275,8 +275,7 @@ func (m *Manager) relaunchAll(toLaunch []*VM) {
 				}
 			}()
 
-			var status InstanceState
-			m.Inspect(inst, func(v *VM) { status = v.Status })
+			status := m.Status(inst)
 			if status != StatePending && status != StateProvisioning {
 				slog.Info("Instance state changed during recovery, skipping launch",
 					"instanceId", inst.ID, "status", string(status))

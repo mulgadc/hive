@@ -47,9 +47,7 @@ func (m *Manager) Reboot(id string) error {
 	if !ok {
 		return ErrInstanceNotFound
 	}
-	var status InstanceState
-	m.Inspect(instance, func(v *VM) { status = v.Status })
-	if status != StateRunning {
+	if status := m.Status(instance); status != StateRunning {
 		return fmt.Errorf("%w: cannot reboot instance %s in state %s",
 			ErrInvalidTransition, id, status)
 	}
@@ -65,8 +63,7 @@ func (m *Manager) Reboot(id string) error {
 // terminate goroutine owns cleanup and launch must bail without further side
 // effects.
 func (m *Manager) launchStillValid(instance *VM) bool {
-	var status InstanceState
-	m.Inspect(instance, func(v *VM) { status = v.Status })
+	status := m.Status(instance)
 	if status == StatePending || status == StateStopped || status == StateProvisioning {
 		return true
 	}
@@ -446,8 +443,7 @@ func (m *Manager) qmpHeartbeat(instance *VM) {
 	for {
 		time.Sleep(30 * time.Second)
 
-		var status InstanceState
-		m.Inspect(instance, func(v *VM) { status = v.Status })
+		status := m.Status(instance)
 
 		if status == StateStopping || status == StateStopped ||
 			status == StateShuttingDown || status == StateTerminated || status == StateError {

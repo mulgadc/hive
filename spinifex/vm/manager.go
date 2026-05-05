@@ -220,10 +220,22 @@ func (m *Manager) UpdateState(id string, fn func(*VM)) bool {
 	return true
 }
 
+// Status returns v.Status under the manager lock. Replaces the dominant
+// "Inspect to read Status" pattern with a typed accessor. Read-only — no
+// membership check, so callers may pass a pointer to an instance no longer
+// in the map (e.g. mid-cleanup) and still get a consistent read.
+func (m *Manager) Status(v *VM) InstanceState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return v.Status
+}
+
 // Inspect runs fn(v) under the manager lock for an already-resolved VM
 // pointer. Used by call sites that hold a *VM (e.g. from a NATS handler
 // dispatch) and need to read or mutate its fields with the same memory-
-// ordering guarantee as map-keyed access.
+// ordering guarantee as map-keyed access. Prefer UpdateState (membership-
+// checked) for mutation and Status for the read-Status pattern; Inspect
+// remains for closures that mutate fields on a possibly-orphaned VM.
 func (m *Manager) Inspect(v *VM, fn func(*VM)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

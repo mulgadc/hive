@@ -370,7 +370,7 @@ func (d *Daemon) TerminateSystemInstance(instanceID string) error {
 		} else {
 			slog.Info("TerminateSystemInstance: released EIP", "instanceId", instanceID, "ip", instance.PublicIP, "allocationId", instance.PublicIPAllocID)
 		}
-		d.vmMgr.Inspect(instance, func(v *vm.VM) {
+		d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) {
 			v.PublicIP = ""
 			v.PublicIPPool = ""
 			v.PublicIPAllocID = ""

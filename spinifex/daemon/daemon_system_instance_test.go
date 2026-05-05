@@ -49,7 +49,7 @@ func TestWaitForSystemInstance_TransitionsToRunning(t *testing.T) {
 	// Transition to running after a short delay
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		d.vmMgr.Inspect(inst, func(v *vm.VM) { v.Status = vm.StateRunning })
+		d.vmMgr.UpdateState(inst.ID, func(v *vm.VM) { v.Status = vm.StateRunning })
 	}()
 
 	err := d.WaitForSystemInstance("i-pending", 2*time.Second)

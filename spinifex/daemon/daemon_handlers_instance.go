@@ -347,8 +347,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	var successCount int
 	for _, instance := range instances {
 		// Skip if instance was terminated by a concurrent request
-		var status vm.InstanceState
-		d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+		status := d.vmMgr.Status(instance)
 		if status != vm.StatePending && status != vm.StateProvisioning {
 			slog.Info("Instance state changed during provisioning, skipping launch",
 				"instanceId", instance.ID, "status", string(status))
@@ -429,8 +428,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	slog.Info("Starting instance", "id", command.ID)
 
 	// Validate instance is in stopped state
-	var status vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+	status := d.vmMgr.Status(instance)
 
 	if status != vm.StateStopped {
 		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
@@ -451,7 +449,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	// Clear stop attribute before launch so WriteState inside the manager
 	// persists the correct attributes. Without this, a daemon restart after
 	// a stop→start cycle would see StopInstance=true and skip reconnecting QEMU.
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.Attributes = command.Attributes })
+	d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Attributes = command.Attributes })
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	if err := d.vmMgr.Start(instance.ID); err != nil {
@@ -484,11 +482,7 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 
 	slog.Info(action+" instance", "id", command.ID)
 
-	// Check state validity before dispatching so we can return the correct
-	// AWS error code (IncorrectInstanceState) when the instance is already
-	// stopped/terminated/etc. Manager.Stop/Terminate re-validate internally.
-	var currentState vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { currentState = v.Status })
+	currentState := d.vmMgr.Status(instance)
 
 	// Idempotent: a concurrent terminate goroutine is already cleaning up.
 	if isTerminate && currentState == vm.StateShuttingDown {
@@ -499,6 +493,10 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 		return
 	}
 
+	// Validate the transition synchronously before dispatching so the AWS
+	// SDK sees IncorrectInstanceState (400) instead of a stale 200. The
+	// async Stop/Terminate path re-validates and surfaces vm.ErrInvalidTransition
+	// on a racing transition; we map that into the same AWS error below.
 	if !vm.IsValidTransition(currentState, initialState) {
 		slog.Warn("Instance in incorrect state for "+strings.ToLower(action),
 			"instanceId", instance.ID, "currentState", string(currentState))
@@ -524,6 +522,13 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 			err = d.vmMgr.Stop(id)
 		}
 		if err != nil {
+			// Race with another transition: log at the right level so it
+			// shows up in dashboards but doesn't trigger paging.
+			if errors.Is(err, vm.ErrInvalidTransition) {
+				slog.Warn("Lifecycle transition raced; ack already sent",
+					"id", id, "action", strings.ToLower(action), "err", err)
+				return
+			}
 			slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", err, "id", id)
 		}
 	}(instance.ID)
