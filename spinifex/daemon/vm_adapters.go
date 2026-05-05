@@ -33,58 +33,34 @@ func newStateStoreAdapter(js *JetStreamManager) *stateStoreAdapter {
 }
 
 func (a *stateStoreAdapter) SaveRunningState(nodeID string, snapshot map[string]*vm.VM) error {
-	if a.js == nil {
-		return errors.New("JetStream manager not initialized")
-	}
 	return a.js.WriteState(nodeID, snapshot)
 }
 
 func (a *stateStoreAdapter) LoadRunningState(nodeID string) (map[string]*vm.VM, error) {
-	if a.js == nil {
-		return nil, errors.New("JetStream manager not initialized")
-	}
 	return a.js.LoadState(nodeID)
 }
 
 func (a *stateStoreAdapter) WriteStoppedInstance(id string, v *vm.VM) error {
-	if a.js == nil {
-		return errors.New("JetStream manager not initialized")
-	}
 	return a.js.WriteStoppedInstance(id, v)
 }
 
 func (a *stateStoreAdapter) LoadStoppedInstance(id string) (*vm.VM, error) {
-	if a.js == nil {
-		return nil, errors.New("JetStream manager not initialized")
-	}
 	return a.js.LoadStoppedInstance(id)
 }
 
 func (a *stateStoreAdapter) DeleteStoppedInstance(id string) error {
-	if a.js == nil {
-		return errors.New("JetStream manager not initialized")
-	}
 	return a.js.DeleteStoppedInstance(id)
 }
 
 func (a *stateStoreAdapter) ListStoppedInstances() ([]*vm.VM, error) {
-	if a.js == nil {
-		return nil, errors.New("JetStream manager not initialized")
-	}
 	return a.js.ListStoppedInstances()
 }
 
 func (a *stateStoreAdapter) WriteTerminatedInstance(id string, v *vm.VM) error {
-	if a.js == nil {
-		return errors.New("JetStream manager not initialized")
-	}
 	return a.js.WriteTerminatedInstance(id, v)
 }
 
 func (a *stateStoreAdapter) ListTerminatedInstances() ([]*vm.VM, error) {
-	if a.js == nil {
-		return nil, errors.New("JetStream manager not initialized")
-	}
 	return a.js.ListTerminatedInstances()
 }
 
@@ -274,9 +250,6 @@ func newInstanceTypeResolverAdapter(rm *ResourceManager) *instanceTypeResolverAd
 }
 
 func (a *instanceTypeResolverAdapter) Resolve(name string) (vm.InstanceTypeSpec, bool) {
-	if a.rm == nil {
-		return vm.InstanceTypeSpec{}, false
-	}
 	it := a.rm.instanceTypes[name]
 	if it == nil {
 		return vm.InstanceTypeSpec{}, false
@@ -306,9 +279,6 @@ func newResourceControllerAdapter(rm *ResourceManager) *resourceControllerAdapte
 }
 
 func (a *resourceControllerAdapter) Allocate(instanceType string) error {
-	if a.rm == nil {
-		return errors.New("resource manager not initialized")
-	}
 	it := a.rm.instanceTypes[instanceType]
 	if it == nil {
 		return fmt.Errorf("instance type %s not found", instanceType)
@@ -317,9 +287,6 @@ func (a *resourceControllerAdapter) Allocate(instanceType string) error {
 }
 
 func (a *resourceControllerAdapter) Deallocate(instanceType string) {
-	if a.rm == nil {
-		return
-	}
 	it := a.rm.instanceTypes[instanceType]
 	if it == nil {
 		return
@@ -328,8 +295,7 @@ func (a *resourceControllerAdapter) Deallocate(instanceType string) {
 }
 
 // volumeStateUpdaterAdapter satisfies vm.VolumeStateUpdater by delegating to
-// the daemon's volume service. It tolerates a nil service so callers don't
-// need to nil-check before invoking.
+// the daemon's volume service.
 type volumeStateUpdaterAdapter struct {
 	svc volumeStateUpdater
 }
@@ -348,9 +314,6 @@ func newVolumeStateUpdaterAdapter(svc volumeStateUpdater) *volumeStateUpdaterAda
 }
 
 func (a *volumeStateUpdaterAdapter) UpdateVolumeState(volumeID, state, instanceID, attachmentDevice string) error {
-	if a.svc == nil {
-		return nil
-	}
 	return a.svc.UpdateVolumeState(volumeID, state, instanceID, attachmentDevice)
 }
 
@@ -444,6 +407,3 @@ func (d *Daemon) buildVMManagerDeps() vm.Deps {
 		BindHost:           d.config.Host,
 	}
 }
-
-// OVSNetworkPlumber satisfies vm.NetworkPlumber directly (no wrapper).
-var _ vm.NetworkPlumber = (*OVSNetworkPlumber)(nil)
