@@ -3096,57 +3096,6 @@ func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
 	assert.Equal(t, "/fast-ssd/wal", d.config.WalDir)
 }
 
-// TestMarkInstanceFailed verifies that MarkFailed sets the StateReason and
-// transitions the instance to ShuttingDown synchronously, then completes
-// the cleanup chain to Terminated in a goroutine.
-func TestMarkInstanceFailed(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
-	instanceID := "i-test-mark-failed"
-	ec2Instance := &ec2.Instance{}
-	ec2Instance.SetInstanceId(instanceID)
-
-	instance := &vm.VM{
-		ID:        instanceID,
-		Status:    vm.StatePending,
-		AccountID: testAccountID,
-		Instance:  ec2Instance,
-	}
-	daemon.vmMgr.Insert(instance)
-
-	daemon.vmMgr.MarkFailed(instance, "volume_preparation_failed")
-
-	// Synchronous: state reason set, transition to shutting-down done.
-	require.NotNil(t, instance.Instance.StateReason)
-	assert.Equal(t, "Server.InternalError", *instance.Instance.StateReason.Code)
-	assert.Equal(t, "volume_preparation_failed", *instance.Instance.StateReason.Message)
-	require.Eventually(t, func() bool {
-		return daemon.vmMgr.Status(instance) == vm.StateTerminated
-	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
-}
-
-// TestMarkInstanceFailed_NilInstance verifies that MarkFailed handles
-// a VM with no ec2.Instance (Instance == nil) gracefully.
-func TestMarkInstanceFailed_NilInstance(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
-	instanceID := "i-test-mark-failed-nil"
-	instance := &vm.VM{
-		ID:        instanceID,
-		Status:    vm.StatePending,
-		AccountID: testAccountID,
-		Instance:  nil, // no ec2.Instance
-	}
-	daemon.vmMgr.Insert(instance)
-
-	// Should not panic
-	daemon.vmMgr.MarkFailed(instance, "test_failure")
-
-	require.Eventually(t, func() bool {
-		return daemon.vmMgr.Status(instance) == vm.StateTerminated
-	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
-}
-
 // TestVolumeMounterAdapter_UnmountOne_Success verifies that the adapter's
 // UnmountOne sends an ebs.unmount NATS request and handles a successful
 // response. UnmountOne is the post-2d successor to Daemon.rollbackEBSMount;

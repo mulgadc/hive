@@ -3,6 +3,7 @@ package vm
 import (
 	"errors"
 	"maps"
+	"sync"
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -136,7 +137,10 @@ func TestManagerHooks_InitiallyNil(t *testing.T) {
 }
 
 // fakeVolumeMounter records every call so lifecycle tests can assert ordering.
+// The mutex covers the recording slices so StopAll's per-instance fan-out
+// goroutines stay race-free.
 type fakeVolumeMounter struct {
+	mu                       sync.Mutex
 	mounted, unmounted       []string
 	mountedOne, unmountedOne []string
 	mountErr                 error
@@ -145,28 +149,39 @@ type fakeVolumeMounter struct {
 }
 
 func (f *fakeVolumeMounter) Mount(v *VM) error {
+	f.mu.Lock()
 	f.mounted = append(f.mounted, v.ID)
-	return f.mountErr
+	err := f.mountErr
+	f.mu.Unlock()
+	return err
 }
 
 func (f *fakeVolumeMounter) Unmount(v *VM) error {
+	f.mu.Lock()
 	f.unmounted = append(f.unmounted, v.ID)
+	f.mu.Unlock()
 	return nil
 }
 
 func (f *fakeVolumeMounter) MountOne(req *types.EBSRequest) error {
+	f.mu.Lock()
 	f.mountedOne = append(f.mountedOne, req.Name)
-	if f.mountOneErr != nil {
-		return f.mountOneErr
+	mountOneErr := f.mountOneErr
+	uri := f.mountOneURI
+	f.mu.Unlock()
+	if mountOneErr != nil {
+		return mountOneErr
 	}
-	if f.mountOneURI != "" {
-		req.NBDURI = f.mountOneURI
+	if uri != "" {
+		req.NBDURI = uri
 	}
 	return nil
 }
 
 func (f *fakeVolumeMounter) UnmountOne(req types.EBSRequest) {
+	f.mu.Lock()
 	f.unmountedOne = append(f.unmountedOne, req.Name)
+	f.mu.Unlock()
 }
 
 var _ VolumeMounter = (*fakeVolumeMounter)(nil)
