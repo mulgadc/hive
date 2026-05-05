@@ -1016,14 +1016,17 @@ func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
 		daemon.vmMgr.MarkFailed(instance, "launch_timeout")
 	}
 
-	// MarkFailed sets the StateReason synchronously and runs the cleanup
-	// chain to terminated. The instance is removed from the local map by
-	// finalizeTerminated, so verify the StateReason on the snapshot we
-	// captured before the call.
+	// MarkFailed sets the StateReason synchronously, then runs the cleanup
+	// chain in a goroutine. The reason is observable immediately; the
+	// terminated state arrives once the goroutine completes.
 	require.NotNil(t, stuckBefore.Instance.StateReason)
 	assert.Equal(t, "Server.InternalError", *stuckBefore.Instance.StateReason.Code)
 	assert.Equal(t, "launch_timeout", *stuckBefore.Instance.StateReason.Message)
-	assert.Equal(t, vm.StateTerminated, stuckBefore.Status)
+	require.Eventually(t, func() bool {
+		var status vm.InstanceState
+		daemon.vmMgr.Inspect(stuckBefore, func(v *vm.VM) { status = v.Status })
+		return status == vm.StateTerminated
+	}, 5*time.Second, 10*time.Millisecond, "MarkFailed cleanup goroutine should reach terminated")
 
 	// Fresh instance should still be pending
 	freshInst, _ := daemon.vmMgr.Get("i-fresh")

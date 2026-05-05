@@ -3082,8 +3082,8 @@ func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
 }
 
 // TestMarkInstanceFailed verifies that MarkFailed sets the StateReason and
-// runs the cleanup chain. The instance ends up in StateTerminated since
-// MarkFailed runs the full Terminate pipeline.
+// transitions the instance to ShuttingDown synchronously, then completes
+// the cleanup chain to Terminated in a goroutine.
 func TestMarkInstanceFailed(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
@@ -3101,11 +3101,15 @@ func TestMarkInstanceFailed(t *testing.T) {
 
 	daemon.vmMgr.MarkFailed(instance, "volume_preparation_failed")
 
-	// Verify StateReason was set on the original snapshot before cleanup.
+	// Synchronous: state reason set, transition to shutting-down done.
 	require.NotNil(t, instance.Instance.StateReason)
 	assert.Equal(t, "Server.InternalError", *instance.Instance.StateReason.Code)
 	assert.Equal(t, "volume_preparation_failed", *instance.Instance.StateReason.Message)
-	assert.Equal(t, vm.StateTerminated, instance.Status)
+	require.Eventually(t, func() bool {
+		var status vm.InstanceState
+		daemon.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+		return status == vm.StateTerminated
+	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
 }
 
 // TestMarkInstanceFailed_NilInstance verifies that MarkFailed handles
@@ -3125,7 +3129,11 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 	// Should not panic
 	daemon.vmMgr.MarkFailed(instance, "test_failure")
 
-	assert.Equal(t, vm.StateTerminated, instance.Status)
+	require.Eventually(t, func() bool {
+		var status vm.InstanceState
+		daemon.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+		return status == vm.StateTerminated
+	}, 5*time.Second, 10*time.Millisecond, "cleanup goroutine should reach terminated")
 }
 
 // TestRollbackEBSMount_Success verifies that rollbackEBSMount sends an ebs.unmount

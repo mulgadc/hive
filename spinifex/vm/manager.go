@@ -42,9 +42,6 @@ type Deps struct {
 	// persists the resulting running-state snapshot.
 	TransitionState func(*VM, InstanceState) error
 
-	// MarkInstanceFailed cleans up a VM whose launch errored mid-way.
-	MarkInstanceFailed func(*VM, string)
-
 	// DevNetworking enables the user-mode dev NIC (SSH hostfwd) on top of
 	// the VPC tap NIC. Mirrors Daemon.config.Daemon.DevNetworking.
 	DevNetworking bool

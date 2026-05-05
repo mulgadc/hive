@@ -404,12 +404,11 @@ func (d *Daemon) buildVMManagerDeps() vm.Deps {
 			OnInstanceUp:   d.onInstanceUpHook(),
 			OnInstanceDown: d.onInstanceDownHook(),
 		},
-		ShutdownSignal:     d.shuttingDown.Load,
-		CrashHandler:       d.handleInstanceCrash,
-		TransitionState:    d.TransitionState,
-		MarkInstanceFailed: d.vmMgr.MarkFailed,
-		DevNetworking:      d.config.Daemon.DevNetworking,
-		BindHost:           d.config.Host,
+		ShutdownSignal:  d.shuttingDown.Load,
+		CrashHandler:    d.handleInstanceCrash,
+		TransitionState: d.TransitionState,
+		DevNetworking:   d.config.Daemon.DevNetworking,
+		BindHost:        d.config.Host,
 	}
 }
 

@@ -45,8 +45,12 @@ func (m *Manager) Stop(id string) error {
 	}
 
 	if !m.MigrateStoppedToSharedKV(instance) {
-		// StateStore unavailable or write failed. Keep the instance in the
-		// local map; restoreInstances will retry the migration on next boot.
+		// Either StateStore unavailable / write failed (instance stays in
+		// local map; restoreInstances retries on next boot) OR a concurrent
+		// handler reclaimed the slot (id now resolves to a different live
+		// VM). Either way, do not fire OnInstanceDown — firing it would
+		// unsubscribe the per-id NATS subscriptions of the reclaimed
+		// instance.
 		return nil
 	}
 
@@ -122,14 +126,15 @@ func (m *Manager) Terminate(id string) error {
 	return m.finalizeTerminated(instance)
 }
 
-// MarkFailed sets a failure reason on the instance, transitions to
-// shutting-down, and runs the full Terminate cleanup chain. Used when a
-// launch errors mid-way and the caller wants to release any partially-
-// allocated resources synchronously.
+// MarkFailed sets a failure reason, transitions to shutting-down
+// synchronously, then runs the cleanup chain in a goroutine. Used when a
+// launch errors mid-way: callers (NATS RunInstances handler, recovery
+// worker, pending watchdog, system-instance launcher) get back control
+// immediately and do not block on volume unmount, ENI delete, or KV
+// writes. Mirrors the pre-2c `go d.finalizeTermination(instance)` pattern.
 //
 // Tolerates instances already in a cleanup state (no-op) and instances
-// that may or may not be present in the running-VM map. Returns nil on
-// completion; sub-step failures are logged.
+// that may or may not be present in the running-VM map.
 func (m *Manager) MarkFailed(instance *VM, reason string) {
 	skip := false
 	var observed InstanceState
@@ -164,11 +169,12 @@ func (m *Manager) MarkFailed(instance *VM, reason string) {
 	}
 	slog.Info("Instance marked as failed", "instanceId", instance.ID, "reason", reason)
 
-	m.terminateCleanup(instance)
-
-	if err := m.finalizeTerminated(instance); err != nil {
-		slog.Error("MarkFailed finalize failed", "instanceId", instance.ID, "err", err)
-	}
+	go func() {
+		m.terminateCleanup(instance)
+		if err := m.finalizeTerminated(instance); err != nil {
+			slog.Error("MarkFailed finalize failed", "instanceId", instance.ID, "err", err)
+		}
+	}()
 }
 
 // finalizeTerminated transitions instance to terminated, writes the
