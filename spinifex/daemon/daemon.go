@@ -844,6 +844,10 @@ func (d *Daemon) Start() error {
 		d.networkPlumber = &OVSNetworkPlumber{}
 	}
 
+	// Wire vm.Manager collaborators now that NATS, JetStream, network plumber,
+	// volume service, and resource manager are all ready.
+	d.vmMgr.SetDeps(d.buildVMManagerDeps())
+
 	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
 	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
 		slog.Warn("Failed to set daemon OOM score", "err", err)
