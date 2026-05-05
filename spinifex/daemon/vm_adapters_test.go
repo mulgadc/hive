@@ -3,6 +3,7 @@ package daemon
 import (
 	"testing"
 
+	"github.com/mulgadc/spinifex/spinifex/gpu"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -29,7 +30,7 @@ func TestOnInstanceUpHook_RegistersBothPerInstanceTopics(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	instance := &vm.VM{ID: "i-up-basic"}
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 
 	cmdSub, ok := d.natsSubscriptions[instance.ID]
 	require.True(t, ok, "ec2.cmd subscription must be registered under instance ID")
@@ -44,13 +45,13 @@ func TestOnInstanceUpHook_ReplacesExistingSubsOnDoubleUp(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	instance := &vm.VM{ID: "i-up-twice"}
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 	first := d.natsSubscriptions[instance.ID]
 	firstConsole := d.natsSubscriptions[instance.ID+".console"]
 	require.NotNil(t, first)
 	require.NotNil(t, firstConsole)
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 	second := d.natsSubscriptions[instance.ID]
 	secondConsole := d.natsSubscriptions[instance.ID+".console"]
 	require.NotNil(t, second)
@@ -70,7 +71,7 @@ func TestOnInstanceDownHook_UnsubscribesAndDeletes(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	instance := &vm.VM{ID: "i-down"}
 
-	d.onInstanceUpHook()(instance)
+	require.NoError(t, d.onInstanceUpHook()(instance))
 	cmdSub := d.natsSubscriptions[instance.ID]
 	consoleSub := d.natsSubscriptions[instance.ID+".console"]
 	require.NotNil(t, cmdSub)
@@ -95,13 +96,49 @@ func TestOnInstanceDownHook_NoOpWhenAbsent(t *testing.T) {
 	assert.Empty(t, d.natsSubscriptions)
 }
 
+// When the daemon's gpuManager is unset, the hook must still register NATS
+// subscriptions and ignore the GPUPCIAddress on the VM.
+func TestOnInstanceUpHook_NoGPUManager_SkipsReclaim(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	instance := &vm.VM{ID: "i-up-nogpu", GPUPCIAddress: "0000:01:00.0"}
+
+	require.NoError(t, d.onInstanceUpHook()(instance))
+	require.Contains(t, d.natsSubscriptions, instance.ID)
+}
+
+// With a gpuManager configured but a CPU-only instance, the hook must not
+// touch the GPU pool. We use the AllocatedCount as the observable: an
+// unintended Reclaim would bump it.
+func TestOnInstanceUpHook_NoGPUAddress_SkipsReclaim(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	d.gpuManager = gpu.NewManager(nil)
+	instance := &vm.VM{ID: "i-up-cpu"}
+
+	require.NoError(t, d.onInstanceUpHook()(instance))
+	assert.Equal(t, 0, d.gpuManager.AllocatedCount(),
+		"hook must not call Reclaim for instances without a GPUPCIAddress")
+}
+
+// With a gpuManager that has no entries, calling Reclaim for an instance
+// with a GPUPCIAddress will fail inside the manager. The hook logs a warning
+// and returns nil — the NATS subscriptions must still register so the
+// reconnect path doesn't roll back.
+func TestOnInstanceUpHook_GPUReclaimError_DoesNotPropagate(t *testing.T) {
+	d, _ := newHookTestDaemon(t)
+	d.gpuManager = gpu.NewManager(nil)
+	instance := &vm.VM{ID: "i-up-gpu-missing", GPUPCIAddress: "0000:99:00.0"}
+
+	require.NoError(t, d.onInstanceUpHook()(instance))
+	require.Contains(t, d.natsSubscriptions, instance.ID)
+}
+
 func TestOnInstanceDownHook_OnlyRemovesTargetedInstance(t *testing.T) {
 	d, _ := newHookTestDaemon(t)
 	keep := &vm.VM{ID: "i-keep"}
 	drop := &vm.VM{ID: "i-drop"}
 
-	d.onInstanceUpHook()(keep)
-	d.onInstanceUpHook()(drop)
+	require.NoError(t, d.onInstanceUpHook()(keep))
+	require.NoError(t, d.onInstanceUpHook()(drop))
 	require.Len(t, d.natsSubscriptions, 4)
 
 	d.onInstanceDownHook()(drop.ID)

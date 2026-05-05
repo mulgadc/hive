@@ -201,6 +201,12 @@ func (m *Manager) ReclaimByAddress(addr, instanceID string) error {
 			continue
 		}
 		entry := &m.pool[i]
+		if entry.InstanceID == instanceID {
+			// Already owned by the same instance — OnInstanceUp can fire
+			// for a fresh launch where the handler already Claim'd this
+			// slot. Treat as a no-op rather than a conflict.
+			return nil
+		}
 		if entry.InstanceID != "" {
 			return fmt.Errorf("GPU %s already claimed by %s", addr, entry.InstanceID)
 		}

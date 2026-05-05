@@ -321,6 +321,26 @@ func TestManagerReclaim_AlreadyClaimed(t *testing.T) {
 	}
 }
 
+// OnInstanceUp can fire on a freshly-launched instance whose handler-side
+// Claim already populated the slot with the same instance ID. Reclaim must
+// short-circuit instead of returning an "already claimed" error so callers
+// don't log a spurious warning on every successful Run/Start.
+func TestManagerReclaim_SameInstanceIsNoop(t *testing.T) {
+	root, gpu := buildManagerSysfs(t)
+	m := newManagerForTest([]GPUDevice{gpu}, root)
+
+	if _, err := m.Claim("i-001"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	if err := m.ReclaimByAddress(gpu.PCIAddress, "i-001"); err != nil {
+		t.Fatalf("ReclaimByAddress for same instance: got %v, want nil", err)
+	}
+	if m.AllocatedCount() != 1 {
+		t.Errorf("AllocatedCount after same-id reclaim: got %d, want 1", m.AllocatedCount())
+	}
+}
+
 func TestManagerReclaim_NotFound(t *testing.T) {
 	root, gpu := buildManagerSysfs(t)
 	m := newManagerForTest([]GPUDevice{gpu}, root)

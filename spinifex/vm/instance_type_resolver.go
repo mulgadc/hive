@@ -21,6 +21,10 @@ type InstanceTypeResolver interface {
 type ResourceController interface {
 	Allocate(instanceType string) error
 	Deallocate(instanceType string)
+	// CanAllocate returns how many instances of instanceType could be
+	// allocated right now (0 to count). Used by the crash-recovery
+	// scheduler to avoid restarting a VM the host can't fit.
+	CanAllocate(instanceType string, count int) int
 }
 
 // VolumeStateUpdater is the narrow slice of the volume service the manager
