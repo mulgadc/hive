@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -67,6 +68,11 @@ func (m *Manager) AttachVolume(id, volumeID, device string) (AttachVolumeResult,
 	}
 	if err := m.deps.VolumeMounter.MountOne(&ebsRequest); err != nil {
 		slog.Error("AttachVolume: ebs.mount failed", "volumeId", volumeID, "err", err)
+		// Empty-URI response leaves backend NBD state ambiguous; unmount
+		// defensively to avoid orphaning a half-started mount.
+		if errors.Is(err, ErrMountAmbiguous) {
+			m.deps.VolumeMounter.UnmountOne(ebsRequest)
+		}
 		return AttachVolumeResult{}, fmt.Errorf("mount volume %s: %w", volumeID, err)
 	}
 

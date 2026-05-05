@@ -180,7 +180,7 @@ func (a *volumeMounterAdapter) MountOne(req *types.EBSRequest) error {
 		return fmt.Errorf("ebs.mount returned error: %s", resp.Error)
 	}
 	if resp.URI == "" {
-		return errors.New("ebs.mount response has empty URI")
+		return vm.ErrMountAmbiguous
 	}
 
 	req.NBDURI = resp.URI
