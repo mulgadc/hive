@@ -11,7 +11,7 @@ Builds a Proxmox VM template with all Spinifex dependencies pre-installed. Cloni
 | AWS CLI | v2 (`make install-aws`) |
 | Repositories | spinifex, viperblock, predastore (with `go.work` configured) |
 | Module cache | `go mod download` completed for all repos |
-| Cloud images | Ubuntu 24.04 for nested VMs (`~/images/ubuntu-24.04.img`) |
+| Cloud images | Ubuntu 26.04 for nested VMs (`~/images/ubuntu-26.04.img`) |
 | Tuning | sysctl (rmem_max/wmem_max), kvm group, ufw disabled |
 | Generalized | Clean machine-id, SSH host keys, cloud-init — each clone boots fresh |
 

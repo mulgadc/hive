@@ -72,18 +72,8 @@ func TestHandleInstanceCrash_SkipsNonRunning(t *testing.T) {
 }
 
 func TestHandleInstanceCrash_SkipsShuttingDown(t *testing.T) {
-	nc, err := nats.Connect(sharedNATSURL)
-	require.NoError(t, err)
-	defer nc.Close()
-
-	rm, err := NewResourceManager()
-	require.NoError(t, err)
-
-	d := &Daemon{
-		natsConn:    nc,
-		resourceMgr: rm,
-		vmMgr:       vm.NewManager(),
-	}
+	d, cleanup := newTestDaemon(t)
+	defer cleanup()
 	d.shuttingDown.Store(true)
 
 	instance := &vm.VM{
@@ -230,7 +220,26 @@ func newTestDaemon(t *testing.T) (*Daemon, func()) {
 		resourceMgr: rm,
 		vmMgr:       vm.NewManager(),
 	}
-	return d, func() { nc.Close() }
+	// Wire the dependencies the manager-internal crash handler relies on
+	// (TransitionState, ResourceController, InstanceTypes, ShutdownSignal).
+	// jsManager is still nil so TransitionState's WriteState will fail —
+	// matching the pre-2e shape where the in-memory status flip survives a
+	// write failure.
+	d.vmMgr.SetDeps(vm.Deps{
+		NodeID:          d.node,
+		TransitionState: d.TransitionState,
+		Resources:       newResourceControllerAdapter(rm),
+		InstanceTypes:   newInstanceTypeResolverAdapter(rm),
+		ShutdownSignal:  d.shuttingDown.Load,
+	})
+	// MaybeRestart schedules time.AfterFunc on every crash; flipping
+	// shuttingDown makes RestartCrashedInstance bail before it reaches
+	// Run/launch, where the (intentionally) un-wired VolumeMounter would
+	// otherwise nil-panic from a goroutine outliving the test.
+	return d, func() {
+		d.shuttingDown.Store(true)
+		nc.Close()
+	}
 }
 
 // smallestAllocType returns the name of the smallest allocatable instance type
@@ -334,7 +343,7 @@ func TestHandleInstanceCrash_FirstCrashSetsTime(t *testing.T) {
 	assert.Equal(t, 1, instance.Health.CrashCount)
 
 	// Reset to running for a second crash
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+	d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) {
 		v.Status = vm.StateRunning
 		v.Running = true
 		v.PID = 222

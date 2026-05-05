@@ -3,17 +3,106 @@ package vm
 import (
 	"maps"
 	"sync"
+	"time"
 )
 
-// Manager owns the in-memory map of running VMs on this node.
-type Manager struct {
-	mu  sync.Mutex
-	vms map[string]*VM
+// ManagerHooks are callbacks the manager fires synchronously on every
+// running/terminated transition. The daemon uses these to drive per-instance
+// NATS subscription/unsubscription. Hook fields may be nil; nil hooks are no-ops.
+//
+// OnInstanceUp returns an error so callers can distinguish a soft launch
+// (subscribe failures only logged) from a reconnect (failures must roll back
+// QMP and abort the reconnect). Callers that don't care about the error may
+// ignore it.
+type ManagerHooks struct {
+	OnInstanceUp   func(*VM) error
+	OnInstanceDown func(id string)
+	// OnInstanceRecovering fires from Restore once per instance that is
+	// about to be relaunched. The daemon subscribes only the command
+	// topic (ec2.cmd.<id>) here so concurrent terminate commands can
+	// reach this node while the relaunch is in flight; the subsequent
+	// OnInstanceUp on launch success is idempotent and reinstalls both
+	// the command and console subscriptions.
+	OnInstanceRecovering func(*VM)
 }
 
+// Deps bundles every collaborator the manager uses to drive lifecycle.
+// Fields may be nil where the manager does not yet require them; call sites
+// guard against nil so partial wiring during construction is safe.
+type Deps struct {
+	NodeID string
+
+	StateStore         StateStore
+	VolumeMounter      VolumeMounter
+	QMPClientFactory   QMPClientFactory
+	ProcessLauncher    ProcessLauncher
+	NetworkPlumber     NetworkPlumber
+	InstanceTypes      InstanceTypeResolver
+	Resources          ResourceController
+	VolumeStateUpdater VolumeStateUpdater
+	InstanceCleaner    InstanceCleaner
+	Hooks              ManagerHooks
+
+	// ShutdownSignal returns true once the daemon has begun coordinated
+	// shutdown. Crash handlers and restart logic short-circuit on true.
+	ShutdownSignal func() bool
+
+	// CrashHandler is invoked from the QEMU exit goroutine when the process
+	// terminates unexpectedly after startup was confirmed.
+	CrashHandler func(*VM, error)
+
+	// TransitionState applies a state transition to the supplied VM and
+	// persists the resulting running-state snapshot.
+	TransitionState func(*VM, InstanceState) error
+
+	// DevNetworking enables the user-mode dev NIC (SSH hostfwd) on top of
+	// the VPC tap NIC. Mirrors Daemon.config.Daemon.DevNetworking.
+	DevNetworking bool
+	// BindHost is the daemon's listen IP, used when wiring user-mode
+	// hostfwd rules. Empty / "0.0.0.0" falls back to 127.0.0.1.
+	BindHost string
+
+	// DetachDelay is the pause between QMP device_del and blockdev-del
+	// during DetachVolume, and the polling interval for blockdev-del retry.
+	// Zero is acceptable in tests; production uses 1s.
+	DetachDelay time.Duration
+
+	// ConsumeCleanShutdownMarker reports whether the previous daemon run
+	// recorded a clean shutdown marker for this node, deleting it as a
+	// side effect. Restore uses the result to decide whether to wait
+	// briefly for stale QEMU PIDs to die before classifying state. Nil
+	// is treated as "no marker" (cautious recovery).
+	ConsumeCleanShutdownMarker func() bool
+}
+
+// Manager owns the in-memory map of running VMs on this node and every
+// lifecycle transition that mutates that map.
+type Manager struct {
+	mu   sync.Mutex
+	vms  map[string]*VM
+	deps Deps
+}
+
+// NewManager returns a Manager with no collaborators wired. Production code
+// uses NewManagerWithDeps; tests that only exercise the in-memory map keep
+// this convenience.
 func NewManager() *Manager {
 	return &Manager{vms: make(map[string]*VM)}
 }
+
+// NewManagerWithDeps returns a Manager wired with collaborators.
+func NewManagerWithDeps(deps Deps) *Manager {
+	return &Manager{vms: make(map[string]*VM), deps: deps}
+}
+
+// SetDeps replaces the manager's dependencies. The daemon constructs the
+// manager early (before NATS / JetStream / network plumber are available)
+// and calls SetDeps once those collaborators exist. Must not be called
+// concurrently with lifecycle methods.
+func (m *Manager) SetDeps(deps Deps) { m.deps = deps }
+
+// NodeID returns the node identifier the manager was constructed with.
+func (m *Manager) NodeID() string { return m.deps.NodeID }
 
 // Get returns the VM for id (and true) or (nil, false).
 func (m *Manager) Get(id string) (*VM, bool) {
@@ -131,10 +220,22 @@ func (m *Manager) UpdateState(id string, fn func(*VM)) bool {
 	return true
 }
 
+// Status returns v.Status under the manager lock. Replaces the dominant
+// "Inspect to read Status" pattern with a typed accessor. Read-only — no
+// membership check, so callers may pass a pointer to an instance no longer
+// in the map (e.g. mid-cleanup) and still get a consistent read.
+func (m *Manager) Status(v *VM) InstanceState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return v.Status
+}
+
 // Inspect runs fn(v) under the manager lock for an already-resolved VM
 // pointer. Used by call sites that hold a *VM (e.g. from a NATS handler
 // dispatch) and need to read or mutate its fields with the same memory-
-// ordering guarantee as map-keyed access.
+// ordering guarantee as map-keyed access. Prefer UpdateState (membership-
+// checked) for mutation and Status for the read-Status pattern; Inspect
+// remains for closures that mutate fields on a possibly-orphaned VM.
 func (m *Manager) Inspect(v *VM, fn func(*VM)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

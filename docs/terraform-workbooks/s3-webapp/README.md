@@ -53,7 +53,7 @@ Deploy an EC2 instance running a Flask file-sharing web application backed by S3
 
 - Spinifex installed and running (see [Installing Spinifex](/docs/install))
 - Predastore running (S3 API on port 8443)
-- An Ubuntu 24.04 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
+- An Ubuntu 26.04 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
 - The EC2 instance must be able to reach Predastore — use the host's br-wan IP, not localhost
 
@@ -153,7 +153,7 @@ cat /opt/webapp/.env
 
 ### AMI Not Found
 
-Ensure you have imported an Ubuntu 24.04 image:
+Ensure you have imported an Ubuntu 26.04 image:
 
 ```bash
 aws ec2 describe-images --owners 000000000000 --profile spinifex

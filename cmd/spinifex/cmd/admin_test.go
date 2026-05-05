@@ -22,7 +22,7 @@ import (
 func TestPrintChecksumError(t *testing.T) {
 	image := utils.Images{Checksum: "https://example.com/SUMS", ChecksumType: "sha512"}
 	const imageFile = "/var/lib/img.tar.xz"
-	const imageName = "debian-12-x86_64"
+	const imageName = "debian-13-x86_64"
 
 	errs := []error{
 		fmt.Errorf("%w: expected abc got def", utils.ErrChecksumMismatch),

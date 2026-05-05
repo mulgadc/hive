@@ -12,11 +12,11 @@ if [ -z "$SPINIFEX_AMI" ]; then
     echo "SPINIFEX_AMI not set, attempting to detect..."
     ARCH=$(uname -m)
     if [ "$ARCH" = "x86_64" ]; then
-        IMAGE_NAME="ami-ubuntu-24.04-x86_64"
+        IMAGE_NAME="ami-ubuntu-26.04-x86_64"
     elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-        IMAGE_NAME="ami-ubuntu-24.04-arm64"
+        IMAGE_NAME="ami-ubuntu-26.04-arm64"
     else
-        IMAGE_NAME="ami-ubuntu-24.04-x86_64"
+        IMAGE_NAME="ami-ubuntu-26.04-x86_64"
     fi
     SPINIFEX_AMI=$(aws ec2 describe-images --query "Images[?Name=='$IMAGE_NAME'].ImageId" --output text)
     if [ -z "$SPINIFEX_AMI" ]; then

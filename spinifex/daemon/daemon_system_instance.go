@@ -255,7 +255,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 
 	// Pre-compute dev MAC for dual-NIC cloud-init
 	if d.config.Daemon.DevNetworking && instance.ENIId != "" {
-		instance.DevMAC = generateDevMAC(instance.ID)
+		instance.DevMAC = vm.GenerateDevMAC(instance.ID)
 	}
 
 	// Management NIC: allocate IP, generate MAC, create TAP on br-mgmt
@@ -322,7 +322,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 	}
 
 	// Launch QEMU VM
-	if err := d.LaunchInstance(instance); err != nil {
+	if err := d.vmMgr.Run(instance); err != nil {
 		d.cleanupFailedSystemInstance(instance, instanceType)
 		return nil, fmt.Errorf("launch instance: %w", err)
 	}
@@ -350,15 +350,10 @@ func (d *Daemon) TerminateSystemInstance(instanceID string) error {
 		return fmt.Errorf("instance %s not found", instanceID)
 	}
 
-	// Transition to shutting-down
-	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
-		return fmt.Errorf("transition to shutting-down: %w", err)
-	}
-
 	// Release EIP through the EIP service for system VMs whose public IP was
 	// allocated via AllocateAddress (internet-facing ALBs). Clears the fields
-	// so the generic teardown path in stopInstance doesn't try to
-	// double-release the same IP through externalIPAM directly.
+	// so vm.Manager.Terminate's ReleasePublicIP doesn't double-release the
+	// same IP via externalIPAM.
 	if instance.PublicIPAllocID != "" && d.eipService != nil {
 		eniAccount := instance.AccountID
 		if instance.PublicIPAssocID != "" {
@@ -375,85 +370,30 @@ func (d *Daemon) TerminateSystemInstance(instanceID string) error {
 		} else {
 			slog.Info("TerminateSystemInstance: released EIP", "instanceId", instanceID, "ip", instance.PublicIP, "allocationId", instance.PublicIPAllocID)
 		}
-		instance.PublicIP = ""
-		instance.PublicIPPool = ""
-		instance.PublicIPAllocID = ""
-		instance.PublicIPAssocID = ""
+		d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) {
+			v.PublicIP = ""
+			v.PublicIPPool = ""
+			v.PublicIPAllocID = ""
+			v.PublicIPAssocID = ""
+		})
 	}
 
-	// Stop the VM (QEMU shutdown, volume unmount, tap cleanup)
-	if err := d.stopInstance(map[string]*vm.VM{instanceID: instance}, true); err != nil {
-		slog.Error("TerminateSystemInstance: stopInstance failed", "instanceId", instanceID, "err", err)
-		return fmt.Errorf("stop instance: %w", err)
-	}
-
-	if err := d.TransitionState(instance, vm.StateTerminated); err != nil {
-		slog.Warn("TerminateSystemInstance: failed to transition to terminated", "instanceId", instanceID, "err", err)
-	}
-
-	// Write to terminated KV bucket (auto-expires)
-	if d.jsManager != nil {
-		if err := d.jsManager.WriteTerminatedInstance(instanceID, instance); err != nil {
-			slog.Warn("TerminateSystemInstance: failed to write terminated state", "instanceId", instanceID, "err", err)
-		}
-	}
-
-	// Clean up local state
-	d.vmMgr.Delete(instanceID)
-
-	// Unsubscribe from per-instance NATS topic
-	d.mu.Lock()
-	if sub, ok := d.natsSubscriptions[instanceID]; ok {
-		if err := sub.Unsubscribe(); err != nil {
-			slog.Warn("TerminateSystemInstance: failed to unsubscribe", "instanceId", instanceID, "err", err)
-		}
-		delete(d.natsSubscriptions, instanceID)
-	}
-	d.mu.Unlock()
-
-	// Deallocate resources
-	if it, ok := d.resourceMgr.instanceTypes[instance.InstanceType]; ok {
-		d.resourceMgr.deallocate(it)
+	if err := d.vmMgr.Terminate(instanceID); err != nil {
+		slog.Error("TerminateSystemInstance: vmMgr.Terminate failed", "instanceId", instanceID, "err", err)
+		return fmt.Errorf("terminate: %w", err)
 	}
 
 	slog.Info("TerminateSystemInstance completed", "instanceId", instanceID)
 	return nil
 }
 
-// cleanupFailedSystemInstance handles cleanup when a system instance launch fails
-// after partial setup (state added, volumes created, etc).
-func (d *Daemon) cleanupFailedSystemInstance(instance *vm.VM, instanceType *ec2.InstanceTypeInfo) {
-	d.markInstanceFailed(instance, "system_instance_launch_failed")
-	d.resourceMgr.deallocate(instanceType)
-
-	// Clean up management TAP and release IP
-	if instance.MgmtTap != "" {
-		if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
-			slog.Warn("Failed to cleanup mgmt tap on failed launch", "tap", instance.MgmtTap, "err", err)
-		}
-		if d.mgmtIPAllocator != nil {
-			d.mgmtIPAllocator.Release(instance.ID)
-		}
-	}
-
-	// Clean up ENI if we auto-created one (not pre-created)
-	// Pre-created ENIs are managed by the caller (e.g. ELBv2 service)
-	if instance.ENIId != "" && d.vpcService != nil {
-		// Only clean up ENIs we created (description starts with "System interface")
-		result, err := d.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
-			NetworkInterfaceIds: []*string{aws.String(instance.ENIId)},
-		}, utils.GlobalAccountID)
-		if err == nil && len(result.NetworkInterfaces) > 0 {
-			desc := aws.StringValue(result.NetworkInterfaces[0].Description)
-			if len(desc) >= 16 && desc[:16] == "System interface" {
-				if _, delErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-					NetworkInterfaceId: aws.String(instance.ENIId),
-				}, utils.GlobalAccountID); delErr != nil {
-					slog.Warn("Failed to cleanup system ENI", "eniId", instance.ENIId, "err", delErr)
-				}
-			}
-		}
-	}
+// cleanupFailedSystemInstance handles cleanup when a system instance launch
+// fails after partial setup (state added, volumes created, etc). Delegates
+// to vm.Manager.MarkFailed which runs the synchronous teardown chain
+// (volume unmount/delete, tap cleanup, ENI delete, IP release, resource
+// deallocation, state migration to terminated KV).
+func (d *Daemon) cleanupFailedSystemInstance(instance *vm.VM, _ *ec2.InstanceTypeInfo) {
+	d.vmMgr.MarkFailed(instance, "system_instance_launch_failed")
 }
 
 // WaitForSystemInstance polls until the instance reaches running state or times out.

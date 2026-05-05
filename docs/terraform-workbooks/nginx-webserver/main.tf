@@ -85,7 +85,7 @@ data "aws_ami" "ubuntu" {
 
   filter {
     name   = "name"
-    values = ["*ubuntu-24.04*"]
+    values = ["*ubuntu-26.04*"]
   }
 
   filter {
@@ -220,7 +220,7 @@ resource "aws_security_group" "web" {
 }
 
 # ---------------------------------------------------------------------------
-# EC2 Instance — Ubuntu 24.04 with Nginx installed via cloud-init
+# EC2 Instance — Ubuntu 26.04 with Nginx installed via cloud-init
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "nginx" {

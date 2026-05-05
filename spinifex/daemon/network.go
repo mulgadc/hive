@@ -40,10 +40,13 @@ type NetworkPlumber interface {
 // OVSNetworkPlumber implements NetworkPlumber using system commands.
 type OVSNetworkPlumber struct{}
 
-var _ NetworkPlumber = (*OVSNetworkPlumber)(nil)
+var (
+	_ NetworkPlumber    = (*OVSNetworkPlumber)(nil)
+	_ vm.NetworkPlumber = (*OVSNetworkPlumber)(nil)
+)
 
 func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
-	tapName := TapDeviceName(eniId)
+	tapName := vm.TapDeviceName(eniId)
 	ifaceID := OVSIfaceID(eniId)
 
 	// 0. Clear any prior state on both the OVS and kernel sides. They have
@@ -94,7 +97,7 @@ func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 }
 
 func (p *OVSNetworkPlumber) CleanupTapDevice(eniId string) error {
-	tapName := TapDeviceName(eniId)
+	tapName := vm.TapDeviceName(eniId)
 
 	// 1. Remove from br-int (--if-exists avoids error if already gone)
 	if out, err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).CombinedOutput(); err != nil {
@@ -110,65 +113,10 @@ func (p *OVSNetworkPlumber) CleanupTapDevice(eniId string) error {
 	return nil
 }
 
-// setupExtraENINICs creates tap devices on br-int and appends matching QEMU
-// virtio-net device entries to instance.Config for each additional ENI a
-// system VM spans. The primary ENI (instance.ENIId) is handled separately by
-// the LaunchInstance caller. Cloud-init brings the guest interfaces up via
-// per-MAC DHCP blocks written by generateNetworkConfig.
-func (d *Daemon) setupExtraENINICs(instance *vm.VM) error {
-	for idx, extra := range instance.ExtraENIs {
-		if err := d.networkPlumber.SetupTapDevice(extra.ENIID, extra.ENIMac); err != nil {
-			slog.Error("Failed to set up tap device for extra ENI", "eni", extra.ENIID, "err", err)
-			return fmt.Errorf("setup tap device for extra ENI %s: %w", extra.ENIID, err)
-		}
-		extraTapName := TapDeviceName(extra.ENIID)
-		netID := fmt.Sprintf("net%d", idx+1)
-		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-			Value: fmt.Sprintf("tap,id=%s,ifname=%s,script=no,downscript=no", netID, extraTapName),
-		})
-		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-			Value: fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s", netID, extra.ENIMac),
-		})
-		slog.Info("Extra VPC NIC configured",
-			"tap", extraTapName, "eni", extra.ENIID, "mac", extra.ENIMac, "subnet", extra.SubnetID)
-	}
-	return nil
-}
-
-// cleanupExtraENITaps removes tap devices for every extra ENI attached to a
-// system VM. Errors are logged but not returned so a partial cleanup still
-// frees as many resources as possible.
-func (d *Daemon) cleanupExtraENITaps(instance *vm.VM) {
-	for _, extra := range instance.ExtraENIs {
-		if err := d.networkPlumber.CleanupTapDevice(extra.ENIID); err != nil {
-			slog.Warn("Failed to clean up extra ENI tap device", "eni", extra.ENIID, "err", err)
-		}
-	}
-}
-
-// TapDeviceName returns the Linux tap device name for an ENI.
-// Linux IFNAMSIZ limits interface names to 15 characters.
-// ENI IDs like "eni-abc123def456789" are too long, so we truncate.
-func TapDeviceName(eniId string) string {
-	id := strings.TrimPrefix(eniId, "eni-")
-	name := "tap" + id
-	if len(name) > 15 {
-		name = name[:15]
-	}
-	return name
-}
-
 // OVSIfaceID returns the OVS external_ids:iface-id value for an ENI.
 // This must match the OVN LogicalSwitchPort name for ovn-controller binding.
 func OVSIfaceID(eniId string) string {
 	return "port-" + eniId
-}
-
-// generateDevMAC creates a locally-administered unicast MAC for the
-// dev/hostfwd NIC. The "dev:" tag disambiguates from the mgmt NIC of the
-// same instance (which shares instanceId).
-func generateDevMAC(instanceId string) string {
-	return utils.HashMAC("dev:" + instanceId)
 }
 
 // generateMgmtMAC creates a locally-administered unicast MAC for the

@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,8 +12,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
-	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
-	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -347,8 +346,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	var successCount int
 	for _, instance := range instances {
 		// Skip if instance was terminated by a concurrent request
-		var status vm.InstanceState
-		d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+		status := d.vmMgr.Status(instance)
 		if status != vm.StatePending && status != vm.StateProvisioning {
 			slog.Info("Instance state changed during provisioning, skipping launch",
 				"instanceId", instance.ID, "status", string(status))
@@ -358,14 +356,14 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		// Pre-compute dev MAC so cloud-init can generate per-interface netplan
 		// that suppresses the default route on the dev/hostfwd NIC.
 		if d.config.Daemon.DevNetworking && instance.ENIId != "" {
-			instance.DevMAC = generateDevMAC(instance.ID)
+			instance.DevMAC = vm.GenerateDevMAC(instance.ID)
 		}
 
 		// Prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
 		volumeInfos, err := d.instanceService.GenerateVolumes(runInstancesInput, instance)
 		if err != nil {
 			slog.Error("handleEC2RunInstances GenerateVolumes failed", "instanceId", instance.ID, "err", err)
-			d.markInstanceFailed(instance, "volume_preparation_failed")
+			d.vmMgr.MarkFailed(instance, "volume_preparation_failed")
 			continue
 		}
 
@@ -383,15 +381,15 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		}
 
 		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-		err = d.LaunchInstance(instance)
+		err = d.vmMgr.Run(instance)
 		if err != nil {
-			slog.Error("handleEC2RunInstances LaunchInstance failed", "instanceId", instance.ID, "err", err)
-			d.markInstanceFailed(instance, "launch_failed")
+			slog.Error("handleEC2RunInstances vmMgr.Run failed", "instanceId", instance.ID, "err", err)
+			d.vmMgr.MarkFailed(instance, "launch_failed")
 			continue
 		}
 
 		// Discover actual guest device names via QMP query-block
-		d.updateGuestDeviceNames(instance)
+		d.vmMgr.UpdateGuestDeviceNames(instance)
 
 		successCount++
 		slog.Info("handleEC2RunInstances launched instance", "instanceId", instance.ID)
@@ -403,19 +401,18 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 func (d *Daemon) handleRebootInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Rebooting instance", "id", command.ID)
 
-	var status vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
-
-	if status != vm.StateRunning {
-		slog.Error("RebootInstance: instance not in running state", "instanceId", command.ID, "status", status)
-		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
-		return
-	}
-
-	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_reset"}, command.ID)
-	if err != nil {
-		slog.Error("RebootInstance: QMP system_reset failed", "instanceId", command.ID, "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
+	if err := d.vmMgr.Reboot(instance.ID); err != nil {
+		switch {
+		case errors.Is(err, vm.ErrInstanceNotFound):
+			respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		case errors.Is(err, vm.ErrInvalidTransition):
+			slog.Error("RebootInstance: instance not in running state",
+				"instanceId", command.ID, "err", err)
+			respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
+		default:
+			slog.Error("RebootInstance: reboot failed", "instanceId", command.ID, "err", err)
+			respondWithError(msg, awserrors.ErrorServerInternal)
+		}
 		return
 	}
 
@@ -430,8 +427,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	slog.Info("Starting instance", "id", command.ID)
 
 	// Validate instance is in stopped state
-	var status vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
+	status := d.vmMgr.Status(instance)
 
 	if status != vm.StateStopped {
 		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
@@ -449,17 +445,14 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 		}
 	}
 
-	// Clear stop attribute before launch so WriteState inside LaunchInstance
+	// Clear stop attribute before launch so WriteState inside the manager
 	// persists the correct attributes. Without this, a daemon restart after
 	// a stop→start cycle would see StopInstance=true and skip reconnecting QEMU.
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.Attributes = command.Attributes })
+	d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Attributes = command.Attributes })
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-	err := d.LaunchInstance(instance)
-
-	if err != nil {
-		slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-		// Free the resource on failure
+	if err := d.vmMgr.Start(instance.ID); err != nil {
+		slog.Error("handleStartInstance: vmMgr.Start failed", "err", err)
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
 		}
@@ -468,7 +461,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	}
 
 	// Discover actual guest device names via QMP query-block
-	d.updateGuestDeviceNames(instance)
+	d.vmMgr.UpdateGuestDeviceNames(instance)
 
 	slog.Info("Instance started", "instanceId", instance.ID)
 
@@ -481,22 +474,16 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 	isTerminate := command.Attributes.TerminateInstance
 	action := "Stopping"
 	initialState := vm.StateStopping
-	finalState := vm.StateStopped
 	if isTerminate {
 		action = "Terminating"
 		initialState = vm.StateShuttingDown
-		finalState = vm.StateTerminated
 	}
 
 	slog.Info(action+" instance", "id", command.ID)
 
-	// Check state validity before attempting transition — return the correct
-	// AWS error code when the instance is already stopped/terminated/etc.
-	var currentState vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { currentState = v.Status })
+	currentState := d.vmMgr.Status(instance)
 
-	// If instance is already shutting-down and we're asked to terminate, treat
-	// as idempotent — the finalizeTermination goroutine is already cleaning up.
+	// Idempotent: a concurrent terminate goroutine is already cleaning up.
 	if isTerminate && currentState == vm.StateShuttingDown {
 		slog.Info("Instance already shutting down, terminate is idempotent", "instanceId", instance.ID)
 		if err := msg.Respond([]byte(`{}`)); err != nil {
@@ -505,6 +492,10 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 		return
 	}
 
+	// Validate the transition synchronously before dispatching so the AWS
+	// SDK sees IncorrectInstanceState (400) instead of a stale 200. The
+	// async Stop/Terminate path re-validates and surfaces vm.ErrInvalidTransition
+	// on a racing transition; we map that into the same AWS error below.
 	if !vm.IsValidTransition(currentState, initialState) {
 		slog.Warn("Instance in incorrect state for "+strings.ToLower(action),
 			"instanceId", instance.ID, "currentState", string(currentState))
@@ -512,107 +503,34 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 		return
 	}
 
-	// Transition to the initial transitional state
-	if err := d.TransitionState(instance, initialState); err != nil {
-		slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
+	// Stamp the command attributes onto the VM before dispatch so the persisted
+	// state reflects the user-stop / user-terminate intent (e.g. for the
+	// recovery path that distinguishes user-stopped from crash-stopped).
+	d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) { v.Attributes = command.Attributes })
 
-	// Respond immediately - operation will complete in background
-	// stopInstance() handles the QMP shutdown command, so we don't send it here
+	// Respond immediately - cleanup completes in background.
 	if err := msg.Respond([]byte(`{}`)); err != nil {
 		slog.Error("Failed to respond to NATS request", "err", err)
 	}
 
-	// Run cleanup in goroutine to not block NATS
-	go func(inst *vm.VM, attrs types.EC2CommandAttributes) {
-		stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
-
-		if stopErr != nil {
-			slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", stopErr, "id", inst.ID)
-			if err := d.TransitionState(inst, vm.StateError); err != nil {
-				slog.Error("Failed to transition to error state", "instanceId", inst.ID, "err", err)
-			}
+	go func(id string) {
+		var err error
+		if isTerminate {
+			err = d.vmMgr.Terminate(id)
 		} else {
-			d.vmMgr.Inspect(inst, func(v *vm.VM) {
-				v.Attributes = attrs
-				v.LastNode = d.node
-			})
-
-			if err := d.TransitionState(inst, finalState); err != nil {
-				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
-			}
-			slog.Info("Instance "+string(finalState), "id", inst.ID)
-
-			// Remove instance from placement group on terminate
-			if isTerminate && inst.PlacementGroupName != "" && d.placementGroupService != nil {
-				if _, pgErr := d.placementGroupService.RemoveInstance(&handlers_ec2_placementgroup.RemoveInstanceInput{
-					GroupName:  inst.PlacementGroupName,
-					NodeName:   inst.PlacementGroupNode,
-					InstanceID: inst.ID,
-				}, inst.AccountID); pgErr != nil {
-					slog.Error("Failed to remove instance from placement group",
-						"instanceId", inst.ID, "groupName", inst.PlacementGroupName, "err", pgErr)
-				}
-			}
-
-			if d.jsManager != nil {
-				if isTerminate {
-					// Write to terminated KV bucket (auto-expires after 1 hour via TTL).
-					// If this fails, keep the instance in local state so DescribeInstances
-					// still sees it and restoreInstances can retry the KV migration.
-					if err := d.jsManager.WriteTerminatedInstance(inst.ID, inst); err != nil {
-						slog.Error("Failed to write terminated instance to KV, keeping in local state for retry",
-							"instanceId", inst.ID, "err", err)
-						return
-					}
-				} else {
-					// Write to shared KV first — if daemon crashes after this but
-					// before local cleanup, restoreInstances handles the overlap.
-					if err := d.jsManager.WriteStoppedInstance(inst.ID, inst); err != nil {
-						slog.Error("Failed to write stopped instance to shared KV, keeping local ownership",
-							"instanceId", inst.ID, "err", err)
-						return
-					}
-				}
-
-				// Guard + delete must be atomic under the same lock hold.
-				// A concurrent ec2.start handler may have loaded the instance
-				// from stopped KV, re-added it to VMS with a new pointer, and
-				// launched it. Deleting here would destroy the running instance's
-				// state — creating a "ghost instance" visible nowhere.
-				if !d.vmMgr.DeleteIf(inst.ID, inst) {
-					slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
-						"instanceId", inst.ID, "state", string(finalState))
-					return
-				}
-
-				// Unsubscribe from per-instance NATS topic. Safe to do after
-				// the delete — LaunchInstance already unsubscribes stale entries
-				// before creating new ones (daemon.go:1658-1664).
-				d.mu.Lock()
-				if sub, ok := d.natsSubscriptions[inst.ID]; ok {
-					if err := sub.Unsubscribe(); err != nil {
-						slog.Error("Failed to unsubscribe instance", "instanceId", inst.ID, "err", err)
-					}
-					delete(d.natsSubscriptions, inst.ID)
-				}
-				d.mu.Unlock()
-
-				// Persist local state without the instance
-				if err := d.WriteState(); err != nil {
-					slog.Error("Failed to persist state after releasing instance, re-adding to local map for consistency",
-						"instanceId", inst.ID, "err", err)
-					// Only re-add if another handler hasn't claimed the slot
-					d.vmMgr.InsertIfAbsent(inst)
-				} else {
-					slog.Info("Released instance ownership to KV",
-						"instanceId", inst.ID, "state", string(finalState), "lastNode", d.node)
-				}
-			}
+			err = d.vmMgr.Stop(id)
 		}
-	}(instance, command.Attributes)
+		if err != nil {
+			// Race with another transition: log at the right level so it
+			// shows up in dashboards but doesn't trigger paging.
+			if errors.Is(err, vm.ErrInvalidTransition) {
+				slog.Warn("Lifecycle transition raced; ack already sent",
+					"id", id, "action", strings.ToLower(action), "err", err)
+				return
+			}
+			slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", err, "id", id)
+		}
+	}(instance.ID)
 }
 
 // handleEC2DescribeInstances responds with instances running on this node visible to the caller.
@@ -698,9 +616,9 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	d.vmMgr.Insert(instance)
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-	err = d.LaunchInstance(instance)
+	err = d.vmMgr.Run(instance)
 	if err != nil {
-		slog.Error("handleEC2StartStoppedInstance: LaunchInstance failed", "instanceId", req.InstanceID, "err", err)
+		slog.Error("handleEC2StartStoppedInstance: vmMgr.Run failed", "instanceId", req.InstanceID, "err", err)
 		// Rollback: deallocate resources and remove from local map
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
@@ -711,7 +629,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	}
 
 	// Discover actual guest device names via QMP query-block
-	d.updateGuestDeviceNames(instance)
+	d.vmMgr.UpdateGuestDeviceNames(instance)
 
 	// Remove from shared KV now that it's running locally.
 	// Retry once on failure — a stale KV entry risks duplicate starts.

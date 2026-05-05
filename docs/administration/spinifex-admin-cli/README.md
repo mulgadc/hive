@@ -77,7 +77,7 @@ Prints per-node CPU/memory usage and cluster-wide instance type availability.
 
 ```bash
 spx admin images list
-spx admin images import --name debian-12-arm64
+spx admin images import --name debian-13-arm64
 ```
 
 Catalog imports verify the image against the catalog-declared SHA-256/SHA-512 digest before extraction. Use `--file` to import operator-supplied media (verification skipped — operator is responsible for integrity), or `--force` to re-download after a checksum mismatch.
