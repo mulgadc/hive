@@ -149,6 +149,18 @@ SETUP_STAGES=fixown /usr/local/share/spinifex/setup.sh
 # setup.sh's create_directories — it resolves to /etc/spinifex, so
 # {BaseDir}/config/master.key automatically points at /etc/spinifex/master.key.
 
+# Bootstrap the spinifex user's SSH directory with a generated key pair so
+# ~/.ssh exists and the operator can immediately use ssh-keygen / ssh-copy-id
+# without hitting "No such file or directory" errors documented in the setup guide.
+if [ ! -f /home/spinifex/.ssh/id_ed25519 ]; then
+    mkdir -p /home/spinifex/.ssh
+    chmod 700 /home/spinifex/.ssh
+    ssh-keygen -t ed25519 -f /home/spinifex/.ssh/id_ed25519 -N "" -C "spinifex@$(hostname)"
+    chown -R spinifex:spinifex /home/spinifex/.ssh
+    chmod 600 /home/spinifex/.ssh/id_ed25519
+    chmod 644 /home/spinifex/.ssh/id_ed25519.pub
+fi
+
 # Copy AWS credentials to the spinifex user's home directory.
 # spx admin init runs with HOME=/root (set by the systemd unit), so credentials
 # land in /root/.aws/. Copy them to the spinifex user's home so the operator
