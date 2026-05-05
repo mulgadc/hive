@@ -336,7 +336,7 @@ func TestHandleInstanceCrash_FirstCrashSetsTime(t *testing.T) {
 	assert.Equal(t, 1, instance.Health.CrashCount)
 
 	// Reset to running for a second crash
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
+	d.vmMgr.UpdateState(instance.ID, func(v *vm.VM) {
 		v.Status = vm.StateRunning
 		v.Running = true
 		v.PID = 222

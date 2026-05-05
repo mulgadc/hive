@@ -119,6 +119,25 @@ func TestManager_Inspect(t *testing.T) {
 	}
 }
 
+func TestManager_Status(t *testing.T) {
+	m := NewManager()
+	a := mkVM("i-a")
+	a.Status = StatePending
+	m.Insert(a)
+
+	if got := m.Status(a); got != StatePending {
+		t.Fatalf("Status: got %s, want %s", got, StatePending)
+	}
+
+	// Status reads under lock without verifying membership — orphaned VMs
+	// (mid-cleanup, never-inserted) still return a consistent value.
+	loose := mkVM("i-loose")
+	loose.Status = StateRunning
+	if got := m.Status(loose); got != StateRunning {
+		t.Fatalf("Status on loose VM: got %s, want %s", got, StateRunning)
+	}
+}
+
 func TestManager_ForEachAndSnapshot(t *testing.T) {
 	m := NewManager()
 	want := map[string]bool{"i-1": true, "i-2": true, "i-3": true}

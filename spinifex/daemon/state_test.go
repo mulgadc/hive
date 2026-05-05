@@ -1006,7 +1006,8 @@ func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
 	// Run one watchdog tick manually instead of waiting for the ticker
 	var stuck []*vm.VM
 	for _, instance := range daemon.vmMgr.Snapshot() {
-		if (instance.Status == vm.StatePending || instance.Status == vm.StateProvisioning) &&
+		status := daemon.vmMgr.Status(instance)
+		if (status == vm.StatePending || status == vm.StateProvisioning) &&
 			instance.Instance != nil && instance.Instance.LaunchTime != nil &&
 			time.Since(*instance.Instance.LaunchTime) > 5*time.Minute {
 			stuck = append(stuck, instance)
@@ -1027,9 +1028,7 @@ func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
 	assert.Equal(t, "Server.InternalError", *stuckBefore.Instance.StateReason.Code)
 	assert.Equal(t, "launch_timeout", *stuckBefore.Instance.StateReason.Message)
 	require.Eventually(t, func() bool {
-		var status vm.InstanceState
-		daemon.vmMgr.Inspect(stuckBefore, func(v *vm.VM) { status = v.Status })
-		return status == vm.StateTerminated
+		return daemon.vmMgr.Status(stuckBefore) == vm.StateTerminated
 	}, 5*time.Second, 10*time.Millisecond, "MarkFailed cleanup goroutine should reach terminated")
 
 	// Fresh instance should still be pending

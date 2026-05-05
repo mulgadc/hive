@@ -374,9 +374,7 @@ func TestReboot_DoesNotChangeStatus(t *testing.T) {
 
 	v, ok := m.Get("i-1")
 	require.True(t, ok)
-	var status InstanceState
-	m.Inspect(v, func(v *VM) { status = v.Status })
-	assert.Equal(t, StateRunning, status)
+	assert.Equal(t, StateRunning, m.Status(v))
 }
 
 func TestReboot_QMPFailureSurfacesError(t *testing.T) {

@@ -44,15 +44,13 @@ func (m *Manager) AttachVolume(id, volumeID, device string) (AttachVolumeResult,
 		return AttachVolumeResult{}, ErrInstanceNotFound
 	}
 
-	var status InstanceState
-	m.Inspect(instance, func(v *VM) { status = v.Status })
-	if status != StateRunning {
+	if status := m.Status(instance); status != StateRunning {
 		return AttachVolumeResult{}, fmt.Errorf("%w: cannot attach to instance %s in state %s",
 			ErrInvalidTransition, id, status)
 	}
 
 	if device == "" {
-		m.Inspect(instance, func(v *VM) { device = nextAvailableDevice(v) })
+		m.UpdateState(id, func(v *VM) { device = nextAvailableDevice(v) })
 		if device == "" {
 			return AttachVolumeResult{}, ErrAttachmentLimitExceeded
 		}
@@ -190,7 +188,7 @@ func (m *Manager) AttachVolume(id, volumeID, device string) (AttachVolumeResult,
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	m.Inspect(instance, func(v *VM) {
+	m.UpdateState(id, func(v *VM) {
 		if v.Instance == nil {
 			return
 		}
@@ -238,9 +236,7 @@ func (m *Manager) DetachVolume(id, volumeID, device string, force bool) (string,
 		return "", ErrInstanceNotFound
 	}
 
-	var status InstanceState
-	m.Inspect(instance, func(v *VM) { status = v.Status })
-	if status != StateRunning {
+	if status := m.Status(instance); status != StateRunning {
 		return "", fmt.Errorf("%w: cannot detach from instance %s in state %s",
 			ErrInvalidTransition, id, status)
 	}
@@ -330,7 +326,7 @@ func (m *Manager) DetachVolume(id, volumeID, device string, force bool) (string,
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	m.Inspect(instance, func(v *VM) {
+	m.UpdateState(id, func(v *VM) {
 		if v.Instance == nil {
 			return
 		}

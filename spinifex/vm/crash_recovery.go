@@ -80,10 +80,7 @@ func ClassifyCrashReason(waitErr error) string {
 // Wired as Deps.CrashHandler so the launch goroutine in lifecycle.go can
 // invoke it without importing the manager into a separate goroutine spawner.
 func (m *Manager) HandleCrash(instance *VM, waitErr error) {
-	var status InstanceState
-	m.Inspect(instance, func(v *VM) { status = v.Status })
-
-	if status != StateRunning {
+	if status := m.Status(instance); status != StateRunning {
 		slog.Debug("QEMU exited but instance not in running state, skipping crash handler",
 			"instance", instance.ID, "status", status)
 		return
@@ -106,7 +103,7 @@ func (m *Manager) HandleCrash(instance *VM, waitErr error) {
 	}
 
 	now := time.Now()
-	m.Inspect(instance, func(v *VM) {
+	m.UpdateState(instance.ID, func(v *VM) {
 		v.Health.CrashCount++
 		v.Health.LastCrashTime = now
 		v.Health.LastCrashReason = reason
@@ -158,7 +155,7 @@ func (m *Manager) MaybeRestart(instance *VM) {
 		restartCount int
 		exceeded     bool
 	)
-	m.Inspect(instance, func(v *VM) {
+	m.UpdateState(instance.ID, func(v *VM) {
 		health := &v.Health
 		if !health.FirstCrashTime.IsZero() && now.Sub(health.FirstCrashTime) > RestartWindow {
 			slog.Info("Crash window expired, resetting counters", "instance", v.ID)
@@ -217,7 +214,7 @@ func (m *Manager) MaybeRestart(instance *VM) {
 func (m *Manager) RestartCrashedInstance(instance *VM) {
 	var skipReason string
 	var restartCount int
-	m.Inspect(instance, func(v *VM) {
+	m.UpdateState(instance.ID, func(v *VM) {
 		if v.Status != StateError {
 			skipReason = fmt.Sprintf("not in error state (%s)", v.Status)
 			return
