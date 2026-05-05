@@ -255,7 +255,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 
 	// Pre-compute dev MAC for dual-NIC cloud-init
 	if d.config.Daemon.DevNetworking && instance.ENIId != "" {
-		instance.DevMAC = generateDevMAC(instance.ID)
+		instance.DevMAC = vm.GenerateDevMAC(instance.ID)
 	}
 
 	// Management NIC: allocate IP, generate MAC, create TAP on br-mgmt
@@ -322,7 +322,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 	}
 
 	// Launch QEMU VM
-	if err := d.LaunchInstance(instance); err != nil {
+	if err := d.vmMgr.Run(instance); err != nil {
 		d.cleanupFailedSystemInstance(instance, instanceType)
 		return nil, fmt.Errorf("launch instance: %w", err)
 	}

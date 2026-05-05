@@ -287,9 +287,9 @@ func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
 		return
 	}
 
-	// LaunchInstance handles the full relaunch flow:
-	// check PID → MountVolumes → StartInstance → CreateQMPClient → NATS subscribe → Running
-	if err := d.LaunchInstance(instance); err != nil {
+	// vmMgr.Run handles the full relaunch flow:
+	// check PID → mount → exec QEMU → attach QMP → NATS subscribe (via hook) → Running
+	if err := d.vmMgr.Run(instance); err != nil {
 		slog.Error("Failed to restart crashed instance",
 			"instance", instance.ID, "err", err)
 		d.resourceMgr.deallocate(instanceType)
