@@ -281,6 +281,23 @@ func TestStartLocal_SucceedsWithoutNATS(t *testing.T) {
 	assert.Equal(t, natsDisconnected, body.NATS)
 }
 
+// TestAssertNoClusterServicesInitialised_GuardsTier1Invariant — §1e-audit:
+// the invariant guard at the end of startLocal must reject any state where a
+// cluster-scoped handle has been initialised before startCluster runs. A
+// future edit that hoists JetStream/KV-touching init into startLocal would
+// re-introduce the boot-time NATS dependency that 1d removed; this test
+// pins the regression.
+func TestAssertNoClusterServicesInitialised_GuardsTier1Invariant(t *testing.T) {
+	clean := &Daemon{}
+	require.NoError(t, clean.assertNoClusterServicesInitialised(),
+		"freshly-constructed daemon must satisfy the Tier 1 invariant")
+
+	dirty := &Daemon{jsManager: &JetStreamManager{}}
+	err := dirty.assertNoClusterServicesInitialised()
+	require.Error(t, err, "non-nil cluster handle must trip the invariant")
+	assert.Contains(t, err.Error(), "jsManager")
+}
+
 // TestStartCluster_RetriesUntilContextCancelled — §1d: startCluster's NATS
 // connect loop honours d.ctx. Cancelling the daemon context unblocks an
 // otherwise-infinite retry.

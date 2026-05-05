@@ -691,6 +691,15 @@ func (d *Daemon) Start() error {
 // instance-state recovery. Failures here are fatal — these are local
 // configuration errors (TLS misconfig, bad config path) that retry would not
 // fix. The daemon is reachable via /local/* and /health once this returns.
+//
+// Invariant (DDIL §1e-audit): no code in startLocal may touch JetStream KV.
+// The 25 cluster-scoped / read-cache / expendable buckets enumerated in
+// daemon-local-autonomy.md §1e-audit are initialised exclusively from
+// startCluster() — touching any of them here would defeat Tier 1 autonomy by
+// blocking on NATS at boot. The only KV bucket the daemon owns at Tier 1 is
+// spinifex-instance-state, and even that is read from the local file (see 1a),
+// not JetStream, in this phase. assertNoClusterServicesInitialised below
+// enforces the invariant at runtime.
 func (d *Daemon) startLocal() error {
 	// ClusterManager serves /health and /local/* over HTTPS. NATS-independent.
 	if err := d.ClusterManager(); err != nil {
@@ -743,8 +752,56 @@ func (d *Daemon) startLocal() error {
 		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
 	}
 
+	if err := d.assertNoClusterServicesInitialised(); err != nil {
+		return fmt.Errorf("startLocal Tier 1 invariant violated: %w", err)
+	}
+
 	d.ready.Store(true)
 	slog.Info("Daemon local-bootstrap complete", "node", d.node, "elapsed", time.Since(d.startTime).Round(time.Second))
+	return nil
+}
+
+// assertNoClusterServicesInitialised guards the DDIL §1e-audit Tier 1
+// invariant: at the end of startLocal, no NATS-dependent or KV-backed handle
+// may exist. A non-nil field here means a future edit accidentally hoisted a
+// cluster-scoped initialiser into the no-NATS phase, which would re-introduce
+// the boot-time NATS dependency that 1d removed. Cheap nil sweep — runs once
+// per process, on the bootstrap path only.
+func (d *Daemon) assertNoClusterServicesInitialised() error {
+	switch {
+	case d.natsConn != nil:
+		return errors.New("d.natsConn must be nil before startCluster")
+	case d.jsManager != nil:
+		return errors.New("d.jsManager must be nil before startCluster")
+	case d.instanceService != nil:
+		return errors.New("d.instanceService must be nil before startCluster")
+	case d.imageService != nil:
+		return errors.New("d.imageService must be nil before startCluster")
+	case d.snapshotService != nil:
+		return errors.New("d.snapshotService must be nil before startCluster")
+	case d.volumeService != nil:
+		return errors.New("d.volumeService must be nil before startCluster")
+	case d.eigwService != nil:
+		return errors.New("d.eigwService must be nil before startCluster")
+	case d.igwService != nil:
+		return errors.New("d.igwService must be nil before startCluster")
+	case d.placementGroupService != nil:
+		return errors.New("d.placementGroupService must be nil before startCluster")
+	case d.vpcService != nil:
+		return errors.New("d.vpcService must be nil before startCluster")
+	case d.routeTableService != nil:
+		return errors.New("d.routeTableService must be nil before startCluster")
+	case d.natGatewayService != nil:
+		return errors.New("d.natGatewayService must be nil before startCluster")
+	case d.externalIPAM != nil:
+		return errors.New("d.externalIPAM must be nil before startCluster")
+	case d.eipService != nil:
+		return errors.New("d.eipService must be nil before startCluster")
+	case d.accountService != nil:
+		return errors.New("d.accountService must be nil before startCluster")
+	case d.elbv2Service != nil:
+		return errors.New("d.elbv2Service must be nil before startCluster")
+	}
 	return nil
 }
 
@@ -752,6 +809,12 @@ func (d *Daemon) startLocal() error {
 // retries NATS indefinitely (cap 60s backoff) and only returns once the node
 // is fully participating in the cluster or d.ctx is cancelled. Errors here
 // are logged, never propagated as a process-exit.
+//
+// Invariant (DDIL §1e-audit): every JetStream KV bucket — the 18 cluster-scoped
+// buckets, 4 read-cache (IAM) buckets, and 2 expendable buckets enumerated in
+// daemon-local-autonomy.md §1e-audit — is initialised here, never in
+// startLocal. Adding a new cluster-scoped service belongs in this function;
+// hoisting one into startLocal trips assertNoClusterServicesInitialised.
 func (d *Daemon) startCluster() error {
 	if err := d.connectNATS(); err != nil {
 		return fmt.Errorf("connect NATS: %w", err)
