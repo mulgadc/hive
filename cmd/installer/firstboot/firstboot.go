@@ -43,6 +43,9 @@ type Config struct {
 	// the headless path. Passed to `spx admin init --email=<value>` when set;
 	// omitted entirely when empty.
 	Email string
+	// GPUPassthrough enables VFIO GPU passthrough by passing --gpu-passthrough
+	// to `spx admin init`, which writes gpu_passthrough = true in the daemon config.
+	GPUPassthrough bool
 }
 
 // Write drops the firstboot script and systemd unit into root, which should be
@@ -146,6 +149,18 @@ SETUP_STAGES=fixown /usr/local/share/spinifex/setup.sh
 # setup.sh's create_directories — it resolves to /etc/spinifex, so
 # {BaseDir}/config/master.key automatically points at /etc/spinifex/master.key.
 
+# Bootstrap the spinifex user's SSH directory with a generated key pair so
+# ~/.ssh exists and the operator can immediately use ssh-keygen / ssh-copy-id
+# without hitting "No such file or directory" errors documented in the setup guide.
+if [ ! -f /home/spinifex/.ssh/id_ed25519 ]; then
+    mkdir -p /home/spinifex/.ssh
+    chmod 700 /home/spinifex/.ssh
+    ssh-keygen -t ed25519 -f /home/spinifex/.ssh/id_ed25519 -N "" -C "spinifex@$(hostname)"
+    chown -R spinifex:spinifex /home/spinifex/.ssh
+    chmod 600 /home/spinifex/.ssh/id_ed25519
+    chmod 644 /home/spinifex/.ssh/id_ed25519.pub
+fi
+
 # Copy AWS credentials to the spinifex user's home directory.
 # spx admin init runs with HOME=/root (set by the systemd unit), so credentials
 # land in /root/.aws/. Copy them to the spinifex user's home so the operator
@@ -210,11 +225,15 @@ func buildClusterCmd(cfg Config) string {
 		// validator already rejects whitespace and @-chains.
 		emailFlag = " --email=" + shellEscapeSingle(cfg.Email)
 	}
+	gpuFlag := ""
+	if cfg.GPUPassthrough {
+		gpuFlag = " --gpu-passthrough"
+	}
 	switch cfg.ClusterRole {
 	case "join":
 		return fmt.Sprintf("spx admin join --node %s --host %s%s", cfg.Hostname, cfg.JoinAddr, emailFlag)
 	default:
-		return fmt.Sprintf("spx admin init --node %s --nodes 1%s", cfg.Hostname, emailFlag)
+		return fmt.Sprintf("spx admin init --node %s --nodes 1%s%s", cfg.Hostname, emailFlag, gpuFlag)
 	}
 }
 

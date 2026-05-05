@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
+	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -381,10 +382,29 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
 		}
 
+		// Claim GPU for GPU instance types — binds the full IOMMU group to vfio-pci.
+		if d.gpuManager != nil && instancetypes.IsGPUType(instanceType) {
+			gpuDevice, gpuErr := d.gpuManager.Claim(instance.ID)
+			if gpuErr != nil {
+				slog.Error("handleEC2RunInstances: GPU claim failed", "instanceId", instance.ID, "err", gpuErr)
+				d.vmMgr.MarkFailed(instance, "gpu_claim_failed")
+				continue
+			}
+			instance.GPUPCIAddress = gpuDevice.PCIAddress
+			instance.GPUXVGAEnabled = gpuXVGAEnabled(gpuDevice, d.config.Daemon.GPUModelOverrides)
+			slog.Info("GPU claimed for instance", "instanceId", instance.ID, "gpu", gpuDevice.PCIAddress, "xvga", instance.GPUXVGAEnabled)
+		}
+
 		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 		err = d.vmMgr.Run(instance)
 		if err != nil {
 			slog.Error("handleEC2RunInstances vmMgr.Run failed", "instanceId", instance.ID, "err", err)
+			if instance.GPUPCIAddress != "" && d.gpuManager != nil {
+				if releaseErr := d.gpuManager.Release(instance.ID); releaseErr != nil {
+					slog.Error("handleEC2RunInstances: GPU release failed after launch failure",
+						"instanceId", instance.ID, "err", releaseErr)
+				}
+			}
 			d.vmMgr.MarkFailed(instance, "launch_failed")
 			continue
 		}
@@ -868,11 +888,32 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	instance.Attributes = types.EC2CommandAttributes{StartInstance: true}
 	d.vmMgr.Insert(instance)
 
+	// Claim GPU for GPU instance types — binds the full IOMMU group to vfio-pci.
+	if d.gpuManager != nil && instancetypes.IsGPUType(instanceType) {
+		gpuDevice, gpuErr := d.gpuManager.Claim(instance.ID)
+		if gpuErr != nil {
+			slog.Error("handleEC2StartStoppedInstance: GPU claim failed", "instanceId", req.InstanceID, "err", gpuErr)
+			d.resourceMgr.deallocate(instanceType)
+			d.vmMgr.Delete(instance.ID)
+			respondWithError(msg, awserrors.ErrorInsufficientInstanceCapacity)
+			return
+		}
+		instance.GPUPCIAddress = gpuDevice.PCIAddress
+		instance.GPUXVGAEnabled = gpuXVGAEnabled(gpuDevice, d.config.Daemon.GPUModelOverrides)
+		slog.Info("GPU claimed for instance", "instanceId", req.InstanceID, "gpu", gpuDevice.PCIAddress, "xvga", instance.GPUXVGAEnabled)
+	}
+
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	err = d.vmMgr.Run(instance)
 	if err != nil {
 		slog.Error("handleEC2StartStoppedInstance: vmMgr.Run failed", "instanceId", req.InstanceID, "err", err)
-		// Rollback: deallocate resources and remove from local map
+		// Rollback: release GPU if claimed, deallocate resources, remove from local map
+		if instance.GPUPCIAddress != "" && d.gpuManager != nil {
+			if releaseErr := d.gpuManager.Release(instance.ID); releaseErr != nil {
+				slog.Error("handleEC2StartStoppedInstance: GPU release failed after launch failure",
+					"instanceId", req.InstanceID, "err", releaseErr)
+			}
+		}
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
 		}

@@ -222,6 +222,9 @@ func (m *Manager) finalizeTerminated(instance *VM) error {
 func (m *Manager) stopCleanup(instance *VM) {
 	m.shutdownAndUnmount(instance)
 	m.cleanupTapDevices(instance)
+	if m.deps.InstanceCleaner != nil {
+		m.deps.InstanceCleaner.ReleaseGPU(instance)
+	}
 	m.deallocateResources(instance)
 }
 
@@ -238,6 +241,7 @@ func (m *Manager) terminateCleanup(instance *VM) {
 	m.cleanupTapDevices(instance)
 
 	if m.deps.InstanceCleaner != nil {
+		m.deps.InstanceCleaner.ReleaseGPU(instance)
 		m.deps.InstanceCleaner.ReleasePublicIP(instance)
 		m.deps.InstanceCleaner.DetachAndDeleteENI(instance)
 		m.deps.InstanceCleaner.RemoveFromPlacementGroup(instance)

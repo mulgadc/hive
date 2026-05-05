@@ -117,6 +117,13 @@ type VM struct {
 	// VM (e.g. "elbv2"). Empty for customer-launched instances. The UI
 	// filters out tagged VMs from customer-facing listings.
 	ManagedBy string `json:"managed_by,omitempty"`
+
+	// GPUPCIAddress is the PCI address of the GPU bound to this instance via VFIO
+	// (e.g. "0000:03:00.0"). Empty for non-GPU instances.
+	GPUPCIAddress string `json:"gpu_pci_address,omitempty"`
+	// GPUXVGAEnabled controls whether x-vga=on is passed to QEMU for this instance's
+	// GPU device. True for consumer GPUs; false for headless datacenter cards.
+	GPUXVGAEnabled bool `json:"gpu_xvga_enabled,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node
@@ -173,6 +180,10 @@ type Config struct {
 	// InstanceType is a friendly name (e.g., t3.micro, t4g.micro)
 	InstanceType string `json:"instance_type"`
 	Architecture string `json:"architecture"`
+
+	// UseUEFI requests OVMF firmware instead of the default SeaBIOS for x86_64 VMs.
+	// Falls back silently to SeaBIOS if OVMF is not installed on the host.
+	UseUEFI bool `json:"use_uefi,omitempty"`
 }
 
 func (cfg *Config) Execute() (*exec.Cmd, error) {
@@ -304,6 +315,14 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		}
 	} else if cfg.MachineType != "" {
 		args = append(args, "-M", cfg.MachineType)
+		if cfg.Architecture == "x86_64" && cfg.UseUEFI {
+			uefiPath := "/usr/share/ovmf/OVMF.fd"
+			if _, err := os.Stat(uefiPath); err == nil {
+				args = append(args, "-bios", uefiPath)
+			} else {
+				slog.Warn("OVMF firmware not found, falling back to SeaBIOS", "path", uefiPath)
+			}
+		}
 	}
 
 	slog.Info("Executing QEMU command:", "cmd", qemuArchitecture, "args", args)

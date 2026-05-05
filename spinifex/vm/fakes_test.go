@@ -148,6 +148,7 @@ type recordingInstanceCleaner struct {
 	releasePublicIP     []string
 	detachAndDeleteENI  []string
 	removeFromPlacement []string
+	releaseGPU          []string
 }
 
 func (c *recordingInstanceCleaner) DeleteVolumes(v *VM) {
@@ -178,6 +179,12 @@ func (c *recordingInstanceCleaner) RemoveFromPlacementGroup(v *VM) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.removeFromPlacement = append(c.removeFromPlacement, v.ID)
+}
+
+func (c *recordingInstanceCleaner) ReleaseGPU(v *VM) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releaseGPU = append(c.releaseGPU, v.ID)
 }
 
 func (c *recordingInstanceCleaner) deleteVolumesCount() int {

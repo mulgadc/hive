@@ -389,3 +389,50 @@ func (r *reclaimingStateStore) WriteStoppedInstance(id string, v *VM) error {
 	r.m.Insert(&VM{ID: id, Status: StateRunning})
 	return nil
 }
+
+func TestStopCleanup_InvokesReleaseGPU(t *testing.T) {
+	cleaner := &recordingInstanceCleaner{}
+	m := NewManagerWithDeps(Deps{InstanceCleaner: cleaner})
+	instance := &VM{ID: "i-stop", GPUPCIAddress: "0000:01:00.0"}
+
+	m.stopCleanup(instance)
+
+	if got := cleaner.releaseGPU; len(got) != 1 || got[0] != "i-stop" {
+		t.Fatalf("ReleaseGPU on stopCleanup: got %v, want [i-stop]", got)
+	}
+	if len(cleaner.deleteVolumes) != 0 || len(cleaner.releasePublicIP) != 0 || len(cleaner.detachAndDeleteENI) != 0 || len(cleaner.removeFromPlacement) != 0 {
+		t.Fatalf("stopCleanup leaked terminate-only calls: delete=%v pubip=%v eni=%v pg=%v",
+			cleaner.deleteVolumes, cleaner.releasePublicIP, cleaner.detachAndDeleteENI, cleaner.removeFromPlacement)
+	}
+}
+
+func TestTerminateCleanup_InvokesReleaseGPU(t *testing.T) {
+	cleaner := &recordingInstanceCleaner{}
+	m := NewManagerWithDeps(Deps{InstanceCleaner: cleaner})
+	instance := &VM{ID: "i-term", GPUPCIAddress: "0000:01:00.0"}
+
+	m.terminateCleanup(instance)
+
+	if got := cleaner.releaseGPU; len(got) != 1 || got[0] != "i-term" {
+		t.Fatalf("ReleaseGPU on terminateCleanup: got %v, want [i-term]", got)
+	}
+	if got := cleaner.deleteVolumes; len(got) != 1 || got[0] != "i-term" {
+		t.Fatalf("DeleteVolumes on terminateCleanup: got %v, want [i-term]", got)
+	}
+}
+
+func TestCleanup_NoGPU_StillInvokesReleaseGPU(t *testing.T) {
+	// The adapter no-ops for GPU-less instances; the manager must still
+	// invoke the method so the adapter owns that decision rather than the
+	// manager second-guessing it.
+	cleaner := &recordingInstanceCleaner{}
+	m := NewManagerWithDeps(Deps{InstanceCleaner: cleaner})
+	instance := &VM{ID: "i-cpu"}
+
+	m.stopCleanup(instance)
+	m.terminateCleanup(instance)
+
+	if got := len(cleaner.releaseGPU); got != 2 {
+		t.Fatalf("ReleaseGPU calls across stop+terminate: got %d, want 2", got)
+	}
+}
