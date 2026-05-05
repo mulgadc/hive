@@ -159,6 +159,68 @@ func (a *volumeMounterAdapter) Unmount(instance *vm.VM) error {
 	return nil
 }
 
+// MountOne sends ebs.mount for a single request and writes the resolved
+// NBDURI back into req.NBDURI. Used by hot-attach (Manager.AttachVolume).
+func (a *volumeMounterAdapter) MountOne(req *types.EBSRequest) error {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal ebs.mount request: %w", err)
+	}
+
+	reply, err := a.nc.Request(a.topic("mount"), payload, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("ebs.mount NATS request: %w", err)
+	}
+
+	var resp types.EBSMountResponse
+	if err := json.Unmarshal(reply.Data, &resp); err != nil {
+		return fmt.Errorf("unmarshal ebs.mount response: %w", err)
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("ebs.mount returned error: %s", resp.Error)
+	}
+	if resp.URI == "" {
+		return errors.New("ebs.mount response has empty URI")
+	}
+
+	req.NBDURI = resp.URI
+	return nil
+}
+
+// UnmountOne sends ebs.unmount for a single request. Best-effort: errors
+// are logged. Mirrors the pre-2d Daemon.rollbackEBSMount semantics so
+// AttachVolume rollback and DetachVolume Phase 3 share one code path.
+func (a *volumeMounterAdapter) UnmountOne(req types.EBSRequest) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		slog.Error("UnmountOne: failed to marshal unmount request",
+			"volume", req.Name, "err", err)
+		return
+	}
+	msg, err := a.nc.Request(a.topic("unmount"), payload, 10*time.Second)
+	if err != nil {
+		slog.Error("UnmountOne: ebs.unmount NATS request failed",
+			"volume", req.Name, "err", err)
+		return
+	}
+	var resp types.EBSUnMountResponse
+	if err := json.Unmarshal(msg.Data, &resp); err != nil {
+		slog.Error("UnmountOne: failed to unmarshal response",
+			"volume", req.Name, "err", err)
+		return
+	}
+	if resp.Error != "" {
+		slog.Error("UnmountOne: ebs.unmount returned error",
+			"volume", req.Name, "err", resp.Error)
+		return
+	}
+	if resp.Mounted {
+		slog.Error("UnmountOne: volume still mounted after unmount", "volume", req.Name)
+		return
+	}
+	slog.Info("UnmountOne: volume unmounted successfully", "volume", req.Name)
+}
+
 // qmpClientFactoryAdapter satisfies vm.QMPClientFactory. It performs only
 // the connect + qmp_capabilities handshake; the manager owns starting the
 // heartbeat goroutine on the returned client.
@@ -409,6 +471,7 @@ func (d *Daemon) buildVMManagerDeps() vm.Deps {
 		TransitionState: d.TransitionState,
 		DevNetworking:   d.config.Daemon.DevNetworking,
 		BindHost:        d.config.Host,
+		DetachDelay:     d.detachDelay,
 	}
 }
 

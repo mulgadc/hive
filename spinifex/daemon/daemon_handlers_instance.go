@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
-	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -391,7 +391,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		}
 
 		// Discover actual guest device names via QMP query-block
-		d.updateGuestDeviceNames(instance)
+		d.vmMgr.UpdateGuestDeviceNames(instance)
 
 		successCount++
 		slog.Info("handleEC2RunInstances launched instance", "instanceId", instance.ID)
@@ -403,19 +403,18 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 func (d *Daemon) handleRebootInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Rebooting instance", "id", command.ID)
 
-	var status vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { status = v.Status })
-
-	if status != vm.StateRunning {
-		slog.Error("RebootInstance: instance not in running state", "instanceId", command.ID, "status", status)
-		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
-		return
-	}
-
-	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_reset"}, command.ID)
-	if err != nil {
-		slog.Error("RebootInstance: QMP system_reset failed", "instanceId", command.ID, "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
+	if err := d.vmMgr.Reboot(instance.ID); err != nil {
+		switch {
+		case errors.Is(err, vm.ErrInstanceNotFound):
+			respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		case errors.Is(err, vm.ErrInvalidTransition):
+			slog.Error("RebootInstance: instance not in running state",
+				"instanceId", command.ID, "err", err)
+			respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
+		default:
+			slog.Error("RebootInstance: reboot failed", "instanceId", command.ID, "err", err)
+			respondWithError(msg, awserrors.ErrorServerInternal)
+		}
 		return
 	}
 
@@ -465,7 +464,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCom
 	}
 
 	// Discover actual guest device names via QMP query-block
-	d.updateGuestDeviceNames(instance)
+	d.vmMgr.UpdateGuestDeviceNames(instance)
 
 	slog.Info("Instance started", "instanceId", instance.ID)
 
@@ -878,7 +877,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	}
 
 	// Discover actual guest device names via QMP query-block
-	d.updateGuestDeviceNames(instance)
+	d.vmMgr.UpdateGuestDeviceNames(instance)
 
 	// Remove from shared KV now that it's running locally.
 	// Retry once on failure — a stale KV entry risks duplicate starts.

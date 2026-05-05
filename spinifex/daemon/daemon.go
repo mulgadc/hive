@@ -1687,82 +1687,6 @@ func (d *Daemon) ebsTopic(action string) string {
 	return fmt.Sprintf("ebs.%s.%s", d.node, action)
 }
 
-// MountVolumes mounts the volumes for an instance
-func (d *Daemon) MountVolumes(instance *vm.VM) error {
-	instance.EBSRequests.Mu.Lock()
-	defer instance.EBSRequests.Mu.Unlock()
-
-	for k, v := range instance.EBSRequests.Requests {
-		// Send the volume payload as JSON
-		ebsMountRequest, err := json.Marshal(v)
-
-		if err != nil {
-			slog.Error("Failed to marshal volume payload", "err", err)
-			return err
-		}
-
-		reply, err := d.natsConn.Request(d.ebsTopic("mount"), ebsMountRequest, 30*time.Second)
-
-		slog.Info("Mounting volume", "Vol", v.Name, "NBDURI", v.NBDURI)
-
-		// TODO: Improve timeout handling
-		if err != nil {
-			slog.Error("Failed to request EBS mount", "err", err)
-			return err
-		}
-
-		// Unmarshal the response
-		var ebsMountResponse types.EBSMountResponse
-		err = json.Unmarshal(reply.Data, &ebsMountResponse)
-
-		if err != nil {
-			slog.Error("Failed to unmarshal volume response:", "err", err)
-			return err
-		}
-
-		if ebsMountResponse.Error == "" {
-			slog.Debug("Mounted volume successfully", "response", ebsMountResponse.URI)
-
-			// Append the NBD URI to the request
-			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
-		} else {
-			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
-			return fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
-		}
-	}
-
-	return nil
-}
-
-// rollbackEBSMount sends an ebs.unmount request to undo a previously successful ebs.mount.
-// Rollback failures are logged but not propagated; callers treat this as best-effort cleanup.
-func (d *Daemon) rollbackEBSMount(req types.EBSRequest) {
-	data, err := json.Marshal(req)
-	if err != nil {
-		slog.Error("rollbackEBSMount: failed to marshal unmount request", "volume", req.Name, "err", err)
-		return
-	}
-	msg, err := d.natsConn.Request(d.ebsTopic("unmount"), data, 10*time.Second)
-	if err != nil {
-		slog.Error("rollbackEBSMount: ebs.unmount NATS request failed", "volume", req.Name, "err", err)
-		return
-	}
-	var resp types.EBSUnMountResponse
-	if err := json.Unmarshal(msg.Data, &resp); err != nil {
-		slog.Error("rollbackEBSMount: failed to unmarshal response", "volume", req.Name, "err", err)
-		return
-	}
-	if resp.Error != "" {
-		slog.Error("rollbackEBSMount: ebs.unmount returned error", "volume", req.Name, "err", resp.Error)
-		return
-	}
-	if resp.Mounted {
-		slog.Error("rollbackEBSMount: volume still mounted after unmount", "volume", req.Name)
-		return
-	}
-	slog.Info("rollbackEBSMount: volume unmounted successfully", "volume", req.Name)
-}
-
 // respondWithVolumeAttachment builds an ec2.VolumeAttachment, marshals it to JSON, and
 // responds on the NATS message. Used by both AttachVolume and DetachVolume handlers.
 func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, volumeID, instanceID, device, state string) {
@@ -1785,40 +1709,6 @@ func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, volumeID, instanceID
 	if err := msg.Respond(jsonResp); err != nil {
 		slog.Error("Failed to respond to NATS request", "err", err)
 	}
-}
-
-// nextAvailableDevice finds the next available /dev/sd[f-p] device name for an instance.
-// It checks both EBSRequests and BlockDeviceMappings to avoid conflicts.
-func nextAvailableDevice(instance *vm.VM) string {
-	usedDevices := make(map[string]bool)
-
-	// Collect devices from existing BlockDeviceMappings
-	if instance.Instance != nil {
-		for _, bdm := range instance.Instance.BlockDeviceMappings {
-			if bdm.DeviceName != nil {
-				usedDevices[*bdm.DeviceName] = true
-			}
-		}
-	}
-
-	// Collect devices from EBSRequests (may not yet be in BlockDeviceMappings)
-	instance.EBSRequests.Mu.Lock()
-	for _, req := range instance.EBSRequests.Requests {
-		if req.DeviceName != "" {
-			usedDevices[req.DeviceName] = true
-		}
-	}
-	instance.EBSRequests.Mu.Unlock()
-
-	// AWS convention: /dev/sd[f-p] for attached volumes
-	for c := 'f'; c <= 'p'; c++ {
-		dev := fmt.Sprintf("/dev/sd%c", c)
-		if !usedDevices[dev] {
-			return dev
-		}
-	}
-
-	return ""
 }
 
 // canAllocate checks how many instances of the given type can be allocated.
