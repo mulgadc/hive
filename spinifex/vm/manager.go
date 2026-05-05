@@ -5,15 +5,81 @@ import (
 	"sync"
 )
 
-// Manager owns the in-memory map of running VMs on this node.
-type Manager struct {
-	mu  sync.Mutex
-	vms map[string]*VM
+// ManagerHooks are callbacks the manager fires synchronously on every
+// running/terminated transition. The daemon uses these to drive per-instance
+// NATS subscription/unsubscription. Hook fields may be nil; nil hooks are no-ops.
+type ManagerHooks struct {
+	OnInstanceUp   func(*VM)
+	OnInstanceDown func(id string)
 }
 
+// Deps bundles every collaborator the manager uses to drive lifecycle.
+// Fields may be nil where the manager does not yet require them; call sites
+// guard against nil so partial wiring during construction is safe.
+type Deps struct {
+	NodeID string
+
+	StateStore         StateStore
+	VolumeMounter      VolumeMounter
+	QMPClientFactory   QMPClientFactory
+	ProcessLauncher    ProcessLauncher
+	NetworkPlumber     NetworkPlumber
+	InstanceTypes      InstanceTypeResolver
+	Resources          ResourceController
+	VolumeStateUpdater VolumeStateUpdater
+	Hooks              ManagerHooks
+
+	// ShutdownSignal returns true once the daemon has begun coordinated
+	// shutdown. Crash handlers and restart logic short-circuit on true.
+	ShutdownSignal func() bool
+
+	// CrashHandler is invoked from the QEMU exit goroutine when the process
+	// terminates unexpectedly after startup was confirmed.
+	CrashHandler func(*VM, error)
+
+	// TransitionState applies a state transition to the supplied VM and
+	// persists the resulting running-state snapshot.
+	TransitionState func(*VM, InstanceState) error
+
+	// MarkInstanceFailed cleans up a VM whose launch errored mid-way.
+	MarkInstanceFailed func(*VM, string)
+
+	// DevNetworking enables the user-mode dev NIC (SSH hostfwd) on top of
+	// the VPC tap NIC. Mirrors Daemon.config.Daemon.DevNetworking.
+	DevNetworking bool
+	// BindHost is the daemon's listen IP, used when wiring user-mode
+	// hostfwd rules. Empty / "0.0.0.0" falls back to 127.0.0.1.
+	BindHost string
+}
+
+// Manager owns the in-memory map of running VMs on this node and every
+// lifecycle transition that mutates that map.
+type Manager struct {
+	mu   sync.Mutex
+	vms  map[string]*VM
+	deps Deps
+}
+
+// NewManager returns a Manager with no collaborators wired. Production code
+// uses NewManagerWithDeps; tests that only exercise the in-memory map keep
+// this convenience.
 func NewManager() *Manager {
 	return &Manager{vms: make(map[string]*VM)}
 }
+
+// NewManagerWithDeps returns a Manager wired with collaborators.
+func NewManagerWithDeps(deps Deps) *Manager {
+	return &Manager{vms: make(map[string]*VM), deps: deps}
+}
+
+// SetDeps replaces the manager's dependencies. The daemon constructs the
+// manager early (before NATS / JetStream / network plumber are available)
+// and calls SetDeps once those collaborators exist. Must not be called
+// concurrently with lifecycle methods.
+func (m *Manager) SetDeps(deps Deps) { m.deps = deps }
+
+// NodeID returns the node identifier the manager was constructed with.
+func (m *Manager) NodeID() string { return m.deps.NodeID }
 
 // Get returns the VM for id (and true) or (nil, false).
 func (m *Manager) Get(id string) (*VM, bool) {
