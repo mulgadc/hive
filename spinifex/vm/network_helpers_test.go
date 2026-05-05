@@ -11,6 +11,7 @@ type fakeNetworkPlumber struct {
 	setupCalls   []fakeSetupCall
 	cleanupCalls []string
 	setupErr     error
+	cleanupErr   error
 }
 
 type fakeSetupCall struct {
@@ -25,7 +26,7 @@ func (p *fakeNetworkPlumber) SetupTapDevice(eniID, mac string) error {
 
 func (p *fakeNetworkPlumber) CleanupTapDevice(eniID string) error {
 	p.cleanupCalls = append(p.cleanupCalls, eniID)
-	return nil
+	return p.cleanupErr
 }
 
 var _ NetworkPlumber = (*fakeNetworkPlumber)(nil)
@@ -130,4 +131,54 @@ func TestSetupExtraENINICs_NilPlumber_NoOp(t *testing.T) {
 	if len(instance.Config.NetDevs) != 0 {
 		t.Errorf("expected no netdevs without plumber, got %d", len(instance.Config.NetDevs))
 	}
+}
+
+func TestCleanupExtraENITaps_CallsCleanupPerExtra(t *testing.T) {
+	plumber := &fakeNetworkPlumber{}
+	m := NewManagerWithDeps(Deps{NetworkPlumber: plumber})
+	instance := &VM{
+		ID: "i-multi-clean",
+		ExtraENIs: []ExtraENI{
+			{ENIID: "eni-111"},
+			{ENIID: "eni-222"},
+			{ENIID: "eni-333"},
+		},
+	}
+
+	m.cleanupExtraENITaps(instance)
+
+	if len(plumber.cleanupCalls) != 3 {
+		t.Fatalf("expected 3 cleanup calls, got %d", len(plumber.cleanupCalls))
+	}
+	for i, want := range []string{"eni-111", "eni-222", "eni-333"} {
+		if plumber.cleanupCalls[i] != want {
+			t.Errorf("cleanup[%d] = %q, want %q", i, plumber.cleanupCalls[i], want)
+		}
+	}
+}
+
+func TestCleanupExtraENITaps_ErrorsAreLogged(t *testing.T) {
+	plumber := &fakeNetworkPlumber{cleanupErr: errors.New("simulated cleanup failure")}
+	m := NewManagerWithDeps(Deps{NetworkPlumber: plumber})
+	instance := &VM{
+		ID: "i-multi-clean-err",
+		ExtraENIs: []ExtraENI{
+			{ENIID: "eni-111"},
+			{ENIID: "eni-222"},
+		},
+	}
+
+	// Must not panic or return — errors are swallowed by design so partial
+	// cleanup still frees later entries.
+	m.cleanupExtraENITaps(instance)
+	if len(plumber.cleanupCalls) != 2 {
+		t.Errorf("expected both extras to be attempted, got %d cleanup calls", len(plumber.cleanupCalls))
+	}
+}
+
+func TestCleanupExtraENITaps_NilPlumber_NoOp(t *testing.T) {
+	m := NewManagerWithDeps(Deps{})
+	instance := &VM{ID: "i-no-plumber", ExtraENIs: []ExtraENI{{ENIID: "eni-x"}}}
+	// Must not panic when no plumber is wired.
+	m.cleanupExtraENITaps(instance)
 }

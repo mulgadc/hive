@@ -42,8 +42,12 @@ func GetConsoleOutput(input *ec2.GetConsoleOutputInput, natsConn *nats.Conn, acc
 	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
 	msg, err := natsConn.RequestMsg(reqMsg, 5*time.Second)
 	if err != nil {
-		if err == nats.ErrNoResponders || err == nats.ErrTimeout {
-			return nil, fmt.Errorf("instance %s not found or not running", *input.InstanceId)
+		// No daemon subscribed to the per-instance topic: stopped, terminated,
+		// or non-existent — all of which AWS surfaces as InvalidInstanceID.NotFound.
+		// Treat timeout the same way; a daemon that can't respond inside 5s
+		// is functionally unreachable from a caller's perspective.
+		if errors.Is(err, nats.ErrNoResponders) || errors.Is(err, nats.ErrTimeout) {
+			return nil, errors.New(awserrors.ErrorInvalidInstanceIDNotFound)
 		}
 		return nil, fmt.Errorf("failed to get console output: %w", err)
 	}

@@ -27,6 +27,7 @@ type Deps struct {
 	InstanceTypes      InstanceTypeResolver
 	Resources          ResourceController
 	VolumeStateUpdater VolumeStateUpdater
+	InstanceCleaner    InstanceCleaner
 	Hooks              ManagerHooks
 
 	// ShutdownSignal returns true once the daemon has begun coordinated
@@ -40,9 +41,6 @@ type Deps struct {
 	// TransitionState applies a state transition to the supplied VM and
 	// persists the resulting running-state snapshot.
 	TransitionState func(*VM, InstanceState) error
-
-	// MarkInstanceFailed cleans up a VM whose launch errored mid-way.
-	MarkInstanceFailed func(*VM, string)
 
 	// DevNetworking enables the user-mode dev NIC (SSH hostfwd) on top of
 	// the VPC tap NIC. Mirrors Daemon.config.Daemon.DevNetworking.

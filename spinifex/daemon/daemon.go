@@ -1049,35 +1049,6 @@ func (d *Daemon) checkPredastoreReady() bool {
 	return true
 }
 
-// migrateInstanceToKV writes an instance to the given KV write function and removes
-// it from the local instance map. Returns true if migration succeeded.
-func (d *Daemon) migrateInstanceToKV(instance *vm.VM, writeFn func(string, *vm.VM) error, label string) bool {
-	if d.jsManager == nil {
-		return false
-	}
-	instance.LastNode = d.node
-	if err := writeFn(instance.ID, instance); err != nil {
-		slog.Error("Failed to migrate instance to KV",
-			"instance", instance.ID, "bucket", label, "err", err)
-		return false
-	}
-	if !d.vmMgr.DeleteIf(instance.ID, instance) {
-		slog.Info("Slot reclaimed by another handler during migration; skipping local delete",
-			"instance", instance.ID, "bucket", label)
-		return true
-	}
-	slog.Info("Migrated instance to KV", "instance", instance.ID, "bucket", label)
-	return true
-}
-
-func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
-	return d.migrateInstanceToKV(instance, d.jsManager.WriteStoppedInstance, "stopped")
-}
-
-func (d *Daemon) migrateTerminatedToKV(instance *vm.VM) bool {
-	return d.migrateInstanceToKV(instance, d.jsManager.WriteTerminatedInstance, "terminated")
-}
-
 // maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
 const maxConcurrentRecovery = 2
 
@@ -1117,7 +1088,7 @@ func (d *Daemon) restoreInstances() {
 		instance.QMPClient = &qmp.QMPClient{}
 
 		if instance.Status == vm.StateTerminated {
-			if !d.migrateTerminatedToKV(instance) {
+			if !d.vmMgr.MigrateTerminatedToKV(instance) {
 				// KV write failed — keep in local state so the next restart
 				// retries the migration. Deleting here would create a "void":
 				// the instance disappears from both local state and the
@@ -1129,7 +1100,7 @@ func (d *Daemon) restoreInstances() {
 		}
 
 		if instance.Status == vm.StateStopped {
-			d.migrateStoppedToSharedKV(instance)
+			d.vmMgr.MigrateStoppedToSharedKV(instance)
 			continue
 		}
 
@@ -1144,7 +1115,7 @@ func (d *Daemon) restoreInstances() {
 				instance.Instance.StateReason.SetMessage(
 					fmt.Sprintf("instance type %s is not available on this node", instance.InstanceType))
 			}
-			d.migrateStoppedToSharedKV(instance)
+			d.vmMgr.MigrateStoppedToSharedKV(instance)
 			continue
 		}
 
@@ -1160,7 +1131,7 @@ func (d *Daemon) restoreInstances() {
 					instance.Instance.StateReason.SetMessage(
 						fmt.Sprintf("insufficient resources to restore instance: %v", err))
 				}
-				d.migrateStoppedToSharedKV(instance)
+				d.vmMgr.MigrateStoppedToSharedKV(instance)
 				continue
 			}
 		}
@@ -1216,11 +1187,11 @@ func (d *Daemon) restoreInstances() {
 			slog.Info("QEMU exited during transition, finalizing state",
 				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
 
-			if instance.Status == vm.StateStopped && d.migrateStoppedToSharedKV(instance) {
+			if instance.Status == vm.StateStopped && d.vmMgr.MigrateStoppedToSharedKV(instance) {
 				continue
 			}
 
-			if instance.Status == vm.StateTerminated && d.migrateTerminatedToKV(instance) {
+			if instance.Status == vm.StateTerminated && d.vmMgr.MigrateTerminatedToKV(instance) {
 				continue
 			}
 
@@ -1289,7 +1260,7 @@ func (d *Daemon) restoreInstances() {
 				slog.Info("Launching instance (recovery)", "instance", inst.ID)
 				if err := d.vmMgr.Run(inst); err != nil {
 					slog.Error("Failed to launch instance during recovery", "instanceId", inst.ID, "err", err)
-					d.markInstanceFailed(inst, "recovery_launch_failed")
+					d.vmMgr.MarkFailed(inst, "recovery_launch_failed")
 				}
 			}(instance)
 		}
@@ -1613,219 +1584,6 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	}
 }
 
-func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
-	// Signal to shutdown each VM
-	var wg sync.WaitGroup
-
-	// Run asynchronously within a worker group
-	for _, instance := range instances {
-		wg.Go(func() {
-			// Send shutdown command - if it fails, VM may already be dead, continue with cleanup
-			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
-			if err != nil {
-				slog.Warn("QMP system_powerdown failed (VM may already be stopped)", "id", instance.ID, "err", err)
-				// Don't return - continue with cleanup
-			}
-
-			// Wait for PID file removal (or check if already gone).
-			// 20s is enough for a graceful ACPI shutdown — if the guest hasn't
-			// responded to system_powerdown by then, it won't (e.g. still booting,
-			// no ACPI handler). Force-kill at that point rather than wasting 60s.
-			err = utils.WaitForPidFileRemoval(instance.ID, 20*time.Second)
-			if err != nil {
-				slog.Warn("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
-
-				// Try force killing the process if it's still running
-				pid, readErr := utils.ReadPidFile(instance.ID)
-				if readErr != nil {
-					slog.Debug("No PID file found (VM likely already stopped)", "id", instance.ID)
-				} else {
-					slog.Info("Force killing process", "pid", pid, "id", instance.ID)
-					if err := utils.KillProcess(pid); err != nil {
-						slog.Error("Failed to kill process", "pid", pid, "id", instance.ID, "err", err)
-					}
-				}
-			}
-
-			// Unmount all EBS volumes
-			instance.EBSRequests.Mu.Lock()
-			defer instance.EBSRequests.Mu.Unlock()
-
-			for _, ebsRequest := range instance.EBSRequests.Requests {
-				// Send the volume payload as JSON
-				ebsUnMountRequest, err := json.Marshal(ebsRequest)
-
-				if err != nil {
-					slog.Error("Failed to marshal volume payload", "err", err)
-					continue
-				}
-
-				msg, err := d.natsConn.Request(d.ebsTopic("unmount"), ebsUnMountRequest, 30*time.Second)
-				if err != nil {
-					slog.Error("Failed to unmount volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
-				} else {
-					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
-				}
-
-				// Update volume state to "available" for all user-visible volumes (boot + hot-attached)
-				if !ebsRequest.EFI && !ebsRequest.CloudInit {
-					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", "", ""); err != nil {
-						slog.Error("Failed to update volume state to available", "volumeId", ebsRequest.Name, "err", err)
-					}
-				}
-			}
-
-			// If flagged for termination, clean up volumes
-			if deleteVolume {
-				for _, ebsRequest := range instance.EBSRequests.Requests {
-					// Internal volumes (EFI, cloud-init) are always cleaned up via ebs.delete
-					// to stop viperblockd processes. S3 data cleanup happens via DeleteVolume
-					// on the parent root volume (which deletes -efi/ and -cloudinit/ prefixes).
-					if ebsRequest.EFI || ebsRequest.CloudInit {
-						ebsDeleteData, err := json.Marshal(types.EBSDeleteRequest{Volume: ebsRequest.Name})
-						if err != nil {
-							slog.Error("Failed to marshal ebs.delete request for internal volume", "name", ebsRequest.Name, "err", err)
-							continue
-						}
-						deleteMsg, err := d.natsConn.Request("ebs.delete", ebsDeleteData, 30*time.Second)
-						if err != nil {
-							slog.Warn("Failed to send ebs.delete for internal volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
-						} else {
-							slog.Info("Sent ebs.delete for internal volume", "name", ebsRequest.Name, "id", instance.ID, "data", string(deleteMsg.Data))
-						}
-						continue
-					}
-
-					// User-visible volumes: respect DeleteOnTermination flag
-					if !ebsRequest.DeleteOnTermination {
-						slog.Info("Volume has DeleteOnTermination=false, skipping deletion", "name", ebsRequest.Name, "id", instance.ID)
-						continue
-					}
-
-					// DeleteVolume handles: NATS ebs.delete notification + S3 cleanup
-					// (including -efi/ and -cloudinit/ sub-prefixes)
-					slog.Info("Deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name, "id", instance.ID)
-					_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
-						VolumeId: &ebsRequest.Name,
-					}, instance.AccountID)
-					if err != nil {
-						slog.Error("Failed to delete volume on termination", "name", ebsRequest.Name, "id", instance.ID, "err", err)
-					} else {
-						slog.Info("Deleted volume on termination", "name", ebsRequest.Name, "id", instance.ID)
-					}
-				}
-			}
-
-			// Clean up VPC tap device if present
-			if instance.ENIId != "" && d.networkPlumber != nil {
-				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
-					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
-				}
-				// Clean up any extra ENI tap devices (multi-subnet ALB VMs).
-				d.cleanupExtraENITaps(instance)
-			}
-
-			// Clean up management TAP and release IP. Derive the name from
-			// instance.ID rather than reading instance.MgmtTap — the field
-			// is set only after SetupMgmtTapDevice returns, so a terminate
-			// that races mid-launch would skip cleanup and leak the OVS
-			// port. CleanupMgmtTapDevice is idempotent for instances that
-			// never reached the setup step.
-			mgmtTap := MgmtTapName(instance.ID)
-			if err := CleanupMgmtTapDevice(mgmtTap); err != nil {
-				slog.Warn("Failed to clean up mgmt tap device", "tap", mgmtTap, "instanceId", instance.ID, "err", err)
-			}
-			if d.mgmtIPAllocator != nil {
-				d.mgmtIPAllocator.Release(instance.ID)
-			}
-
-			// Release public IP before deleting ENI
-			if deleteVolume && instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
-				// Publish vpc.delete-nat to remove dnat_and_snat rule
-				portName := "port-" + instance.ENIId
-				vpcId := ""
-				logicalIP := ""
-				if instance.Instance != nil {
-					if instance.Instance.VpcId != nil {
-						vpcId = *instance.Instance.VpcId
-					}
-					if instance.Instance.PrivateIpAddress != nil {
-						logicalIP = *instance.Instance.PrivateIpAddress
-					}
-				}
-				d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, logicalIP, portName, "")
-
-				// Release IP back to pool
-				if err := d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {
-					slog.Warn("Failed to release public IP on termination", "ip", instance.PublicIP, "pool", instance.PublicIPPool, "err", err)
-				} else {
-					slog.Info("Released public IP on termination", "ip", instance.PublicIP, "instanceId", instance.ID)
-				}
-			}
-
-			// On termination, detach and delete the auto-created ENI (releases IP
-			// back to IPAM, publishes vpc.delete-port for vpcd). On stop, ENI
-			// persists (AWS behavior). Must detach first to clear in-use status.
-			// Tolerate NotFound — ENI may have been cleaned up already.
-			// Other errors (KV failures, permission issues, in-use) are real
-			// failures that could leak IPAM addresses.
-			if deleteVolume && instance.ENIId != "" && d.vpcService != nil {
-				if detachErr := d.vpcService.DetachENI(instance.AccountID, instance.ENIId); detachErr != nil {
-					slog.Warn("Failed to detach ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID, "err", detachErr)
-				}
-				if _, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-					NetworkInterfaceId: &instance.ENIId,
-				}, instance.AccountID); eniErr != nil {
-					if strings.Contains(eniErr.Error(), awserrors.ErrorInvalidNetworkInterfaceIDNotFound) {
-						slog.Debug("ENI already cleaned up on termination", "eni", instance.ENIId)
-					} else {
-						slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID, "err", eniErr)
-					}
-				} else {
-					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
-				}
-				// Extra ENIs (multi-subnet ALB VMs) are cleaned up by
-				// DeleteLoadBalancer via its own lb.ENIs loop — the daemon
-				// doesn't duplicate that teardown here.
-			}
-
-			// Deallocate resources
-			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
-			if instanceType != nil {
-				slog.Info("Deallocating resources for stopped instance", "instanceId", instance.ID, "type", instance.InstanceType)
-				d.resourceMgr.deallocate(instanceType)
-			}
-		})
-	}
-
-	// Wait for all shutdowns to finish
-	wg.Wait()
-
-	// Only unsubscribe from NATS subjects when terminating (deleteVolume=true)
-	// For stop operations, keep the subscription so we can receive start commands
-	if deleteVolume {
-		for _, instance := range instances {
-			d.mu.Lock()
-			if sub, ok := d.natsSubscriptions[instance.ID]; ok {
-				slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-				if err := sub.Unsubscribe(); err != nil {
-					slog.Error("Failed to unsubscribe from NATS subject", "instance", instance.ID, "err", err)
-				}
-				delete(d.natsSubscriptions, instance.ID)
-			}
-			consoleSubKey := instance.ID + ".console"
-			if sub, ok := d.natsSubscriptions[consoleSubKey]; ok {
-				if err := sub.Unsubscribe(); err != nil {
-					slog.Error("Failed to unsubscribe from console NATS subject", "instance", instance.ID, "err", err)
-				}
-				delete(d.natsSubscriptions, consoleSubKey)
-			}
-			d.mu.Unlock()
-		}
-	}
-	return nil
-}
-
 func (d *Daemon) setupShutdown() {
 	d.shutdownWg.Go(func() {
 		sigChan := make(chan os.Signal, 1)
@@ -1837,15 +1595,14 @@ func (d *Daemon) setupShutdown() {
 		// Cancel context to stop heartbeat and other goroutines
 		d.cancel()
 
-		// If coordinated shutdown already handled VMs (DRAIN phase), skip stopInstance.
-		// Otherwise, set the flag now so crash handlers and restart schedulers
-		// know to bail out during SIGTERM-based shutdown.
+		// If coordinated shutdown already handled VMs (DRAIN phase), skip the
+		// per-instance teardown. Otherwise, set the flag now so crash handlers
+		// and restart schedulers know to bail out during SIGTERM-based shutdown.
 		if d.shuttingDown.Load() {
 			slog.Info("Coordinated shutdown in progress, skipping VM stop (already handled by DRAIN phase)")
 		} else {
 			d.shuttingDown.Store(true)
-			// Pass instances to terminate
-			if err := d.stopInstance(d.vmMgr.SnapshotMap(), false); err != nil {
+			if err := d.vmMgr.StopAll(); err != nil {
 				slog.Error("Failed to stop instances during shutdown", "err", err)
 			}
 		}
@@ -1892,101 +1649,6 @@ func (d *Daemon) setupShutdown() {
 	})
 }
 
-// markInstanceFailed updates an instance status to indicate a failure during launch,
-// then completes the termination lifecycle in the background so the instance
-// reaches terminated state and doesn't get stuck in shutting-down.
-func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
-	// If the instance is already being cleaned up (e.g., a concurrent terminate
-	// request transitioned it to shutting-down while LaunchInstance was running),
-	// don't spawn a second finalizeTermination goroutine — the existing cleanup
-	// handler owns the lifecycle from here.
-	skip := false
-	var observedStatus vm.InstanceState
-	d.vmMgr.Inspect(instance, func(v *vm.VM) {
-		observedStatus = v.Status
-		if v.Status == vm.StateShuttingDown || v.Status == vm.StateTerminated {
-			skip = true
-			return
-		}
-		// Set state reason before transition
-		if v.Instance != nil {
-			v.Instance.StateReason = &ec2.StateReason{}
-			v.Instance.StateReason.SetCode("Server.InternalError")
-			v.Instance.StateReason.SetMessage(reason)
-		}
-	})
-	if skip {
-		slog.Info("markInstanceFailed: instance already in cleanup state, skipping",
-			"instanceId", instance.ID, "status", string(observedStatus), "reason", reason)
-		return
-	}
-
-	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
-		slog.Error("markInstanceFailed transition failed", "instanceId", instance.ID, "err", err)
-		// If the error was a write failure, the in-memory state is already
-		// shutting-down. Still proceed with finalization to avoid getting stuck.
-		var postErrStatus vm.InstanceState
-		d.vmMgr.Inspect(instance, func(v *vm.VM) { postErrStatus = v.Status })
-		if postErrStatus != vm.StateShuttingDown {
-			return
-		}
-	}
-
-	slog.Info("Instance marked as failed", "instanceId", instance.ID, "reason", reason)
-
-	// Complete termination in the background — clean up any partially-created
-	// resources and transition to terminated so the instance doesn't get stuck
-	// in shutting-down indefinitely.
-	go d.finalizeTermination(instance)
-}
-
-// finalizeTermination completes the termination lifecycle for an instance already
-// in shutting-down state. It cleans up resources (processes, volumes, ENIs),
-// transitions to terminated, writes to the terminated KV bucket, and removes
-// the instance from local state.
-func (d *Daemon) finalizeTermination(instance *vm.VM) {
-	stopErr := d.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
-	if stopErr != nil {
-		slog.Error("Failed to cleanup failed instance", "err", stopErr, "id", instance.ID)
-		if err := d.TransitionState(instance, vm.StateError); err != nil {
-			slog.Error("Failed to transition to error state", "instanceId", instance.ID, "err", err)
-		}
-		return
-	}
-
-	d.vmMgr.Inspect(instance, func(v *vm.VM) { v.LastNode = d.node })
-
-	if err := d.TransitionState(instance, vm.StateTerminated); err != nil {
-		slog.Error("Failed to transition failed instance to terminated", "instanceId", instance.ID, "err", err)
-		return
-	}
-	slog.Info("Instance terminated (failed launch cleanup)", "id", instance.ID)
-
-	if d.jsManager != nil {
-		if err := d.jsManager.WriteTerminatedInstance(instance.ID, instance); err != nil {
-			slog.Error("Failed to write terminated instance to KV, keeping in local state for retry",
-				"instanceId", instance.ID, "err", err)
-			return
-		}
-	}
-
-	// Guard + delete: another handler may have reclaimed this instance.
-	if !d.vmMgr.DeleteIf(instance.ID, instance) {
-		slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
-			"instanceId", instance.ID, "state", "terminated")
-		return
-	}
-
-	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to persist state after terminating failed instance, re-adding to local map",
-			"instanceId", instance.ID, "err", err)
-		d.vmMgr.InsertIfAbsent(instance)
-	} else {
-		slog.Info("Released failed instance ownership to KV",
-			"instanceId", instance.ID, "lastNode", d.node)
-	}
-}
-
 const pendingWatchdogInterval = 60 * time.Second
 const pendingWatchdogTimeout = 5 * time.Minute
 
@@ -2011,7 +1673,7 @@ func (d *Daemon) startPendingWatchdog() {
 					slog.Warn("Instance stuck in pending, marking failed",
 						"instanceId", instance.ID, "status", instance.Status,
 						"elapsed", time.Since(*instance.Instance.LaunchTime))
-					d.markInstanceFailed(instance, "launch_timeout")
+					d.vmMgr.MarkFailed(instance, "launch_timeout")
 				}
 			}
 		}

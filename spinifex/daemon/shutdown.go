@@ -112,18 +112,16 @@ func (d *Daemon) handleShutdownDrain(msg *nats.Msg) {
 
 	slog.Info("Shutdown DRAIN phase starting", "node", d.node)
 
-	// Snapshot VMs to stop. The snapshot decouples iteration from concurrent
-	// terminate handlers and avoids holding the manager lock across the
-	// shutdown fan-out.
-	vms := d.vmMgr.SnapshotMap()
-	total := len(vms)
+	total := d.vmMgr.Count()
 
 	// Publish initial progress
 	d.publishShutdownProgress("drain", total, total)
 
-	// Stop all instances (graceful shutdown, no volume deletion)
+	// Stop all instances (graceful shutdown, no volume deletion). StopAll
+	// fans out per-VM shutdown internally; the manager's snapshot decouples
+	// iteration from concurrent terminate handlers.
 	if total > 0 {
-		if err := d.stopInstance(vms, false); err != nil {
+		if err := d.vmMgr.StopAll(); err != nil {
 			slog.Error("Failed to stop instances during DRAIN", "error", err)
 			ack := ShutdownACK{
 				Node:  d.node,

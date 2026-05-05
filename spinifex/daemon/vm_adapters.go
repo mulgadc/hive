@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -395,15 +399,174 @@ func (d *Daemon) buildVMManagerDeps() vm.Deps {
 		InstanceTypes:      newInstanceTypeResolverAdapter(d.resourceMgr),
 		Resources:          newResourceControllerAdapter(d.resourceMgr),
 		VolumeStateUpdater: volState,
+		InstanceCleaner:    newInstanceCleanerAdapter(d),
 		Hooks: vm.ManagerHooks{
 			OnInstanceUp:   d.onInstanceUpHook(),
 			OnInstanceDown: d.onInstanceDownHook(),
 		},
-		ShutdownSignal:     d.shuttingDown.Load,
-		CrashHandler:       d.handleInstanceCrash,
-		TransitionState:    d.TransitionState,
-		MarkInstanceFailed: d.markInstanceFailed,
-		DevNetworking:      d.config.Daemon.DevNetworking,
-		BindHost:           d.config.Host,
+		ShutdownSignal:  d.shuttingDown.Load,
+		CrashHandler:    d.handleInstanceCrash,
+		TransitionState: d.TransitionState,
+		DevNetworking:   d.config.Daemon.DevNetworking,
+		BindHost:        d.config.Host,
+	}
+}
+
+// instanceCleanerAdapter satisfies vm.InstanceCleaner by delegating to the
+// daemon's existing volume/VPC/EIP/placement-group services. The manager
+// owns the QMP and tap teardown directly; this adapter covers the
+// AWS-resource cleanup steps that require service access.
+type instanceCleanerAdapter struct {
+	d *Daemon
+}
+
+var _ vm.InstanceCleaner = (*instanceCleanerAdapter)(nil)
+
+func newInstanceCleanerAdapter(d *Daemon) *instanceCleanerAdapter {
+	return &instanceCleanerAdapter{d: d}
+}
+
+// DeleteVolumes deletes EFI / cloud-init internal volumes via ebs.delete
+// and user volumes flagged DeleteOnTermination via the volume service.
+// Errors are logged per volume; partial failure is tolerated to match
+// pre-2c stopInstance behaviour.
+func (a *instanceCleanerAdapter) DeleteVolumes(instance *vm.VM) {
+	instance.EBSRequests.Mu.Lock()
+	defer instance.EBSRequests.Mu.Unlock()
+
+	for _, ebsRequest := range instance.EBSRequests.Requests {
+		// Internal volumes (EFI, cloud-init) always go through ebs.delete to
+		// stop their viperblockd processes. S3 data is cleaned up via the
+		// parent root volume's DeleteVolume (which removes -efi/ and
+		// -cloudinit/ prefixes).
+		if ebsRequest.EFI || ebsRequest.CloudInit {
+			ebsDeleteData, err := json.Marshal(types.EBSDeleteRequest{Volume: ebsRequest.Name})
+			if err != nil {
+				slog.Error("Failed to marshal ebs.delete request for internal volume",
+					"name", ebsRequest.Name, "err", err)
+				continue
+			}
+			deleteMsg, err := a.d.natsConn.Request("ebs.delete", ebsDeleteData, 30*time.Second)
+			if err != nil {
+				slog.Warn("Failed to send ebs.delete for internal volume",
+					"name", ebsRequest.Name, "id", instance.ID, "err", err)
+			} else {
+				slog.Info("Sent ebs.delete for internal volume",
+					"name", ebsRequest.Name, "id", instance.ID, "data", string(deleteMsg.Data))
+			}
+			continue
+		}
+
+		// User-visible volumes: only delete when DeleteOnTermination is set.
+		if !ebsRequest.DeleteOnTermination {
+			slog.Info("Volume has DeleteOnTermination=false, skipping deletion",
+				"name", ebsRequest.Name, "id", instance.ID)
+			continue
+		}
+
+		slog.Info("Deleting volume with DeleteOnTermination=true",
+			"name", ebsRequest.Name, "id", instance.ID)
+		if a.d.volumeService == nil {
+			slog.Warn("Volume service not configured, cannot delete volume",
+				"name", ebsRequest.Name, "id", instance.ID)
+			continue
+		}
+		if _, err := a.d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
+			VolumeId: &ebsRequest.Name,
+		}, instance.AccountID); err != nil {
+			slog.Error("Failed to delete volume on termination",
+				"name", ebsRequest.Name, "id", instance.ID, "err", err)
+		} else {
+			slog.Info("Deleted volume on termination",
+				"name", ebsRequest.Name, "id", instance.ID)
+		}
+	}
+}
+
+// CleanupMgmtNetwork tears down the management TAP device (derived from
+// instance.ID so unsetup instances are tolerated) and releases the
+// management IP allocation if the daemon has one.
+func (a *instanceCleanerAdapter) CleanupMgmtNetwork(instance *vm.VM) {
+	mgmtTap := MgmtTapName(instance.ID)
+	if err := CleanupMgmtTapDevice(mgmtTap); err != nil {
+		slog.Warn("Failed to clean up mgmt tap device",
+			"tap", mgmtTap, "instanceId", instance.ID, "err", err)
+	}
+	if a.d.mgmtIPAllocator != nil {
+		a.d.mgmtIPAllocator.Release(instance.ID)
+	}
+}
+
+// ReleasePublicIP publishes vpc.delete-nat for the OVN dnat_and_snat rule
+// and releases the public IP back to the external IPAM pool. No-op when
+// the instance has no public IP.
+func (a *instanceCleanerAdapter) ReleasePublicIP(instance *vm.VM) {
+	if instance.PublicIP == "" || instance.PublicIPPool == "" || a.d.externalIPAM == nil {
+		return
+	}
+
+	portName := "port-" + instance.ENIId
+	vpcId := ""
+	logicalIP := ""
+	if instance.Instance != nil {
+		if instance.Instance.VpcId != nil {
+			vpcId = *instance.Instance.VpcId
+		}
+		if instance.Instance.PrivateIpAddress != nil {
+			logicalIP = *instance.Instance.PrivateIpAddress
+		}
+	}
+	a.d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, logicalIP, portName, "")
+
+	if err := a.d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {
+		slog.Warn("Failed to release public IP on termination",
+			"ip", instance.PublicIP, "pool", instance.PublicIPPool, "err", err)
+	} else {
+		slog.Info("Released public IP on termination",
+			"ip", instance.PublicIP, "instanceId", instance.ID)
+	}
+}
+
+// DetachAndDeleteENI detaches the auto-created ENI from the instance and
+// deletes it via the VPC service. NotFound is tolerated. Extra ENIs are
+// cleaned up by the load-balancer service via its own teardown loop and
+// are not touched here.
+func (a *instanceCleanerAdapter) DetachAndDeleteENI(instance *vm.VM) {
+	if instance.ENIId == "" || a.d.vpcService == nil {
+		return
+	}
+	if detachErr := a.d.vpcService.DetachENI(instance.AccountID, instance.ENIId); detachErr != nil {
+		slog.Warn("Failed to detach ENI on termination",
+			"eni", instance.ENIId, "instanceId", instance.ID, "err", detachErr)
+	}
+	if _, eniErr := a.d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+		NetworkInterfaceId: &instance.ENIId,
+	}, instance.AccountID); eniErr != nil {
+		if strings.Contains(eniErr.Error(), awserrors.ErrorInvalidNetworkInterfaceIDNotFound) {
+			slog.Debug("ENI already cleaned up on termination", "eni", instance.ENIId)
+		} else {
+			slog.Error("Failed to delete ENI on termination",
+				"eni", instance.ENIId, "instanceId", instance.ID, "err", eniErr)
+		}
+	} else {
+		slog.Info("Deleted ENI on termination",
+			"eni", instance.ENIId, "instanceId", instance.ID)
+	}
+}
+
+// RemoveFromPlacementGroup unbinds the instance from its placement group
+// if one is set. No-op for ungrouped instances and when the placement
+// group service is not configured.
+func (a *instanceCleanerAdapter) RemoveFromPlacementGroup(instance *vm.VM) {
+	if instance.PlacementGroupName == "" || a.d.placementGroupService == nil {
+		return
+	}
+	if _, err := a.d.placementGroupService.RemoveInstance(&handlers_ec2_placementgroup.RemoveInstanceInput{
+		GroupName:  instance.PlacementGroupName,
+		NodeName:   instance.PlacementGroupNode,
+		InstanceID: instance.ID,
+	}, instance.AccountID); err != nil {
+		slog.Error("Failed to remove instance from placement group",
+			"instanceId", instance.ID, "groupName", instance.PlacementGroupName, "err", err)
 	}
 }
