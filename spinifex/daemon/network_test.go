@@ -229,49 +229,6 @@ func TestGenerateDevMAC(t *testing.T) {
 	}
 }
 
-func TestCleanupExtraENITaps_CallsCleanupPerExtra(t *testing.T) {
-	mock := &MockNetworkPlumber{}
-	d := &Daemon{networkPlumber: mock}
-	instance := &vm.VM{
-		ID: "i-multi-clean",
-		ExtraENIs: []vm.ExtraENI{
-			{ENIID: "eni-111"},
-			{ENIID: "eni-222"},
-			{ENIID: "eni-333"},
-		},
-	}
-
-	d.cleanupExtraENITaps(instance)
-
-	if len(mock.CleanupCalls) != 3 {
-		t.Fatalf("expected 3 cleanup calls, got %d", len(mock.CleanupCalls))
-	}
-	for i, want := range []string{"eni-111", "eni-222", "eni-333"} {
-		if mock.CleanupCalls[i] != want {
-			t.Errorf("cleanup[%d] = %q, want %q", i, mock.CleanupCalls[i], want)
-		}
-	}
-}
-
-func TestCleanupExtraENITaps_ErrorsAreLogged(t *testing.T) {
-	mock := &MockNetworkPlumber{CleanupErr: fmt.Errorf("simulated cleanup failure")}
-	d := &Daemon{networkPlumber: mock}
-	instance := &vm.VM{
-		ID: "i-multi-clean-err",
-		ExtraENIs: []vm.ExtraENI{
-			{ENIID: "eni-111"},
-			{ENIID: "eni-222"},
-		},
-	}
-
-	// Must not panic or return — errors are swallowed by design so partial
-	// cleanup still frees later entries.
-	d.cleanupExtraENITaps(instance)
-	if len(mock.CleanupCalls) != 2 {
-		t.Errorf("expected both extras to be attempted, got %d cleanup calls", len(mock.CleanupCalls))
-	}
-}
-
 func TestFindInterfaceByIP_InvalidIP(t *testing.T) {
 	_, err := findInterfaceByIP("not-an-ip")
 	if err == nil {

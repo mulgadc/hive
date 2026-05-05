@@ -41,6 +41,16 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	require.NoError(t, daemon.jsManager.InitClusterStateBucket())
 	require.NoError(t, daemon.jsManager.InitTerminatedInstanceBucket())
 
+	// Wire just enough vm.Deps for manager-driven state operations to work
+	// (migrate, MarkFailed). Full wiring (network plumber, instance cleaner,
+	// volume mounter) is a Daemon.Start responsibility and is not needed
+	// here since these tests don't drive a real VM lifecycle.
+	daemon.vmMgr.SetDeps(vm.Deps{
+		NodeID:          daemon.node,
+		StateStore:      newStateStoreAdapter(daemon.jsManager),
+		TransitionState: daemon.TransitionState,
+	})
+
 	return daemon
 }
 
@@ -837,7 +847,7 @@ func TestMigrateInstanceToKV(t *testing.T) {
 	// Test stopped migration
 	stoppedVM := &vm.VM{ID: "i-migrate-stop", Status: vm.StateStopped}
 	daemon.vmMgr.Insert(stoppedVM)
-	assert.True(t, daemon.migrateStoppedToSharedKV(stoppedVM))
+	assert.True(t, daemon.vmMgr.MigrateStoppedToSharedKV(stoppedVM))
 	assertVMNotPresent(t, daemon, stoppedVM.ID, "should be removed from local map")
 	loaded, err := daemon.jsManager.LoadStoppedInstance(stoppedVM.ID)
 	require.NoError(t, err)
@@ -847,7 +857,7 @@ func TestMigrateInstanceToKV(t *testing.T) {
 	// Test terminated migration
 	terminatedVM := &vm.VM{ID: "i-migrate-term", Status: vm.StateTerminated}
 	daemon.vmMgr.Insert(terminatedVM)
-	assert.True(t, daemon.migrateTerminatedToKV(terminatedVM))
+	assert.True(t, daemon.vmMgr.MigrateTerminatedToKV(terminatedVM))
 	assertVMNotPresent(t, daemon, terminatedVM.ID, "should be removed from local map")
 	loadedTerm, err := daemon.jsManager.LoadTerminatedInstance(terminatedVM.ID)
 	require.NoError(t, err)
@@ -855,15 +865,19 @@ func TestMigrateInstanceToKV(t *testing.T) {
 	assert.Equal(t, daemon.node, loadedTerm.LastNode)
 }
 
-// TestMigrateInstanceToKV_NoJetStream verifies graceful failure when JetStream is nil.
-func TestMigrateInstanceToKV_NoJetStream(t *testing.T) {
+// TestMigrateInstanceToKV_NoStateStore verifies graceful failure when the
+// manager has no StateStore wired (the fresh-Daemon equivalent of "no
+// JetStream").
+func TestMigrateInstanceToKV_NoStateStore(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
-	daemon.jsManager = nil
+	// Re-set deps without the StateStore so MigrateStoppedToSharedKV /
+	// MigrateTerminatedToKV early-return false.
+	daemon.vmMgr.SetDeps(vm.Deps{NodeID: daemon.node})
 
 	vm1 := &vm.VM{ID: "i-no-js", Status: vm.StateStopped}
 	daemon.vmMgr.Insert(vm1)
-	assert.False(t, daemon.migrateStoppedToSharedKV(vm1))
-	assert.False(t, daemon.migrateTerminatedToKV(vm1))
+	assert.False(t, daemon.vmMgr.MigrateStoppedToSharedKV(vm1))
+	assert.False(t, daemon.vmMgr.MigrateTerminatedToKV(vm1))
 	// Instance should still be in local map since migration failed
 	assertVMPresent(t, daemon, vm1.ID)
 }
@@ -994,16 +1008,22 @@ func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
 			stuck = append(stuck, instance)
 		}
 	}
+	// Snapshot the stuck instance before MarkFailed runs the full cleanup
+	// chain — finalizeTerminated removes it from the local map.
+	stuckBefore, _ := daemon.vmMgr.Get("i-stuck")
+	require.NotNil(t, stuckBefore)
 	for _, instance := range stuck {
-		daemon.markInstanceFailed(instance, "launch_timeout")
+		daemon.vmMgr.MarkFailed(instance, "launch_timeout")
 	}
 
-	// Stuck instance should have transitioned to shutting-down
-	stuckInst, _ := daemon.vmMgr.Get("i-stuck")
-	assert.Equal(t, vm.StateShuttingDown, stuckInst.Status)
-	require.NotNil(t, stuckInst.Instance.StateReason)
-	assert.Equal(t, "Server.InternalError", *stuckInst.Instance.StateReason.Code)
-	assert.Equal(t, "launch_timeout", *stuckInst.Instance.StateReason.Message)
+	// MarkFailed sets the StateReason synchronously and runs the cleanup
+	// chain to terminated. The instance is removed from the local map by
+	// finalizeTerminated, so verify the StateReason on the snapshot we
+	// captured before the call.
+	require.NotNil(t, stuckBefore.Instance.StateReason)
+	assert.Equal(t, "Server.InternalError", *stuckBefore.Instance.StateReason.Code)
+	assert.Equal(t, "launch_timeout", *stuckBefore.Instance.StateReason.Message)
+	assert.Equal(t, vm.StateTerminated, stuckBefore.Status)
 
 	// Fresh instance should still be pending
 	freshInst, _ := daemon.vmMgr.Get("i-fresh")
@@ -1102,7 +1122,7 @@ func TestMarkInstanceFailed_AlreadyShuttingDown(t *testing.T) {
 	daemon.vmMgr.Insert(instance)
 
 	// Should be a no-op — instance is already being cleaned up
-	daemon.markInstanceFailed(instance, "test_reason")
+	daemon.vmMgr.MarkFailed(instance, "test_reason")
 
 	// Status should not change
 	assert.Equal(t, vm.StateShuttingDown, instance.Status)
@@ -1118,7 +1138,7 @@ func TestMarkInstanceFailed_AlreadyTerminated(t *testing.T) {
 	}
 	daemon.vmMgr.Insert(instance)
 
-	daemon.markInstanceFailed(instance, "test_reason")
+	daemon.vmMgr.MarkFailed(instance, "test_reason")
 
 	// Status should not change
 	assert.Equal(t, vm.StateTerminated, instance.Status)

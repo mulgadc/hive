@@ -27,6 +27,7 @@ type Deps struct {
 	InstanceTypes      InstanceTypeResolver
 	Resources          ResourceController
 	VolumeStateUpdater VolumeStateUpdater
+	InstanceCleaner    InstanceCleaner
 	Hooks              ManagerHooks
 
 	// ShutdownSignal returns true once the daemon has begun coordinated

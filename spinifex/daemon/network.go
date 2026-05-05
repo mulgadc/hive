@@ -113,17 +113,6 @@ func (p *OVSNetworkPlumber) CleanupTapDevice(eniId string) error {
 	return nil
 }
 
-// cleanupExtraENITaps removes tap devices for every extra ENI attached to a
-// system VM. Errors are logged but not returned so a partial cleanup still
-// frees as many resources as possible.
-func (d *Daemon) cleanupExtraENITaps(instance *vm.VM) {
-	for _, extra := range instance.ExtraENIs {
-		if err := d.networkPlumber.CleanupTapDevice(extra.ENIID); err != nil {
-			slog.Warn("Failed to clean up extra ENI tap device", "eni", extra.ENIID, "err", err)
-		}
-	}
-}
-
 // OVSIfaceID returns the OVS external_ids:iface-id value for an ENI.
 // This must match the OVN LogicalSwitchPort name for ovn-controller binding.
 func OVSIfaceID(eniId string) string {
