@@ -1,7 +1,10 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -225,4 +228,143 @@ func TestStartReturnsErrorWhenInstanceUnknown(t *testing.T) {
 	err := m.Start("i-missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "i-missing")
+}
+
+// launchTestManager wires the minimum deps needed to drive Manager.launch
+// far enough to exercise the early-exit paths and the VolumeMounter call
+// site. Returns the manager, the mounter (for assertions and onMount
+// hooks), and a counter of OnInstanceUp invocations.
+func launchTestManager(t *testing.T) (*Manager, *fakeVolumeMounter, *int) {
+	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	mounter := &fakeVolumeMounter{}
+	upCalls := 0
+	m := NewManager()
+	m.SetDeps(Deps{
+		VolumeMounter: mounter,
+		Hooks: ManagerHooks{
+			OnInstanceUp: func(*VM) error { upCalls++; return nil },
+		},
+	})
+	return m, mounter, &upCalls
+}
+
+// TestRun_LaunchStillValid_FirstCheck covers the first launchStillValid
+// race-check (lifecycle.go:77): when a concurrent terminate has flipped
+// status out of {Pending, Stopped, Provisioning} before Run starts, Run
+// must return nil immediately without mounting volumes or firing the
+// OnInstanceUp hook — the terminate goroutine owns cleanup.
+func TestRun_LaunchStillValid_FirstCheck(t *testing.T) {
+	for _, status := range []InstanceState{
+		StateRunning, StateStopping, StateShuttingDown, StateTerminated, StateError,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			m, mounter, upCalls := launchTestManager(t)
+			instance := &VM{ID: "i-" + string(status), Status: status}
+			m.Insert(instance)
+
+			err := m.Run(instance)
+
+			require.NoError(t, err)
+			assert.Empty(t, mounter.mounted, "Mount must not be called when launch is aborted by first race check")
+			assert.Equal(t, 0, *upCalls, "OnInstanceUp must not fire when launch is aborted")
+			assert.Equal(t, status, m.Status(instance), "status must not change")
+		})
+	}
+}
+
+// TestRun_LaunchStillValid_SecondCheck covers the second launchStillValid
+// race-check (lifecycle.go:102): a terminate races in during Mount (which
+// can take 30+s on cold AMIs) and flips status to ShuttingDown. Run must
+// return nil after Mount completes, without proceeding to startQEMU or
+// firing OnInstanceUp.
+func TestRun_LaunchStillValid_SecondCheck(t *testing.T) {
+	m, mounter, upCalls := launchTestManager(t)
+	instance := &VM{ID: "i-flip", Status: StatePending}
+	m.Insert(instance)
+
+	mounter.onMount = func(v *VM) {
+		m.UpdateState(v.ID, func(vv *VM) { vv.Status = StateShuttingDown })
+	}
+
+	err := m.Run(instance)
+
+	require.NoError(t, err, "Run must return nil when concurrent terminate flips status during Mount")
+	assert.Equal(t, []string{"i-flip"}, mounter.mounted, "Mount must run exactly once before the second race check")
+	assert.Equal(t, 0, *upCalls, "OnInstanceUp must not fire when the second race check aborts launch")
+	assert.Equal(t, StateShuttingDown, m.Status(instance))
+}
+
+// TestRun_VolumeMounterError_Propagates covers the Mount-failure branch
+// (lifecycle.go:93): the error must bubble up unchanged, no startQEMU, no
+// hook fires, and the manager state is unaffected.
+func TestRun_VolumeMounterError_Propagates(t *testing.T) {
+	m, mounter, upCalls := launchTestManager(t)
+	sentinel := errors.New("mount failed")
+	mounter.mountErr = sentinel
+
+	instance := &VM{ID: "i-mount-fail", Status: StatePending}
+	m.Insert(instance)
+
+	err := m.Run(instance)
+
+	require.ErrorIs(t, err, sentinel)
+	assert.Equal(t, []string{"i-mount-fail"}, mounter.mounted)
+	assert.Equal(t, 0, *upCalls)
+	assert.Equal(t, StatePending, m.Status(instance), "status must be unchanged on Mount failure")
+}
+
+// TestRun_AlreadyRunningPID_ReturnsError covers the live-PID guard
+// (lifecycle.go:81-91): when the PID file refers to a live process, Run
+// must return an error before touching volumes or firing hooks.
+func TestRun_AlreadyRunningPID_ReturnsError(t *testing.T) {
+	m, mounter, upCalls := launchTestManager(t)
+
+	instance := &VM{ID: "i-live-pid", Status: StatePending}
+	m.Insert(instance)
+
+	pidDir := os.Getenv("XDG_RUNTIME_DIR")
+	pidFile := filepath.Join(pidDir, instance.ID+".pid")
+	require.NoError(t, os.WriteFile(pidFile, fmt.Appendf(nil, "%d", os.Getpid()), 0o600))
+
+	err := m.Run(instance)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already running")
+	assert.Empty(t, mounter.mounted, "Mount must not run when an existing live PID is detected")
+	assert.Equal(t, 0, *upCalls)
+}
+
+// TestStart_DispatchesThroughLaunch asserts Start (the found-instance
+// branch) actually drives launch — not merely returns nil. A regression
+// that made Start a no-op after the lookup would still pass
+// TestStartReturnsErrorWhenInstanceUnknown; this test catches it by
+// requiring the launch-internal Mount call.
+func TestStart_DispatchesThroughLaunch(t *testing.T) {
+	m, mounter, _ := launchTestManager(t)
+	sentinel := errors.New("mount failed via Start")
+	mounter.mountErr = sentinel
+
+	instance := &VM{ID: "i-start-dispatch", Status: StateStopped}
+	m.Insert(instance)
+
+	err := m.Start(instance.ID)
+
+	require.ErrorIs(t, err, sentinel, "Start must dispatch through launch and surface Mount errors")
+	assert.Equal(t, []string{"i-start-dispatch"}, mounter.mounted)
+}
+
+// TestStart_AbortedByConcurrentTerminate is the Start-side mirror of the
+// first launchStillValid check: a status set outside the launchable
+// allowlist must abort the launch with no error and no Mount call.
+func TestStart_AbortedByConcurrentTerminate(t *testing.T) {
+	m, mounter, upCalls := launchTestManager(t)
+	instance := &VM{ID: "i-start-abort", Status: StateShuttingDown}
+	m.Insert(instance)
+
+	err := m.Start(instance.ID)
+
+	require.NoError(t, err)
+	assert.Empty(t, mounter.mounted)
+	assert.Equal(t, 0, *upCalls)
 }

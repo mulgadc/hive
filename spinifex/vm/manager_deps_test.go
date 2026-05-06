@@ -146,13 +146,21 @@ type fakeVolumeMounter struct {
 	mountErr                 error
 	mountOneErr              error
 	mountOneURI              string
+	// onMount fires synchronously inside Mount before the configured
+	// mountErr is returned. Used by lifecycle tests to simulate a
+	// concurrent terminate flipping VM.Status while Mount is in flight.
+	onMount func(*VM)
 }
 
 func (f *fakeVolumeMounter) Mount(v *VM) error {
 	f.mu.Lock()
 	f.mounted = append(f.mounted, v.ID)
 	err := f.mountErr
+	hook := f.onMount
 	f.mu.Unlock()
+	if hook != nil {
+		hook(v)
+	}
 	return err
 }
 
