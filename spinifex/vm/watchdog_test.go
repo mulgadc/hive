@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 // pendingInstance returns a VM in the supplied state with LaunchTime set
@@ -116,18 +117,16 @@ func TestScanAndMarkStuckPending_OnlyPendingStatesScanned(t *testing.T) {
 }
 
 func TestStartPendingWatchdog_CtxCancelStopsGoroutine(t *testing.T) {
+	// goleak fails the test if the watchdog goroutine outlives ctx.
+	// Without this, a regression that ignored ctx.Done would still pass:
+	// the harness reaps the leaked goroutine on test process exit.
+	defer goleak.VerifyNone(t)
+
 	m, _, _, _ := crashTestManager(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	m.StartPendingWatchdog(ctx)
-
-	// Immediately cancel; with PendingWatchdogInterval at 60s, the only
-	// observable signal that the goroutine respected ctx.Done is that the
-	// test exits cleanly without waiting for the next tick.
 	cancel()
-	// Yield briefly so the goroutine actually returns before the test
-	// finishes; race detector catches any leaked work.
-	time.Sleep(10 * time.Millisecond)
 }
 
 func assertStuckMarkedFailed(t *testing.T, m *Manager, rt *recordedTransitions, v *VM) {
