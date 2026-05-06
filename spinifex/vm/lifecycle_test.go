@@ -3,6 +3,7 @@ package vm
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 func TestBuildBaseVMConfig(t *testing.T) {
@@ -367,4 +369,81 @@ func TestStart_AbortedByConcurrentTerminate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, mounter.mounted)
 	assert.Equal(t, 0, *upCalls)
+}
+
+// startBrokenQMPListener accepts on a unix socket and immediately closes
+// every connection without sending a greeting, so qmp.NewQMPClient's
+// greeting decode fails. Returns the socket path and a stop function the
+// caller must invoke before goleak.VerifyNone so the accept goroutine
+// drains.
+func startBrokenQMPListener(t *testing.T) (string, func()) {
+	t.Helper()
+	sockPath := filepath.Join(t.TempDir(), "qmp.sock")
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		_ = ln.Close()
+		<-done
+	}
+	t.Cleanup(stop)
+	return sockPath, stop
+}
+
+// TestAttachQMP_DialFailure_NoHeartbeatLeak covers the regression the
+// parent plan flagged: a swap that started qmpHeartbeat before checking
+// the factory error would leak one goroutine per failed reconnect. With
+// no listener at the configured socket, net.Dial fails inside
+// newQMPClientWithHandshake and AttachQMP must return without spawning
+// the heartbeat or mutating instance.QMPClient.
+func TestAttachQMP_DialFailure_NoHeartbeatLeak(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	m := NewManager()
+	instance := &VM{
+		ID:     "i-dial-fail",
+		Config: Config{QMPSocket: filepath.Join(t.TempDir(), "missing.sock")},
+	}
+
+	err := m.AttachQMP(instance)
+
+	require.Error(t, err)
+	assert.Nil(t, instance.QMPClient, "QMPClient must remain unset on dial failure")
+}
+
+// TestAttachQMP_HandshakeFailure_NoHeartbeatLeak covers the path where
+// the unix socket exists but qmp.NewQMPClient's greeting decode fails
+// (server closed). The dial succeeded so the connection must be closed
+// before AttachQMP returns, the heartbeat must not start, and
+// instance.QMPClient must remain nil.
+func TestAttachQMP_HandshakeFailure_NoHeartbeatLeak(t *testing.T) {
+	sockPath, stopListener := startBrokenQMPListener(t)
+
+	m := NewManager()
+	instance := &VM{ID: "i-handshake-fail", Config: Config{QMPSocket: sockPath}}
+
+	err := m.AttachQMP(instance)
+
+	require.Error(t, err)
+	assert.Nil(t, instance.QMPClient, "QMPClient must remain unset on handshake failure")
+
+	stopListener()
+	goleak.VerifyNone(t)
 }
