@@ -371,6 +371,38 @@ func TestStart_AbortedByConcurrentTerminate(t *testing.T) {
 	assert.Equal(t, 0, *upCalls)
 }
 
+// TestLaunchStillValid_Allowlist locks in the launchStillValid allowlist
+// across every defined InstanceState plus the zero value. The parent
+// plan flagged: "a regression in the allowlist would silently break the
+// start-stopped path" — e.g. dropping StateStopped would make
+// StartInstances on a stopped VM no-op without surfacing an error.
+func TestLaunchStillValid_Allowlist(t *testing.T) {
+	tests := []struct {
+		status InstanceState
+		want   bool
+		why    string
+	}{
+		{StateProvisioning, true, "RunInstances entry: launches before status flip to Pending"},
+		{StatePending, true, "RunInstances/restore entry: launch must proceed"},
+		{StateStopped, true, "StartInstances re-launches a stopped VM through the same pipeline"},
+		{StateRunning, false, "already past launch — second Run is a no-op"},
+		{StateStopping, false, "stop in flight: stopCleanup owns teardown"},
+		{StateShuttingDown, false, "terminate in flight: terminateCleanup owns teardown"},
+		{StateTerminated, false, "terminal"},
+		{StateError, false, "RestartCrashedInstance drives transitions, not launch"},
+		{InstanceState(""), false, "zero value must reject"},
+	}
+
+	m := NewManager()
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			instance := &VM{ID: "i-" + string(tt.status), Status: tt.status}
+			got := m.launchStillValid(instance)
+			assert.Equal(t, tt.want, got, tt.why)
+		})
+	}
+}
+
 // startBrokenQMPListener accepts on a unix socket and immediately closes
 // every connection without sending a greeting, so qmp.NewQMPClient's
 // greeting decode fails. Returns the socket path and a stop function the
