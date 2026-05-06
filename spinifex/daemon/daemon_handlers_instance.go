@@ -72,8 +72,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
 		return
 	}
-	// Verify the caller can use this AMI: must own it or it must be a system/pre-phase4 AMI.
-	// System AMIs have non-account-ID owner aliases (e.g. "self", "spinifex", empty).
+	// Verify the caller can use this AMI: must own it or the AMI must
+	// have a non-account-ID owner alias (e.g. "self", "spinifex", empty)
+	// indicating a system/legacy AMI.
 	amiOwner := amiMeta.ImageOwnerAlias
 	if amiOwner != "" && amiOwner != accountID {
 		if utils.IsAccountID(amiOwner) {
@@ -335,11 +336,8 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// will replace these subscriptions when it completes.
 	d.mu.Lock()
 	for _, instance := range instances {
-		sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-		if subErr != nil {
-			slog.Error("Failed to early-subscribe to per-instance topic", "instanceId", instance.ID, "err", subErr)
-		} else {
-			d.natsSubscriptions[instance.ID] = sub
+		if err := d.subscribeInstanceCommand(instance.ID); err != nil {
+			slog.Error("Failed to early-subscribe to per-instance topic", "instanceId", instance.ID, "err", err)
 		}
 	}
 	d.mu.Unlock()
@@ -690,7 +688,8 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	d.vmMgr.View(func(vms map[string]*vm.VM) {
 		for _, instance := range vms {
 			// Skip instances not owned by the caller's account.
-			// Pre-Phase4 instances (empty AccountID) are only visible to root.
+			// Instances with an empty AccountID (legacy/migration data)
+			// are only visible to root.
 			if !isInstanceVisible(accountID, instance.AccountID) {
 				continue
 			}

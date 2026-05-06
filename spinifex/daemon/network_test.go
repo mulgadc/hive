@@ -44,7 +44,7 @@ type MockNetworkPlumber struct {
 	CleanupErr   error
 }
 
-var _ NetworkPlumber = (*MockNetworkPlumber)(nil)
+var _ vm.NetworkPlumber = (*MockNetworkPlumber)(nil)
 
 type mockSetupCall struct {
 	ENIId string

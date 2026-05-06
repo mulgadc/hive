@@ -49,7 +49,6 @@ import (
 	handlers_elbv2 "github.com/mulgadc/spinifex/spinifex/handlers/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
-	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/tags"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -155,8 +154,8 @@ type Daemon struct {
 	// NATS connect retry options (nil uses defaults: 5min max, 500ms initial delay)
 	natsRetryOpts []utils.RetryOption
 
-	// NetworkPlumber handles tap device lifecycle for VPC networking
-	networkPlumber NetworkPlumber
+	// networkPlumber handles tap device lifecycle for VPC networking.
+	networkPlumber vm.NetworkPlumber
 
 	// Management NIC infrastructure: bridge IP + IP allocator for system instances.
 	// Populated at startup when br-mgmt is detected; nil/empty otherwise.
@@ -897,7 +896,7 @@ func (d *Daemon) Start() error {
 
 	d.waitForClusterReady()
 	d.upgradeJetStreamReplicas()
-	d.restoreInstances()
+	d.vmMgr.Restore()
 
 	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
 	// that are already in use by running system instances.
@@ -1094,19 +1093,6 @@ func (d *Daemon) checkPredastoreReady() bool {
 	return true
 }
 
-// restoreInstances delegates to vm.Manager.Restore. Daemon-side shim
-// preserved so existing tests keep their bare-method call shape; phase 2f
-// migrates them into vm/ and removes the wrapper.
-func (d *Daemon) restoreInstances() {
-	d.vmMgr.Restore()
-}
-
-// areVolumeSocketsValid is a daemon-side shim around vm.AreVolumeSocketsValid
-// kept so the existing TestAreVolumeSocketsValid_* cases call the same name.
-func (d *Daemon) areVolumeSocketsValid(instance *vm.VM) bool {
-	return vm.AreVolumeSocketsValid(instance)
-}
-
 // awaitShutdown blocks until the daemon's shutdown wait group completes.
 func (d *Daemon) awaitShutdown() {
 	done := make(chan struct{})
@@ -1201,7 +1187,7 @@ func (d *Daemon) ClusterManager() error {
 		}
 	})
 
-	// Load TLS certificate (C-5: serve over HTTPS instead of plaintext HTTP)
+	// Load TLS certificate.
 	// Resolve relative cert paths against config directory (cert lives alongside spinifex.toml).
 	// For binary installs, systemd sets absolute paths via env vars; for dev, the config
 	// stores relative paths like "config/server.pem" which need resolution.
@@ -1268,77 +1254,6 @@ func (d *Daemon) WriteState() error {
 		return fmt.Errorf("failed to write state to JetStream: %w", writeErr)
 	}
 	return nil
-}
-
-// LoadState loads the instance state from JetStream KV store (required).
-// Replaces the manager's running set with the loaded map.
-func (d *Daemon) LoadState() error {
-	if d.jsManager == nil {
-		return fmt.Errorf("JetStream manager not initialized - cannot load state")
-	}
-
-	loaded, err := d.jsManager.LoadState(d.node)
-	if err != nil {
-		slog.Error("JetStream load failed", "error", err)
-		return fmt.Errorf("failed to load state from JetStream: %w", err)
-	}
-
-	d.vmMgr.Replace(loaded)
-	return nil
-}
-
-func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
-	// Confirm QMP client is initialized
-	if q == nil || q.Encoder == nil || q.Decoder == nil {
-		return nil, fmt.Errorf("QMP client is not initialized")
-	}
-
-	// Lock the QMP client
-	q.Mu.Lock()
-	defer q.Mu.Unlock()
-
-	// Set a read deadline so we don't block forever on a hung QEMU process
-	if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return nil, fmt.Errorf("set read deadline: %w", err)
-	}
-	defer func() { _ = q.Conn.SetReadDeadline(time.Time{}) }() // clear deadline after command
-
-	if err := q.Encoder.Encode(cmd); err != nil {
-		return nil, fmt.Errorf("encode error: %w", err)
-	}
-
-	for {
-		var msg map[string]any
-		if err := q.Decoder.Decode(&msg); err != nil {
-			return nil, fmt.Errorf("decode error: %w", err)
-		}
-
-		if _, ok := msg["event"]; ok {
-			// QMP events are informational only — state transitions are driven
-			// by the command handlers that initiate the action, avoiding races
-			// between event-driven and command-driven transitions.
-			slog.Info("QMP event", "event", msg["event"], "instanceId", instanceId)
-			// Extend deadline after receiving an event (QEMU is alive, just chatty)
-			if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-				return nil, fmt.Errorf("set read deadline: %w", err)
-			}
-			continue
-		}
-		if errObj, ok := msg["error"].(map[string]any); ok {
-			return nil, fmt.Errorf("QMP error: %s: %s", errObj["class"], errObj["desc"])
-		}
-		if _, ok := msg["return"]; ok {
-			respBytes, err := json.Marshal(msg)
-			if err != nil {
-				return nil, fmt.Errorf("marshal QMP response: %w", err)
-			}
-			var resp qmp.QMPResponse
-			if err := json.Unmarshal(respBytes, &resp); err != nil {
-				return nil, fmt.Errorf("unmarshal error: %w", err)
-			}
-			return &resp, nil
-		}
-	}
 }
 
 // setupReload registers a SIGHUP handler that reloads GPU config without restarting.

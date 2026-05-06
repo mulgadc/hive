@@ -213,12 +213,8 @@ func TestDeps_StateStoreSatisfiesInterface(t *testing.T) {
 	if err := m.deps.StateStore.WriteStoppedInstance("i-1", &VM{ID: "i-1"}); err != nil {
 		t.Fatalf("WriteStoppedInstance: %v", err)
 	}
-	got, err := m.deps.StateStore.LoadStoppedInstance("i-1")
-	if err != nil {
-		t.Fatalf("LoadStoppedInstance: %v", err)
-	}
-	if got == nil || got.ID != "i-1" {
-		t.Fatalf("LoadStoppedInstance: got %v, want VM{ID:i-1}", got)
+	if got := store.stopped["i-1"]; got == nil || got.ID != "i-1" {
+		t.Fatalf("WriteStoppedInstance: got %v, want VM{ID:i-1}", got)
 	}
 
 	if err := m.deps.StateStore.SaveRunningState("n", map[string]*VM{"i-1": {ID: "i-1"}}); err != nil {
