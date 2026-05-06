@@ -145,7 +145,7 @@ run_http_burst() {
     local results
     results=$(node_ssh "for i in \$(seq 1 $num); do curl -s --max-time 5 '$url/' 2>/dev/null; echo; done" 2>/dev/null || true)
 
-    declare -A counts
+    declare -A counts=()
     local total_ok=0
     while IFS= read -r line; do
         local inst
