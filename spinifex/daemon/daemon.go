@@ -148,6 +148,11 @@ type Daemon struct {
 	// JetStream manager for KV state storage (nil if JetStream disabled)
 	jsManager *JetStreamManager
 
+	// stateStore is the vm.StateStore-shaped view over jsManager. Both the
+	// vm.Manager and daemon-side handlers route VM-instance state I/O
+	// through it. Initialized after initJetStream succeeds.
+	stateStore vm.StateStore
+
 	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
 	detachDelay time.Duration
 
@@ -980,6 +985,8 @@ func (d *Daemon) initJetStream() error {
 		time.Sleep(retryDelay)
 		retryDelay = min(retryDelay*2, 10*time.Second)
 	}
+
+	d.stateStore = newStateStoreAdapter(d.jsManager)
 
 	// Replica upgrade is deferred to after all services have created their
 	// KV buckets and the cluster is ready (see upgradeJetStreamReplicas).

@@ -45,8 +45,24 @@ func (a *stateStoreAdapter) WriteStoppedInstance(id string, v *vm.VM) error {
 	return a.js.WriteStoppedInstance(id, v)
 }
 
+func (a *stateStoreAdapter) LoadStoppedInstance(id string) (*vm.VM, error) {
+	return a.js.LoadStoppedInstance(id)
+}
+
+func (a *stateStoreAdapter) DeleteStoppedInstance(id string) error {
+	return a.js.DeleteStoppedInstance(id)
+}
+
+func (a *stateStoreAdapter) ListStoppedInstances() ([]*vm.VM, error) {
+	return a.js.ListStoppedInstances()
+}
+
 func (a *stateStoreAdapter) WriteTerminatedInstance(id string, v *vm.VM) error {
 	return a.js.WriteTerminatedInstance(id, v)
+}
+
+func (a *stateStoreAdapter) ListTerminatedInstances() ([]*vm.VM, error) {
+	return a.js.ListTerminatedInstances()
 }
 
 // volumeMounterAdapter satisfies vm.VolumeMounter by routing ebs.mount /
@@ -280,27 +296,18 @@ func (d *Daemon) onInstanceRecoveringHook() func(*vm.VM) {
 	return func(instance *vm.VM) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if err := d.subscribeInstanceCommand(instance.ID); err != nil {
+
+		if _, ok := d.natsSubscriptions[instance.ID]; ok {
+			return
+		}
+		sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+		if err != nil {
 			slog.Error("OnInstanceRecovering: failed to early-subscribe per-instance topic",
 				"instanceId", instance.ID, "err", err)
+			return
 		}
+		d.natsSubscriptions[instance.ID] = sub
 	}
-}
-
-// subscribeInstanceCommand idempotently subscribes ec2.cmd.<id> on the
-// daemon's NATS connection and records the handle in d.natsSubscriptions.
-// Caller must hold d.mu. No-op if a subscription already exists for id.
-// Callers choose their own log level for the returned error.
-func (d *Daemon) subscribeInstanceCommand(id string) error {
-	if _, ok := d.natsSubscriptions[id]; ok {
-		return nil
-	}
-	sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", id), d.handleEC2Events)
-	if err != nil {
-		return fmt.Errorf("subscribe ec2.cmd.%s: %w", id, err)
-	}
-	d.natsSubscriptions[id] = sub
-	return nil
 }
 
 // consumeCleanShutdownMarker returns the daemon's
@@ -408,7 +415,7 @@ func (d *Daemon) onInstanceDownHook() func(string) {
 func (d *Daemon) buildVMManagerDeps() vm.Deps {
 	return vm.Deps{
 		NodeID:             d.node,
-		StateStore:         newStateStoreAdapter(d.jsManager),
+		StateStore:         d.stateStore,
 		VolumeMounter:      newVolumeMounterAdapter(d.natsConn, d.node, d.volumeService),
 		NetworkPlumber:     d.networkPlumber,
 		InstanceTypes:      newInstanceTypeResolverAdapter(d.resourceMgr),

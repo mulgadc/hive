@@ -245,8 +245,11 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 
 	// Subscribe to per-instance NATS topic for terminate commands.
 	d.mu.Lock()
-	if err := d.subscribeInstanceCommand(instance.ID); err != nil {
-		slog.Warn("LaunchSystemInstance: failed to subscribe to instance topic", "instanceId", instance.ID, "err", err)
+	sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+	if subErr != nil {
+		slog.Warn("LaunchSystemInstance: failed to subscribe to instance topic", "instanceId", instance.ID, "err", subErr)
+	} else {
+		d.natsSubscriptions[instance.ID] = sub
 	}
 	d.mu.Unlock()
 

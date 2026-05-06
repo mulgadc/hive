@@ -86,6 +86,7 @@ func createFullTestDaemonWithJetStream(t *testing.T, natsURL string) *Daemon {
 	require.NoError(t, err)
 	err = daemon.jsManager.InitTerminatedInstanceBucket()
 	require.NoError(t, err)
+	daemon.stateStore = newStateStoreAdapter(daemon.jsManager)
 
 	return daemon
 }

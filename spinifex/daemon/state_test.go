@@ -40,6 +40,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	require.NoError(t, daemon.jsManager.InitKVBucket())
 	require.NoError(t, daemon.jsManager.InitClusterStateBucket())
 	require.NoError(t, daemon.jsManager.InitTerminatedInstanceBucket())
+	daemon.stateStore = newStateStoreAdapter(daemon.jsManager)
 
 	// Wire just enough vm.Deps for manager-driven state operations to work
 	// (migrate, MarkFailed, Restore classification). Full wiring (network
@@ -48,7 +49,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	// a real VM lifecycle.
 	daemon.vmMgr.SetDeps(vm.Deps{
 		NodeID:                     daemon.node,
-		StateStore:                 newStateStoreAdapter(daemon.jsManager),
+		StateStore:                 daemon.stateStore,
 		TransitionState:            daemon.TransitionState,
 		InstanceTypes:              newInstanceTypeResolverAdapter(daemon.resourceMgr),
 		Resources:                  newResourceControllerAdapter(daemon.resourceMgr),

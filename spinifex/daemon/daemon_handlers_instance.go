@@ -336,8 +336,11 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// will replace these subscriptions when it completes.
 	d.mu.Lock()
 	for _, instance := range instances {
-		if err := d.subscribeInstanceCommand(instance.ID); err != nil {
-			slog.Error("Failed to early-subscribe to per-instance topic", "instanceId", instance.ID, "err", err)
+		sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+		if subErr != nil {
+			slog.Error("Failed to early-subscribe to per-instance topic", "instanceId", instance.ID, "err", subErr)
+		} else {
+			d.natsSubscriptions[instance.ID] = sub
 		}
 	}
 	d.mu.Unlock()
@@ -836,14 +839,14 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		return
 	}
 
-	if d.jsManager == nil {
-		slog.Error("handleEC2StartStoppedInstance: JetStream not available")
+	if d.stateStore == nil {
+		slog.Error("handleEC2StartStoppedInstance: state store not available")
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	// Load instance from shared KV
-	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
+	instance, err := d.stateStore.LoadStoppedInstance(req.InstanceID)
 	if err != nil {
 		slog.Error("handleEC2StartStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
@@ -926,10 +929,10 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 
 	// Remove from shared KV now that it's running locally.
 	// Retry once on failure — a stale KV entry risks duplicate starts.
-	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+	if err := d.stateStore.DeleteStoppedInstance(req.InstanceID); err != nil {
 		slog.Warn("handleEC2StartStoppedInstance: first KV delete failed, retrying",
 			"instanceId", req.InstanceID, "err", err)
-		if retryErr := d.jsManager.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
+		if retryErr := d.stateStore.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
 			slog.Error("handleEC2StartStoppedInstance: KV delete failed after retry, instance is running locally but stale entry remains in shared KV",
 				"instanceId", req.InstanceID, "err", retryErr)
 		}
@@ -963,14 +966,14 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 		return
 	}
 
-	if d.jsManager == nil {
-		slog.Error("handleEC2TerminateStoppedInstance: JetStream not available")
+	if d.stateStore == nil {
+		slog.Error("handleEC2TerminateStoppedInstance: state store not available")
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	// Load instance from shared KV
-	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
+	instance, err := d.stateStore.LoadStoppedInstance(req.InstanceID)
 	if err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
@@ -1065,7 +1068,7 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	// Write to terminated KV bucket FIRST so the instance is visible in DescribeInstances.
 	// If this fails, the instance remains in the stopped bucket (safe to retry).
 	instance.Status = vm.StateTerminated
-	if err := d.jsManager.WriteTerminatedInstance(req.InstanceID, instance); err != nil {
+	if err := d.stateStore.WriteTerminatedInstance(req.InstanceID, instance); err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to write to terminated KV, aborting", "instanceId", req.InstanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
@@ -1073,10 +1076,10 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 
 	// Now safe to remove from shared stopped KV — instance already exists in terminated bucket.
 	// Retry once on failure to avoid duplicate entries in DescribeInstances.
-	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+	if err := d.stateStore.DeleteStoppedInstance(req.InstanceID); err != nil {
 		slog.Warn("handleEC2TerminateStoppedInstance: first stopped KV delete failed, retrying",
 			"instanceId", req.InstanceID, "err", err)
-		if retryErr := d.jsManager.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
+		if retryErr := d.stateStore.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
 			slog.Error("handleEC2TerminateStoppedInstance: stopped KV delete failed after retry, instance may appear in both buckets",
 				"instanceId", req.InstanceID, "err", retryErr)
 		}
@@ -1091,22 +1094,25 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 
 // handleEC2DescribeStoppedInstances returns stopped instances from shared KV.
 func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
-	d.describeInstancesFromKV(msg, d.jsManager.ListStoppedInstances, 80, "stopped", "handleEC2DescribeStoppedInstances")
+	if d.stateStore == nil {
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+	d.describeInstancesFromKV(msg, d.stateStore.ListStoppedInstances, 80, "stopped", "handleEC2DescribeStoppedInstances")
 }
 
 // handleEC2DescribeTerminatedInstances returns terminated instances from the terminated KV bucket.
 func (d *Daemon) handleEC2DescribeTerminatedInstances(msg *nats.Msg) {
-	d.describeInstancesFromKV(msg, d.jsManager.ListTerminatedInstances, 48, "terminated", "handleEC2DescribeTerminatedInstances")
+	if d.stateStore == nil {
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+	d.describeInstancesFromKV(msg, d.stateStore.ListTerminatedInstances, 48, "terminated", "handleEC2DescribeTerminatedInstances")
 }
 
 // describeInstancesFromKV is a shared helper for DescribeStopped/TerminatedInstances handlers.
 // It lists instances from a KV bucket, filters by account/instance ID, and responds with reservations.
 func (d *Daemon) describeInstancesFromKV(msg *nats.Msg, listFn func() ([]*vm.VM, error), fallbackCode int64, fallbackName, handlerName string) {
-	if d.jsManager == nil {
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
 	accountID := utils.AccountIDFromMsg(msg)
 
 	describeInput := &ec2.DescribeInstancesInput{}
@@ -1226,13 +1232,13 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 		return
 	}
 
-	if d.jsManager == nil {
-		slog.Error("handleEC2ModifyInstanceAttribute: JetStream not available")
+	if d.stateStore == nil {
+		slog.Error("handleEC2ModifyInstanceAttribute: state store not available")
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
-	instance, err := d.jsManager.LoadStoppedInstance(instanceID)
+	instance, err := d.stateStore.LoadStoppedInstance(instanceID)
 	if err != nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: failed to load stopped instance", "instanceId", instanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
@@ -1288,7 +1294,7 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 		}
 	}
 
-	if err := d.jsManager.WriteStoppedInstance(instanceID, instance); err != nil {
+	if err := d.stateStore.WriteStoppedInstance(instanceID, instance); err != nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: failed to write modified instance to KV",
 			"instanceId", instanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
@@ -1334,12 +1340,12 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 	}
 
 	if instance == nil {
-		if d.jsManager == nil {
-			slog.Error("handleEC2DescribeInstanceAttribute: JetStream not available")
+		if d.stateStore == nil {
+			slog.Error("handleEC2DescribeInstanceAttribute: state store not available")
 			respondWithError(msg, awserrors.ErrorServerInternal)
 			return
 		}
-		stopped, err := d.jsManager.LoadStoppedInstance(instanceID)
+		stopped, err := d.stateStore.LoadStoppedInstance(instanceID)
 		if err != nil {
 			slog.Error("handleEC2DescribeInstanceAttribute: failed to load stopped instance",
 				"instanceId", instanceID, "err", err)
