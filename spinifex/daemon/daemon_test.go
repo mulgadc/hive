@@ -1402,12 +1402,13 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		resp, err := natsRequest(daemon.natsConn, topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
-		// Should return validation error
+		// MinCount=5 / MaxCount=3 — handleEC2RunInstances reaches the
+		// allocatableCount<minCount branch and returns
+		// InsufficientInstanceCapacity.
 		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
-		assert.Contains(t, errResp, "Code", "Should return error response")
-		t.Logf("Error response: %v", errResp)
+		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
 	})
 
 	t.Run("MaxCount_zero", func(t *testing.T) {
@@ -1422,10 +1423,12 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		resp, err := natsRequest(daemon.natsConn, topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
+		// MaxCount=0 → canAllocate(0)=0 → 0<MinCount=1 →
+		// InsufficientInstanceCapacity.
 		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
-		assert.Contains(t, errResp, "Code")
+		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
 	})
 
 	t.Run("InsufficientCapacity_for_MinCount", func(t *testing.T) {

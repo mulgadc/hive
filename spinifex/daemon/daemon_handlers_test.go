@@ -177,7 +177,7 @@ func TestHandleNATSRequest_MalformedJSON(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code", "Should contain error code")
+	assert.Equal(t, "ValidationError", errResp["Code"])
 }
 
 func TestHandleNATSRequest_ServiceError(t *testing.T) {
@@ -201,10 +201,12 @@ func TestHandleNATSRequest_ServiceError(t *testing.T) {
 	reply, err := nc.Request("test.err", reqData, 5*time.Second)
 	require.NoError(t, err)
 
+	// "something went wrong" is not in awserrors.ErrorLookup, so
+	// ValidErrorCode falls back to ServerInternal.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code", "Should contain error code")
+	assert.Equal(t, "ServerInternal", errResp["Code"])
 }
 
 // --- Handler wrapper tests (representative set via NATS round-trip) ---
@@ -661,12 +663,13 @@ func TestHandleEC2Events_RebootRunningInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
-	// With nil QMPClient encoder/decoder, the QMP send returns error,
-	// so we expect an error response (ServerInternal).
+	// vm.Reboot returns a generic "QMP system_reset" error when the
+	// QMPClient encoder/decoder is nil, which handleRebootInstance maps
+	// to ServerInternal via its default branch.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "ServerInternal", errResp["Code"])
 
 	// Instance should remain in running state (reboot doesn't change state)
 	var status vm.InstanceState
@@ -710,11 +713,12 @@ func TestHandleEC2Events_RebootStoppedInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
-	// Should get IncorrectInstanceState error
+	// vm.Reboot wraps ErrInvalidTransition for non-Running instances;
+	// handleRebootInstance maps that to IncorrectInstanceState.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "IncorrectInstanceState", errResp["Code"])
 }
 
 func TestHandleEC2Events_RebootTerminatedInstance(t *testing.T) {
@@ -753,11 +757,12 @@ func TestHandleEC2Events_RebootTerminatedInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
-	// Should get IncorrectInstanceState error
+	// vm.Reboot wraps ErrInvalidTransition for terminated instances;
+	// handleRebootInstance maps that to IncorrectInstanceState.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "IncorrectInstanceState", errResp["Code"])
 }
 
 func TestHandleEC2Events_InstanceNotFound(t *testing.T) {
@@ -781,7 +786,7 @@ func TestHandleEC2Events_InstanceNotFound(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InvalidInstanceID.NotFound", errResp["Code"])
 }
 
 func TestHandleEC2Events_MalformedJSON(t *testing.T) {
@@ -796,10 +801,12 @@ func TestHandleEC2Events_MalformedJSON(t *testing.T) {
 	reply, err := daemon.natsConn.Request("ec2.cmd.test", []byte(`{bad json}`), 5*time.Second)
 	require.NoError(t, err)
 
+	// handleEC2Events uses json.Unmarshal directly (not UnmarshalJsonPayload),
+	// so a parse failure surfaces as ServerInternal rather than ValidationError.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "ServerInternal", errResp["Code"])
 }
 
 // --- respondWithVolumeAttachment tests ---
@@ -844,10 +851,11 @@ func TestHandleEC2ModifyVolume_MalformedInput(t *testing.T) {
 	reply, err := daemon.natsConn.Request("ec2.ModifyVolume", []byte(`{bad}`), 5*time.Second)
 	require.NoError(t, err)
 
+	// utils.UnmarshalJsonPayload returns ValidationError on parse failure.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "ValidationError", errResp["Code"])
 }
 
 func TestHandleEC2ModifyVolume_VolumeNotFound(t *testing.T) {
@@ -867,11 +875,10 @@ func TestHandleEC2ModifyVolume_VolumeNotFound(t *testing.T) {
 	reply, err := daemon.natsConn.Request("ec2.ModifyVolume", reqData, 5*time.Second)
 	require.NoError(t, err)
 
-	// Should return an error since the volume doesn't exist
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InvalidVolume.NotFound", errResp["Code"])
 }
 
 // --- Account settings handler tests ---
@@ -1022,7 +1029,7 @@ func TestHandleEC2CreateImage_InstanceNotFound(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InvalidInstanceID.NotFound", errResp["Code"])
 }
 
 func TestHandleEC2CreateImage_MissingInstanceId(t *testing.T) {
@@ -1044,7 +1051,7 @@ func TestHandleEC2CreateImage_MissingInstanceId(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "MissingParameter", errResp["Code"])
 }
 
 func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
@@ -1083,7 +1090,7 @@ func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "IncorrectInstanceState", errResp["Code"])
 }
 
 func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
@@ -1114,10 +1121,12 @@ func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
 	reply, err := natsRequest(daemon.natsConn, "ec2.CreateImage", reqData, 5*time.Second)
 	require.NoError(t, err)
 
+	// No root volume on the instance — handleEC2CreateImage logs an
+	// error and returns ServerInternal (data-integrity guard).
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "ServerInternal", errResp["Code"])
 }
 
 func TestHandleEC2CreateImage_MalformedJSON(t *testing.T) {
@@ -1132,10 +1141,11 @@ func TestHandleEC2CreateImage_MalformedJSON(t *testing.T) {
 	reply, err := daemon.natsConn.Request("ec2.CreateImage", []byte(`{bad json}`), 5*time.Second)
 	require.NoError(t, err)
 
+	// utils.UnmarshalJsonPayload returns ValidationError on parse failure.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "ValidationError", errResp["Code"])
 }
 
 // --- SetConfigPath test ---
@@ -1172,7 +1182,7 @@ func TestHandleEC2StartStoppedInstance_MissingInstance(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InvalidInstanceID.NotFound", errResp["Code"])
 }
 
 func TestHandleEC2StartStoppedInstance_MissingInstanceID(t *testing.T) {
@@ -1192,7 +1202,7 @@ func TestHandleEC2StartStoppedInstance_MissingInstanceID(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "MissingParameter", errResp["Code"])
 }
 
 func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
@@ -1221,7 +1231,7 @@ func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "IncorrectInstanceState", errResp["Code"])
 
 	// Cleanup
 	_ = daemon.jsManager.DeleteStoppedInstance(runningVM.ID)
@@ -1361,7 +1371,7 @@ func TestHandleEC2TerminateStoppedInstance_MissingInstanceID(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "MissingParameter", errResp["Code"])
 }
 
 func TestHandleEC2TerminateStoppedInstance_MissingInstance(t *testing.T) {
@@ -1380,7 +1390,7 @@ func TestHandleEC2TerminateStoppedInstance_MissingInstance(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InvalidInstanceID.NotFound", errResp["Code"])
 }
 
 func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
@@ -1409,7 +1419,7 @@ func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "IncorrectInstanceState", errResp["Code"])
 
 	// Cleanup
 	_ = daemon.jsManager.DeleteStoppedInstance(runningVM.ID)
@@ -3161,7 +3171,7 @@ func TestHandleEC2StartStoppedInstance_InstanceTypeNotAvailable(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
 }
 
 // --- handleEC2CreateImage: running instance with valid root volume ---
@@ -3656,7 +3666,7 @@ func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
 }
 
 func TestHandleEC2RunInstances_UnsupportedInstanceType(t *testing.T) {
@@ -3679,7 +3689,7 @@ func TestHandleEC2RunInstances_UnsupportedInstanceType(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "InvalidInstanceType", errResp["Code"])
 }
 
 func TestHandleEC2RunInstances_MalformedInput(t *testing.T) {
@@ -3692,10 +3702,11 @@ func TestHandleEC2RunInstances_MalformedInput(t *testing.T) {
 	reply, err := daemon.natsConn.Request("ec2.RunInstances.bad", []byte(`{not valid}`), 5*time.Second)
 	require.NoError(t, err)
 
+	// utils.UnmarshalJsonPayload returns ValidationError on parse failure.
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "ValidationError", errResp["Code"])
 }
 
 // --- handleEC2DescribeInstances: malformed instance ID ---
