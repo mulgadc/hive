@@ -128,8 +128,6 @@ func TestHandleCrash_CoreFlow(t *testing.T) {
 	instance := &VM{
 		ID:           "i-core",
 		Status:       StateRunning,
-		Running:      true,
-		PID:          12345,
 		InstanceType: "t3.micro",
 		Config:       Config{QMPSocket: qmpPath},
 	}
@@ -147,9 +145,6 @@ func TestHandleCrash_CoreFlow(t *testing.T) {
 	assert.Equal(t, "unknown", instance.Health.LastCrashReason)
 	assert.False(t, instance.Health.FirstCrashTime.IsZero())
 
-	assert.False(t, instance.Running, "Running must be cleared")
-	assert.Zero(t, instance.PID, "PID must be cleared")
-
 	assert.Equal(t, 1, rc.deallocateCount("t3.micro"), "crashed instance resources must be deallocated")
 
 	_, err := os.Stat(qmpPath)
@@ -162,8 +157,6 @@ func TestHandleCrash_FirstCrashSetsTime(t *testing.T) {
 	instance := &VM{
 		ID:           "i-firstcrash",
 		Status:       StateRunning,
-		Running:      true,
-		PID:          111,
 		InstanceType: "t3.micro",
 	}
 	m.Insert(instance)
@@ -175,8 +168,6 @@ func TestHandleCrash_FirstCrashSetsTime(t *testing.T) {
 
 	m.UpdateState(instance.ID, func(v *VM) {
 		v.Status = StateRunning
-		v.Running = true
-		v.PID = 222
 	})
 
 	time.Sleep(time.Millisecond)
@@ -188,17 +179,15 @@ func TestHandleCrash_FirstCrashSetsTime(t *testing.T) {
 }
 
 // TestHandleCrash_UnknownInstanceType verifies a crash on a VM with an
-// instance type not in the resolver still completes the state transition,
-// health bookkeeping, and pid/running clear — even though MaybeRestart will
-// later refuse to restart it.
+// instance type not in the resolver still completes the state transition
+// and health bookkeeping — even though MaybeRestart will later refuse to
+// restart it.
 func TestHandleCrash_UnknownInstanceType(t *testing.T) {
 	m, _, _, _ := crashTestManager(t)
 
 	instance := &VM{
 		ID:           "i-unknown",
 		Status:       StateRunning,
-		Running:      true,
-		PID:          333,
 		InstanceType: "z99.nonexistent",
 	}
 	m.Insert(instance)
@@ -207,8 +196,6 @@ func TestHandleCrash_UnknownInstanceType(t *testing.T) {
 
 	assert.Equal(t, StateError, m.Status(instance))
 	assert.Equal(t, 1, instance.Health.CrashCount)
-	assert.False(t, instance.Running)
-	assert.Zero(t, instance.PID)
 }
 
 func TestMaybeRestart_ExceedsMaxInWindow(t *testing.T) {

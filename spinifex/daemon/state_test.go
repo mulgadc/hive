@@ -40,6 +40,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	require.NoError(t, daemon.jsManager.InitKVBucket())
 	require.NoError(t, daemon.jsManager.InitClusterStateBucket())
 	require.NoError(t, daemon.jsManager.InitTerminatedInstanceBucket())
+	daemon.stateStore = newStateStoreAdapter(daemon.jsManager)
 
 	// Wire just enough vm.Deps for manager-driven state operations to work
 	// (migrate, MarkFailed, Restore classification). Full wiring (network
@@ -48,7 +49,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	// a real VM lifecycle.
 	daemon.vmMgr.SetDeps(vm.Deps{
 		NodeID:                     daemon.node,
-		StateStore:                 newStateStoreAdapter(daemon.jsManager),
+		StateStore:                 daemon.stateStore,
 		TransitionState:            daemon.TransitionState,
 		InstanceTypes:              newInstanceTypeResolverAdapter(daemon.resourceMgr),
 		Resources:                  newResourceControllerAdapter(daemon.resourceMgr),
@@ -569,17 +570,17 @@ func TestTransitionState_MultipleInstancesIndependent(t *testing.T) {
 // --- Recovery / restoreInstances tests ---
 //
 // These tests simulate a daemon restart by writing instance state to JetStream,
-// then calling restoreInstances on a fresh daemon. Since no QEMU process is
+// then calling vmMgr.Restore() on a fresh daemon. Since no QEMU process is
 // running, isInstanceProcessRunning returns false for all instances, which
 // exercises the recovery state resolution logic.
 
-// simulateCleanRestore writes a clean shutdown marker then calls restoreInstances.
-// Without the marker, restoreInstances sleeps 3s waiting for stale QEMU PIDs —
-// unnecessary in tests since no QEMU process ever runs.
+// simulateCleanRestore writes a clean shutdown marker then drives the
+// manager's restore path. Without the marker, Restore sleeps 3s waiting for
+// stale QEMU PIDs — unnecessary in tests since no QEMU process ever runs.
 func simulateCleanRestore(t *testing.T, daemon *Daemon) {
 	t.Helper()
 	require.NoError(t, daemon.jsManager.WriteShutdownMarker(daemon.node))
-	daemon.restoreInstances()
+	daemon.vmMgr.Restore()
 }
 
 // TestRestoreInstances_StoppingFinalizedToStopped verifies that an instance
@@ -905,7 +906,9 @@ func TestStatePersistence_RoundTrip(t *testing.T) {
 
 	// Simulate restart: clear and reload.
 	daemon.vmMgr.Replace(map[string]*vm.VM{})
-	require.NoError(t, daemon.LoadState())
+	snapshot, err := daemon.jsManager.LoadState(daemon.node)
+	require.NoError(t, err)
+	daemon.vmMgr.Replace(snapshot)
 
 	loaded, _ := daemon.vmMgr.Get("i-roundtrip")
 	require.NotNil(t, loaded)
@@ -1037,9 +1040,6 @@ func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
 }
 
 func TestAreVolumeSocketsValid_ValidSocket(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
-	// Create a real Unix socket listener
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
 	listener, err := net.Listen("unix", sockPath)
 	require.NoError(t, err)
@@ -1053,12 +1053,10 @@ func TestAreVolumeSocketsValid_ValidSocket(t *testing.T) {
 			},
 		},
 	}
-	assert.True(t, daemon.areVolumeSocketsValid(instance))
+	assert.True(t, vm.AreVolumeSocketsValid(instance))
 }
 
 func TestAreVolumeSocketsValid_MissingSocket(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
 	instance := &vm.VM{
 		ID: "i-missing-sock",
 		EBSRequests: types.EBSRequests{
@@ -1067,18 +1065,16 @@ func TestAreVolumeSocketsValid_MissingSocket(t *testing.T) {
 			},
 		},
 	}
-	assert.False(t, daemon.areVolumeSocketsValid(instance))
+	assert.False(t, vm.AreVolumeSocketsValid(instance))
 }
 
 func TestAreVolumeSocketsValid_StaleSocketFile(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
-	// Create a socket file with no listener — simulates viperblock crash
-	// leaving a stale socket on disk
+	// Socket file with no listener — simulates viperblock crash leaving a
+	// stale socket on disk. os.Stat would return true here, but dial fails.
 	sockPath := filepath.Join(t.TempDir(), "stale.sock")
 	listener, err := net.Listen("unix", sockPath)
 	require.NoError(t, err)
-	listener.Close() // close listener but leave file on disk
+	listener.Close()
 
 	instance := &vm.VM{
 		ID: "i-stale-sock",
@@ -1088,23 +1084,19 @@ func TestAreVolumeSocketsValid_StaleSocketFile(t *testing.T) {
 			},
 		},
 	}
-	// os.Stat would return true here, but dial should fail
-	assert.False(t, daemon.areVolumeSocketsValid(instance))
+	assert.False(t, vm.AreVolumeSocketsValid(instance))
 }
 
 func TestAreVolumeSocketsValid_EmptyRequests(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
 	instance := &vm.VM{
 		ID:          "i-no-vols",
 		EBSRequests: types.EBSRequests{},
 	}
-	assert.True(t, daemon.areVolumeSocketsValid(instance))
+	assert.True(t, vm.AreVolumeSocketsValid(instance))
 }
 
 func TestAreVolumeSocketsValid_TCPTransport(t *testing.T) {
-	daemon := createDaemonWithJetStream(t)
-
+	// TCP transport can't be validated locally — should return true.
 	instance := &vm.VM{
 		ID: "i-tcp",
 		EBSRequests: types.EBSRequests{
@@ -1113,8 +1105,7 @@ func TestAreVolumeSocketsValid_TCPTransport(t *testing.T) {
 			},
 		},
 	}
-	// TCP transport can't be validated locally — should return true
-	assert.True(t, daemon.areVolumeSocketsValid(instance))
+	assert.True(t, vm.AreVolumeSocketsValid(instance))
 }
 
 func TestMarkInstanceFailed_AlreadyShuttingDown(t *testing.T) {
@@ -1168,10 +1159,12 @@ func TestRestoreInstances_ProvisioningInstanceLaunchTimeReset(t *testing.T) {
 	before := time.Now()
 	simulateCleanRestore(t, daemon)
 
-	// LoadState inside restoreInstances creates fresh objects, so look up
-	// from the map. The instance may have been removed by markInstanceFailed
-	// (launch fails in test env), so load directly from JetStream state.
-	require.NoError(t, daemon.LoadState())
+	// Restore creates fresh objects, so look up from the map. The instance
+	// may have been removed by markInstanceFailed (launch fails in test
+	// env), so reload directly from JetStream state.
+	loaded, err := daemon.jsManager.LoadState(daemon.node)
+	require.NoError(t, err)
+	daemon.vmMgr.Replace(loaded)
 	instance, _ := daemon.vmMgr.Get("i-provisioning")
 	if instance == nil {
 		// Instance was cleaned up by markInstanceFailed — that's fine.

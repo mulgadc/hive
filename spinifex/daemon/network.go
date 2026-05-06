@@ -27,7 +27,8 @@ var sudoCommand = func(name string, args ...string) *exec.Cmd {
 	return exec.Command("sudo", append([]string{name}, args...)...)
 }
 
-// OVSNetworkPlumber implements vm.NetworkPlumber using ip/ovs-vsctl commands.
+// OVSNetworkPlumber implements vm.NetworkPlumber using system commands
+// (ip, ovs-vsctl); tests use a mock satisfying the same interface.
 type OVSNetworkPlumber struct{}
 
 var _ vm.NetworkPlumber = (*OVSNetworkPlumber)(nil)

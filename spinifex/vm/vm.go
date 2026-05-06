@@ -35,8 +35,6 @@ type ExtraENI struct {
 
 type VM struct {
 	ID           string        `json:"id"`
-	PID          int           `json:"pid"`
-	Running      bool          `json:"running"`
 	Status       InstanceState `json:"status"`
 	InstanceType string        `json:"instance_type"`
 	Config       Config        `json:"config"`
@@ -70,7 +68,8 @@ type VM struct {
 	Health InstanceHealthState `json:"health"`
 
 	// AccountID is the AWS account that owns this instance.
-	// Empty for pre-Phase4 resources (treated as visible to all accounts).
+	// Empty AccountID identifies legacy/migration resources that are only
+	// visible to the root account.
 	AccountID string `json:"account_id,omitempty"`
 
 	// VPC networking: ENI attached to this instance (set by RunInstances when VPC mode is active)
@@ -131,8 +130,6 @@ type VM struct {
 // that last ran this instance. Must be called after deserializing a VM from
 // shared KV before launching it on a new node.
 func (v *VM) ResetNodeLocalState() {
-	v.PID = 0
-	v.Running = false
 	v.MetadataServerAddress = ""
 	v.QMPClient = &qmp.QMPClient{}
 	v.EBSRequests.Mu = sync.Mutex{}
