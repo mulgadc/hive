@@ -103,7 +103,14 @@ func (m *Manager) classifyRestoredInstances() []*VM {
 		}
 
 		if instance.Status == StateStopped {
-			m.MigrateStoppedToSharedKV(instance)
+			if !m.MigrateStoppedToSharedKV(instance) {
+				// KV write failed — keep in local state so the next restart
+				// retries the migration. Deleting here would create a "void":
+				// the instance disappears from both local state and the
+				// stopped KV, making it invisible to DescribeStoppedInstances.
+				slog.Warn("Stopped instance KV migration failed, will retry on next restart",
+					"instance", instance.ID)
+			}
 			continue
 		}
 
