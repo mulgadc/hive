@@ -188,6 +188,17 @@ type Daemon struct {
 	// via /local/status so observers can detect changes without diffing payloads.
 	stateRevision atomic.Uint64
 
+	// kvSyncFailures counts best-effort JetStream KV sync failures (timeout or
+	// put error) since process start. Bumped from RecordKVSyncFailure; surfaced
+	// via /local/status and the spinifex_daemon_kv_sync_failures_total metric.
+	kvSyncFailures atomic.Int64
+	// lastKVSyncAt holds the unix-nano timestamp of the most recent successful
+	// best-effort KV sync. Zero means "never synced since process start".
+	lastKVSyncAt atomic.Int64
+	// lastKVSyncError holds the most recent best-effort KV sync error message
+	// as a string. Cleared back to "" on the next successful sync.
+	lastKVSyncError atomic.Value
+
 	mu sync.Mutex
 }
 
@@ -221,6 +232,51 @@ func (d *Daemon) NATSRetryCount() int64 {
 // WriteState; observers can detect changes without diffing the full payload.
 func (d *Daemon) Revision() uint64 {
 	return d.stateRevision.Load()
+}
+
+// KVSyncFailures returns the number of best-effort JetStream KV sync failures
+// (timeout or put error) observed since process start.
+func (d *Daemon) KVSyncFailures() int64 {
+	return d.kvSyncFailures.Load()
+}
+
+// LastKVSyncAt returns the timestamp of the most recent successful best-effort
+// KV sync. Zero time means "never synced since process start".
+func (d *Daemon) LastKVSyncAt() time.Time {
+	n := d.lastKVSyncAt.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// LastKVSyncError returns the most recent best-effort KV sync error message.
+// Empty string means the last attempt succeeded (or no attempt has been made).
+func (d *Daemon) LastKVSyncError() string {
+	v := d.lastKVSyncError.Load()
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+// RecordKVSyncSuccess implements KVSyncObserver. The JetStream manager calls
+// this from its best-effort write path on a successful Put.
+func (d *Daemon) RecordKVSyncSuccess(_ string) {
+	d.lastKVSyncAt.Store(time.Now().UnixNano())
+	d.lastKVSyncError.Store("")
+}
+
+// RecordKVSyncFailure implements KVSyncObserver. Bumps the failure counter and
+// records the error message for /local/status. The bucket arg is reserved for
+// future per-bucket labelling; the current call site is the instance-state
+// bucket and the value is logged via the manager's slog.Warn line.
+func (d *Daemon) RecordKVSyncFailure(_ string, err error) {
+	d.kvSyncFailures.Add(1)
+	if err != nil {
+		d.lastKVSyncError.Store(err.Error())
+	}
 }
 
 // onNATSDisconnect runs when the NATS client loses its connection. Flips the
@@ -1117,6 +1173,7 @@ func (d *Daemon) initJetStream() error {
 		}
 
 		if err == nil {
+			d.jsManager.SetSyncObserver(d)
 			slog.Info("JetStream KV stores initialized successfully", "replicas", 1, "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			break
 		}

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,11 +10,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -767,4 +770,54 @@ func startTestNATSOnPort(t *testing.T, port int) *server.Server {
 	require.True(t, ns.ReadyForConnections(5*time.Second))
 	t.Cleanup(func() { ns.Shutdown() })
 	return ns
+}
+
+// TestConnectNATSWithRetry_LogEscalatesPastThreshold drives ConnectNATSWithRetry
+// against a closed port with a tight retry loop until the attempt count exceeds
+// natsRetryEscalateAttempt, then asserts that at least one escalated slog.Error
+// line was emitted with disconnected_for context (rate-limited to once per
+// minute) while earlier attempts stayed at slog.Warn.
+func TestConnectNATSWithRetry_LogEscalatesPastThreshold(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	_, err := ConnectNATSWithRetry("nats://127.0.0.1:1", "", "",
+		WithRetryDelay(1*time.Millisecond),
+		WithMaxRetryDelay(1*time.Millisecond),
+		WithMaxWait(300*time.Millisecond),
+	)
+	require.Error(t, err)
+
+	logs := buf.String()
+	warnCount := strings.Count(logs, "level=WARN msg=\"NATS not ready, retrying...\"")
+	errCount := strings.Count(logs, "level=ERROR msg=\"NATS still disconnected\"")
+
+	assert.GreaterOrEqual(t, warnCount, 1, "expect warn logs for first 30 attempts")
+	assert.GreaterOrEqual(t, errCount, 1, "expect at least one escalated error log past the threshold")
+	assert.LessOrEqual(t, errCount, 2, "rate-limited to once per minute, so a sub-second test should see at most one or two")
+	assert.Contains(t, logs, "disconnected_for=", "escalated error should include disconnected_for")
+}
+
+// TestConnectNATSWithRetry_NoEscalation_BelowThreshold keeps the attempt count
+// under natsRetryEscalateAttempt and checks that no escalated slog.Error line
+// is produced.
+func TestConnectNATSWithRetry_NoEscalation_BelowThreshold(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Exponential backoff capped at 5ms × maxWait 50ms = ≲15 attempts < 30.
+	_, err := ConnectNATSWithRetry("nats://127.0.0.1:1", "", "",
+		WithRetryDelay(5*time.Millisecond),
+		WithMaxRetryDelay(5*time.Millisecond),
+		WithMaxWait(50*time.Millisecond),
+	)
+	require.Error(t, err)
+
+	logs := buf.String()
+	assert.NotContains(t, logs, "NATS still disconnected", "should not escalate before threshold")
+	assert.Contains(t, logs, "NATS not ready, retrying...", "should still log warn lines")
 }

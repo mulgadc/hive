@@ -35,6 +35,15 @@ const (
 	TerminatedInstanceBucketVersion = 1
 )
 
+// KVSyncObserver receives best-effort KV sync outcomes from
+// WriteStateBytesBestEffort. Implementations must be safe for concurrent use
+// and must not block — callbacks run in the same goroutine that performed the
+// Put. nil observer is allowed.
+type KVSyncObserver interface {
+	RecordKVSyncSuccess(bucket string)
+	RecordKVSyncFailure(bucket string, err error)
+}
+
 // JetStreamManager manages JetStream KV store operations for instance state
 type JetStreamManager struct {
 	js           nats.JetStreamContext
@@ -43,6 +52,13 @@ type JetStreamManager struct {
 	terminatedKV nats.KeyValue // spinifex-terminated-instances
 	replicas     int
 	kvMu         sync.Mutex // protects kv during recovery
+	obs          KVSyncObserver
+}
+
+// SetSyncObserver registers obs to receive best-effort KV sync outcomes. Pass
+// nil to clear. Safe to call before or after Init*Bucket.
+func (m *JetStreamManager) SetSyncObserver(obs KVSyncObserver) {
+	m.obs = obs
 }
 
 // NewJetStreamManager creates a new JetStreamManager from a NATS connection.
@@ -467,11 +483,20 @@ func (m *JetStreamManager) WriteStateBytesBestEffort(nodeID string, jsonData []b
 	select {
 	case putErr := <-done:
 		if putErr != nil {
+			if m.obs != nil {
+				m.obs.RecordKVSyncFailure(InstanceStateBucket, putErr)
+			}
 			slog.Warn("KV sync failed (best-effort)", "key", key, "err", putErr)
 			return
 		}
+		if m.obs != nil {
+			m.obs.RecordKVSyncSuccess(InstanceStateBucket)
+		}
 		slog.Debug("Wrote state to KV (best-effort)", "key", key, "bytes", len(jsonData))
 	case <-time.After(timeout):
+		if m.obs != nil {
+			m.obs.RecordKVSyncFailure(InstanceStateBucket, fmt.Errorf("kv sync timeout after %s", timeout))
+		}
 		slog.Warn("KV sync timed out (best-effort)", "key", key, "timeout", timeout)
 	}
 }

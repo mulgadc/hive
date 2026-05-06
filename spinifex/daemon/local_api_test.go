@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mulgadc/spinifex/spinifex/config"
@@ -127,4 +129,54 @@ func TestLocalAPI_Status_ContentType(t *testing.T) {
 	d := newLocalAPITestDaemon(t)
 	rec := doGET(t, newLocalAPIRouter(d), "/local/status")
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+}
+
+func TestLocalAPI_Status_KVSync_DefaultsAreZero(t *testing.T) {
+	d := newLocalAPITestDaemon(t)
+
+	rec := doGET(t, newLocalAPIRouter(d), "/local/status")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got LocalStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Zero(t, got.KVSyncFailures)
+	assert.Empty(t, got.LastKVSyncAt)
+	assert.Empty(t, got.LastKVSyncError)
+}
+
+func TestLocalAPI_Status_KVSyncFailure_PropagatesFields(t *testing.T) {
+	d := newLocalAPITestDaemon(t)
+
+	d.RecordKVSyncFailure(InstanceStateBucket, errors.New("kv timeout"))
+	d.RecordKVSyncFailure(InstanceStateBucket, errors.New("kv put rejected"))
+
+	rec := doGET(t, newLocalAPIRouter(d), "/local/status")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got LocalStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, int64(2), got.KVSyncFailures)
+	assert.Equal(t, "kv put rejected", got.LastKVSyncError)
+	assert.Empty(t, got.LastKVSyncAt, "no successful sync yet")
+}
+
+func TestLocalAPI_Status_KVSyncSuccess_ClearsErrorAndStampsTime(t *testing.T) {
+	d := newLocalAPITestDaemon(t)
+
+	d.RecordKVSyncFailure(InstanceStateBucket, errors.New("transient"))
+	before := time.Now()
+	d.RecordKVSyncSuccess(InstanceStateBucket)
+
+	rec := doGET(t, newLocalAPIRouter(d), "/local/status")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got LocalStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, int64(1), got.KVSyncFailures, "counter is monotonic")
+	assert.Empty(t, got.LastKVSyncError, "success clears the error string")
+
+	require.NotEmpty(t, got.LastKVSyncAt)
+	parsed, err := time.Parse(time.RFC3339, got.LastKVSyncAt)
+	require.NoError(t, err)
+	assert.WithinDuration(t, before, parsed, 5*time.Second)
 }

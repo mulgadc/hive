@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -26,13 +27,18 @@ type LocalInstance struct {
 
 // LocalStatus is the response shape for GET /local/status. Reports the
 // daemon's connectivity mode plus enough context for an operator to detect
-// flapping (nats_retry_count) or stale state (revision).
+// flapping (nats_retry_count), stale state (revision), or prolonged divergence
+// between the local file and JetStream KV (kv_sync_failures, last_kv_sync_at,
+// last_kv_sync_error).
 type LocalStatus struct {
-	Node           string `json:"node"`
-	Mode           string `json:"mode"`
-	NATS           string `json:"nats"`
-	NATSRetryCount int64  `json:"nats_retry_count"`
-	Revision       uint64 `json:"revision"`
+	Node            string `json:"node"`
+	Mode            string `json:"mode"`
+	NATS            string `json:"nats"`
+	NATSRetryCount  int64  `json:"nats_retry_count"`
+	Revision        uint64 `json:"revision"`
+	KVSyncFailures  int64  `json:"kv_sync_failures"`
+	LastKVSyncAt    string `json:"last_kv_sync_at,omitempty"`
+	LastKVSyncError string `json:"last_kv_sync_error,omitempty"`
 }
 
 // registerLocalRoutes wires the read-only /local/* endpoints onto r. Called
@@ -70,13 +76,19 @@ func (d *Daemon) handleLocalInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleLocalStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, LocalStatus{
-		Node:           d.node,
-		Mode:           d.Mode(),
-		NATS:           d.natsConnectivity(),
-		NATSRetryCount: d.NATSRetryCount(),
-		Revision:       d.Revision(),
-	})
+	status := LocalStatus{
+		Node:            d.node,
+		Mode:            d.Mode(),
+		NATS:            d.natsConnectivity(),
+		NATSRetryCount:  d.NATSRetryCount(),
+		Revision:        d.Revision(),
+		KVSyncFailures:  d.KVSyncFailures(),
+		LastKVSyncError: d.LastKVSyncError(),
+	}
+	if t := d.LastKVSyncAt(); !t.IsZero() {
+		status.LastKVSyncAt = t.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // natsConnectivity reports the live NATS link state. Mirrors the check used by

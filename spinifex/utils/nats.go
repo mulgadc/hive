@@ -27,6 +27,13 @@ var (
 // fan-out) use this to fail fast instead of waiting for per-call timeouts.
 var ErrClusterUnavailable = errors.New("cluster unavailable: NATS disconnected")
 
+// natsRetryEscalateAttempt is the attempt count past which ConnectNATSWithRetry
+// promotes the per-attempt log line from slog.Warn to slog.Error (rate-limited
+// to once a minute). With the 60s backoff cap, ~30 attempts corresponds to
+// ~30 minutes of continuous disconnection — long enough to suspect a config
+// error rather than a routine NATS restart.
+const natsRetryEscalateAttempt = 30
+
 // ConnectNATS establishes a connection to a NATS server with standard reconnect
 // handling and logging. If token is non-empty, token authentication is used.
 // If caCertPath is non-empty, TLS is enabled using the given CA certificate.
@@ -165,6 +172,7 @@ func ConnectNATSWithRetry(host, token, caCertPath string, opts ...RetryOption) (
 
 	start := time.Now()
 	attempt := 0
+	var lastEscalatedLog time.Time
 	for {
 		attempt++
 		nc, err := ConnectNATS(host, token, caCertPath, opts...)
@@ -189,7 +197,18 @@ func ConnectNATSWithRetry(host, token, caCertPath string, opts ...RetryOption) (
 			return nil, fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
 		}
 
-		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", cfg.retryDelay, "attempt", attempt)
+		// Past the retry-escalation threshold (~30 attempts ≈ ~30 min disconnected
+		// at the 60s backoff cap) the warn-on-every-retry pattern can hide a
+		// stuck NATS config in routine warning noise. Escalate to slog.Error,
+		// rate-limited to once a minute, so the operator's error log surfaces it.
+		if attempt > natsRetryEscalateAttempt {
+			if lastEscalatedLog.IsZero() || time.Since(lastEscalatedLog) >= time.Minute {
+				slog.Error("NATS still disconnected", "error", err, "disconnected_for", elapsed.Round(time.Second), "attempt", attempt)
+				lastEscalatedLog = time.Now()
+			}
+		} else {
+			slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", cfg.retryDelay, "attempt", attempt)
+		}
 
 		if cfg.ctx != nil {
 			select {
