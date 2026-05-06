@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,26 +39,21 @@ func TestTapDeviceName(t *testing.T) {
 
 // MockNetworkPlumber records calls for testing.
 type MockNetworkPlumber struct {
-	SetupCalls   []mockSetupCall
+	SetupCalls   []vm.TapSpec
 	CleanupCalls []string
 	SetupErr     error
 	CleanupErr   error
 }
 
-var _ NetworkPlumber = (*MockNetworkPlumber)(nil)
+var _ vm.NetworkPlumber = (*MockNetworkPlumber)(nil)
 
-type mockSetupCall struct {
-	ENIId string
-	MAC   string
-}
-
-func (m *MockNetworkPlumber) SetupTapDevice(eniId, mac string) error {
-	m.SetupCalls = append(m.SetupCalls, mockSetupCall{ENIId: eniId, MAC: mac})
+func (m *MockNetworkPlumber) SetupTap(spec vm.TapSpec) error {
+	m.SetupCalls = append(m.SetupCalls, spec)
 	return m.SetupErr
 }
 
-func (m *MockNetworkPlumber) CleanupTapDevice(eniId string) error {
-	m.CleanupCalls = append(m.CleanupCalls, eniId)
+func (m *MockNetworkPlumber) CleanupTap(name string) error {
+	m.CleanupCalls = append(m.CleanupCalls, name)
 	return m.CleanupErr
 }
 
@@ -137,29 +133,36 @@ func TestStartInstance_FallbackNetworking(t *testing.T) {
 func TestMockNetworkPlumber_SetupAndCleanup(t *testing.T) {
 	mock := &MockNetworkPlumber{}
 
-	err := mock.SetupTapDevice("eni-abc123", "02:00:00:aa:bb:cc")
-	if err != nil {
-		t.Fatalf("SetupTapDevice: %v", err)
+	spec := vm.TapSpec{
+		Name:   vm.TapDeviceName("eni-abc123"),
+		Bridge: "br-int",
+		ExternalIDs: map[string]string{
+			"iface-id":     vm.OVSIfaceID("eni-abc123"),
+			"attached-mac": "02:00:00:aa:bb:cc",
+		},
+	}
+	if err := mock.SetupTap(spec); err != nil {
+		t.Fatalf("SetupTap: %v", err)
 	}
 	if len(mock.SetupCalls) != 1 {
 		t.Fatalf("expected 1 setup call, got %d", len(mock.SetupCalls))
 	}
-	if mock.SetupCalls[0].ENIId != "eni-abc123" {
-		t.Errorf("setup eniId = %q, want 'eni-abc123'", mock.SetupCalls[0].ENIId)
+	if mock.SetupCalls[0].Name != spec.Name {
+		t.Errorf("setup name = %q, want %q", mock.SetupCalls[0].Name, spec.Name)
 	}
-	if mock.SetupCalls[0].MAC != "02:00:00:aa:bb:cc" {
-		t.Errorf("setup mac = %q, want '02:00:00:aa:bb:cc'", mock.SetupCalls[0].MAC)
+	if mock.SetupCalls[0].ExternalIDs["attached-mac"] != "02:00:00:aa:bb:cc" {
+		t.Errorf("setup attached-mac = %q, want '02:00:00:aa:bb:cc'",
+			mock.SetupCalls[0].ExternalIDs["attached-mac"])
 	}
 
-	err = mock.CleanupTapDevice("eni-abc123")
-	if err != nil {
-		t.Fatalf("CleanupTapDevice: %v", err)
+	if err := mock.CleanupTap(spec.Name); err != nil {
+		t.Fatalf("CleanupTap: %v", err)
 	}
 	if len(mock.CleanupCalls) != 1 {
 		t.Fatalf("expected 1 cleanup call, got %d", len(mock.CleanupCalls))
 	}
-	if mock.CleanupCalls[0] != "eni-abc123" {
-		t.Errorf("cleanup eniId = %q, want 'eni-abc123'", mock.CleanupCalls[0])
+	if mock.CleanupCalls[0] != spec.Name {
+		t.Errorf("cleanup name = %q, want %q", mock.CleanupCalls[0], spec.Name)
 	}
 }
 
@@ -260,16 +263,89 @@ func TestFindInterfaceByIP_NotFound(t *testing.T) {
 	}
 }
 
-// TestCleanupMgmtTapDevice_MissingKernelTap verifies the nil-safe branch
-// added to support finalizeTermination: a terminate that races mid-launch
-// (or an instance that never created a mgmt tap) must not log a misleading
-// "Device does not exist" error from `ip tuntap del`.
-func TestCleanupMgmtTapDevice_MissingKernelTap(t *testing.T) {
+// TestOVSNetworkPlumber_SetupTap_AddPortArgs captures the ovs-vsctl invocations
+// for both VPC-style (populated ExternalIDs → `set Interface external_ids:k=v`)
+// and management-style (empty ExternalIDs → bare `add-port`) calls. This is the
+// functional difference that previously lived in two diverged setup functions.
+func TestOVSNetworkPlumber_SetupTap_AddPortArgs(t *testing.T) {
+	cases := []struct {
+		name        string
+		spec        vm.TapSpec
+		wantAddPort []string // expected tail of ovs-vsctl args (after add-port <bridge> <name>)
+	}{
+		{
+			name: "vpc style with external_ids",
+			spec: vm.TapSpec{
+				Name:   "tapeni-test",
+				Bridge: "br-int",
+				ExternalIDs: map[string]string{
+					"iface-id":     "port-eni-test",
+					"attached-mac": "02:00:00:aa:bb:cc",
+				},
+			},
+			wantAddPort: []string{
+				"add-port", "br-int", "tapeni-test",
+				"--", "set", "Interface", "tapeni-test",
+				"external_ids:attached-mac=02:00:00:aa:bb:cc",
+				"external_ids:iface-id=port-eni-test",
+			},
+		},
+		{
+			name: "mgmt style without external_ids",
+			spec: vm.TapSpec{
+				Name:   "mg-test",
+				Bridge: "br-mgmt",
+			},
+			wantAddPort: []string{"add-port", "br-mgmt", "mg-test"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := sudoCommand
+			t.Cleanup(func() { sudoCommand = orig })
+
+			var calls [][]string
+			sudoCommand = func(name string, args ...string) *exec.Cmd {
+				call := append([]string{name}, args...)
+				calls = append(calls, call)
+				return exec.Command("/bin/true")
+			}
+
+			p := &OVSNetworkPlumber{}
+			if err := p.SetupTap(tc.spec); err != nil {
+				t.Fatalf("SetupTap: %v", err)
+			}
+
+			// Find the add-port invocation (last ovs-vsctl call).
+			var addPort []string
+			for _, c := range calls {
+				if len(c) >= 2 && c[0] == "ovs-vsctl" && c[1] != "--if-exists" {
+					addPort = c[1:]
+				}
+			}
+			if addPort == nil {
+				t.Fatalf("no add-port invocation captured; calls=%v", calls)
+			}
+			if !slices.Equal(addPort, tc.wantAddPort) {
+				t.Errorf("add-port args = %v, want %v", addPort, tc.wantAddPort)
+			}
+		})
+	}
+}
+
+// TestOVSNetworkPlumber_CleanupTap_MissingKernelTap verifies the nil-safe branch:
+// callers may invoke CleanupTap on a name that has neither an OVS port nor a
+// kernel tap (e.g. a terminate that races mid-launch, or an instance that
+// never reached SetupTap) without producing a misleading "Device does not
+// exist" error from `ip tuntap del`.
+func TestOVSNetworkPlumber_CleanupTap_MissingKernelTap(t *testing.T) {
 	// 15-char IFNAMSIZ-compliant name that does not exist in /sys/class/net.
 	// The OVS del-port call may fail on CI without ovs-vsctl, but is
 	// best-effort + logged-warn; the kernel-presence gate short-circuits
 	// before `ip tuntap del` runs.
-	if err := CleanupMgmtTapDevice("mg-test-noexist"); err != nil {
+	p := &OVSNetworkPlumber{}
+	if err := p.CleanupTap("mg-test-noexist"); err != nil {
 		t.Fatalf("expected nil for missing kernel tap, got: %v", err)
 	}
 }
@@ -302,14 +378,13 @@ func TestMockNetworkPlumber_SetupError(t *testing.T) {
 	mock := &MockNetworkPlumber{
 		SetupErr: fmt.Errorf("simulated setup failure"),
 	}
-	err := mock.SetupTapDevice("eni-abc123", "02:00:00:aa:bb:cc")
+	err := mock.SetupTap(vm.TapSpec{Name: "tap0", Bridge: "br-int"})
 	if err == nil {
-		t.Fatal("expected error from SetupTapDevice")
+		t.Fatal("expected error from SetupTap")
 	}
 	if err.Error() != "simulated setup failure" {
 		t.Errorf("unexpected error: %v", err)
 	}
-	// Call should still be recorded
 	if len(mock.SetupCalls) != 1 {
 		t.Fatalf("expected 1 setup call, got %d", len(mock.SetupCalls))
 	}
@@ -319,9 +394,9 @@ func TestMockNetworkPlumber_CleanupError(t *testing.T) {
 	mock := &MockNetworkPlumber{
 		CleanupErr: fmt.Errorf("simulated cleanup failure"),
 	}
-	err := mock.CleanupTapDevice("eni-abc123")
+	err := mock.CleanupTap("tap0")
 	if err == nil {
-		t.Fatal("expected error from CleanupTapDevice")
+		t.Fatal("expected error from CleanupTap")
 	}
 	if err.Error() != "simulated cleanup failure" {
 		t.Errorf("unexpected error: %v", err)
@@ -374,9 +449,9 @@ func TestOVSIfaceID_Format(t *testing.T) {
 		{"", "port-"},
 	}
 	for _, tt := range tests {
-		got := OVSIfaceID(tt.eniId)
+		got := vm.OVSIfaceID(tt.eniId)
 		if got != tt.expected {
-			t.Errorf("OVSIfaceID(%q) = %q, want %q", tt.eniId, got, tt.expected)
+			t.Errorf("vm.OVSIfaceID(%q) = %q, want %q", tt.eniId, got, tt.expected)
 		}
 	}
 }
@@ -434,12 +509,12 @@ func TestMgmtTapName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.instanceID, func(t *testing.T) {
-			got := MgmtTapName(tt.instanceID)
+			got := vm.MgmtTapName(tt.instanceID)
 			if got != tt.expected {
-				t.Errorf("MgmtTapName(%q) = %q, want %q", tt.instanceID, got, tt.expected)
+				t.Errorf("vm.MgmtTapName(%q) = %q, want %q", tt.instanceID, got, tt.expected)
 			}
 			if len(got) > 15 {
-				t.Errorf("MgmtTapName(%q) = %q (len %d), exceeds IFNAMSIZ limit of 15", tt.instanceID, got, len(got))
+				t.Errorf("vm.MgmtTapName(%q) = %q (len %d), exceeds IFNAMSIZ limit of 15", tt.instanceID, got, len(got))
 			}
 		})
 	}

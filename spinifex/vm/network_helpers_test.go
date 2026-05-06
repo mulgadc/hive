@@ -2,30 +2,26 @@ package vm
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-// fakeNetworkPlumber records calls so tests can assert per-ENI behaviour.
+// fakeNetworkPlumber records calls so tests can assert per-spec behaviour.
 type fakeNetworkPlumber struct {
-	setupCalls   []fakeSetupCall
+	setupCalls   []TapSpec
 	cleanupCalls []string
 	setupErr     error
 	cleanupErr   error
 }
 
-type fakeSetupCall struct {
-	ENIID string
-	MAC   string
-}
-
-func (p *fakeNetworkPlumber) SetupTapDevice(eniID, mac string) error {
-	p.setupCalls = append(p.setupCalls, fakeSetupCall{ENIID: eniID, MAC: mac})
+func (p *fakeNetworkPlumber) SetupTap(spec TapSpec) error {
+	p.setupCalls = append(p.setupCalls, spec)
 	return p.setupErr
 }
 
-func (p *fakeNetworkPlumber) CleanupTapDevice(eniID string) error {
-	p.cleanupCalls = append(p.cleanupCalls, eniID)
+func (p *fakeNetworkPlumber) CleanupTap(name string) error {
+	p.cleanupCalls = append(p.cleanupCalls, name)
 	return p.cleanupErr
 }
 
@@ -47,13 +43,15 @@ func TestSetupExtraENINICs_AppendsOnePerExtra(t *testing.T) {
 	}
 
 	if len(plumber.setupCalls) != 2 {
-		t.Fatalf("expected 2 SetupTapDevice calls, got %d", len(plumber.setupCalls))
+		t.Fatalf("expected 2 SetupTap calls, got %d", len(plumber.setupCalls))
 	}
-	if plumber.setupCalls[0].ENIID != "eni-aaa" || plumber.setupCalls[0].MAC != "02:00:00:aa:aa:aa" {
-		t.Errorf("first setup call = %+v, want eni-aaa/02:00:00:aa:aa:aa", plumber.setupCalls[0])
+	want0 := VPCTapSpec("eni-aaa", "02:00:00:aa:aa:aa")
+	if !reflect.DeepEqual(plumber.setupCalls[0], want0) {
+		t.Errorf("first setup call = %+v, want %+v", plumber.setupCalls[0], want0)
 	}
-	if plumber.setupCalls[1].ENIID != "eni-bbb" || plumber.setupCalls[1].MAC != "02:00:00:bb:bb:bb" {
-		t.Errorf("second setup call = %+v, want eni-bbb/02:00:00:bb:bb:bb", plumber.setupCalls[1])
+	want1 := VPCTapSpec("eni-bbb", "02:00:00:bb:bb:bb")
+	if !reflect.DeepEqual(plumber.setupCalls[1], want1) {
+		t.Errorf("second setup call = %+v, want %+v", plumber.setupCalls[1], want1)
 	}
 
 	if len(instance.Config.NetDevs) != 2 || len(instance.Config.Devices) != 2 {
@@ -150,7 +148,8 @@ func TestCleanupExtraENITaps_CallsCleanupPerExtra(t *testing.T) {
 	if len(plumber.cleanupCalls) != 3 {
 		t.Fatalf("expected 3 cleanup calls, got %d", len(plumber.cleanupCalls))
 	}
-	for i, want := range []string{"eni-111", "eni-222", "eni-333"} {
+	for i, eniID := range []string{"eni-111", "eni-222", "eni-333"} {
+		want := TapDeviceName(eniID)
 		if plumber.cleanupCalls[i] != want {
 			t.Errorf("cleanup[%d] = %q, want %q", i, plumber.cleanupCalls[i], want)
 		}
