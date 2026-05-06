@@ -334,6 +334,160 @@ func TestOVSNetworkPlumber_SetupTap_AddPortArgs(t *testing.T) {
 	}
 }
 
+// TestOVSNetworkPlumber_SetupTap_PreExistingKernelTap exercises the
+// pre-create kernel-side cleanup branch (lines guarded by /sys/class/net/<name>
+// stat). Uses "lo" as a name that's always present so os.Stat returns success.
+func TestOVSNetworkPlumber_SetupTap_PreExistingKernelTap(t *testing.T) {
+	orig := sudoCommand
+	t.Cleanup(func() { sudoCommand = orig })
+
+	failTuntapDel := false
+	sudoCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "ip" && len(args) >= 2 && args[0] == "tuntap" && args[1] == "del" && failTuntapDel {
+			failTuntapDel = false
+			return exec.Command("/bin/false")
+		}
+		return exec.Command("/bin/true")
+	}
+
+	failTuntapDel = true
+	p := &OVSNetworkPlumber{}
+	if err := p.SetupTap(vm.TapSpec{Name: "lo", Bridge: "br-int"}); err != nil {
+		t.Fatalf("SetupTap with stubs should succeed: %v", err)
+	}
+}
+
+// TestOVSNetworkPlumber_SetupTap_ErrorBranches stubs sudoCommand to fail at
+// each step in turn and asserts the corresponding error is returned. Covers
+// the cleanup-on-failure paths that the success-path tests miss.
+func TestOVSNetworkPlumber_SetupTap_ErrorBranches(t *testing.T) {
+	cases := []struct {
+		name      string
+		failMatch func(name string, args []string) bool
+		wantErr   string
+	}{
+		{
+			name: "ovs del-port failure is logged-warn (continues)",
+			failMatch: func(name string, args []string) bool {
+				return name == "ovs-vsctl" && len(args) >= 1 && args[0] == "--if-exists"
+			},
+			wantErr: "", // pre-clear failure is swallowed; SetupTap returns nil
+		},
+		{
+			name: "tuntap add failure surfaces",
+			failMatch: func(name string, args []string) bool {
+				return name == "ip" && len(args) >= 2 && args[0] == "tuntap" && args[1] == "add"
+			},
+			wantErr: "create tap",
+		},
+		{
+			name: "ip link set up failure surfaces and triggers tap cleanup",
+			failMatch: func(name string, args []string) bool {
+				return name == "ip" && len(args) >= 1 && args[0] == "link"
+			},
+			wantErr: "bring up tap",
+		},
+		{
+			name: "ovs add-port failure surfaces and triggers tap cleanup",
+			failMatch: func(name string, args []string) bool {
+				return name == "ovs-vsctl" && len(args) >= 1 && args[0] == "add-port"
+			},
+			wantErr: "add tap",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := sudoCommand
+			t.Cleanup(func() { sudoCommand = orig })
+
+			sudoCommand = func(name string, args ...string) *exec.Cmd {
+				if tc.failMatch(name, args) {
+					return exec.Command("/bin/false")
+				}
+				return exec.Command("/bin/true")
+			}
+
+			p := &OVSNetworkPlumber{}
+			err := p.SetupTap(vm.TapSpec{Name: "tap-test-noexist", Bridge: "br-int"})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestOVSNetworkPlumber_CleanupTap_PresentKernelTap exercises the success
+// path where the kernel device is present (uses "lo" so /sys/class/net/lo
+// stat succeeds). Asserts no error and that ip tuntap del was attempted.
+func TestOVSNetworkPlumber_CleanupTap_PresentKernelTap(t *testing.T) {
+	orig := sudoCommand
+	t.Cleanup(func() { sudoCommand = orig })
+
+	var sawTuntapDel bool
+	sudoCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "ip" && len(args) >= 2 && args[0] == "tuntap" && args[1] == "del" {
+			sawTuntapDel = true
+		}
+		return exec.Command("/bin/true")
+	}
+
+	p := &OVSNetworkPlumber{}
+	if err := p.CleanupTap("lo"); err != nil {
+		t.Fatalf("CleanupTap: %v", err)
+	}
+	if !sawTuntapDel {
+		t.Errorf("expected ip tuntap del to be invoked, got no call")
+	}
+}
+
+// TestOVSNetworkPlumber_CleanupTap_DelPortLoggedWarn covers the OVS del-port
+// failure branch (logged warn, continues to kernel-side cleanup).
+func TestOVSNetworkPlumber_CleanupTap_DelPortLoggedWarn(t *testing.T) {
+	orig := sudoCommand
+	t.Cleanup(func() { sudoCommand = orig })
+
+	sudoCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "ovs-vsctl" {
+			return exec.Command("/bin/false")
+		}
+		return exec.Command("/bin/true")
+	}
+
+	p := &OVSNetworkPlumber{}
+	// Tap doesn't exist on this test system → kernel-presence gate short-circuits
+	// after the OVS warn, so CleanupTap returns nil.
+	if err := p.CleanupTap("tap-test-noexist"); err != nil {
+		t.Fatalf("CleanupTap: %v", err)
+	}
+}
+
+// TestOVSNetworkPlumber_CleanupTap_TuntapDelFailure exercises the kernel-side
+// failure branch (real kernel device present + ip tuntap del returns nonzero).
+func TestOVSNetworkPlumber_CleanupTap_TuntapDelFailure(t *testing.T) {
+	orig := sudoCommand
+	t.Cleanup(func() { sudoCommand = orig })
+
+	sudoCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "ip" && len(args) >= 2 && args[0] == "tuntap" && args[1] == "del" {
+			return exec.Command("/bin/false")
+		}
+		return exec.Command("/bin/true")
+	}
+
+	p := &OVSNetworkPlumber{}
+	err := p.CleanupTap("lo") // /sys/class/net/lo is present, so we reach tuntap del
+	if err == nil || !strings.Contains(err.Error(), "delete tap") {
+		t.Fatalf("expected 'delete tap' error, got %v", err)
+	}
+}
+
 // TestOVSNetworkPlumber_CleanupTap_MissingKernelTap verifies the nil-safe branch:
 // callers may invoke CleanupTap on a name that has neither an OVS port nor a
 // kernel tap (e.g. a terminate that races mid-launch, or an instance that

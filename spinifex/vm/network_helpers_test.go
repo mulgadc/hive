@@ -27,6 +27,61 @@ func (p *fakeNetworkPlumber) CleanupTap(name string) error {
 
 var _ NetworkPlumber = (*fakeNetworkPlumber)(nil)
 
+func TestMgmtTapName(t *testing.T) {
+	tests := []struct {
+		instanceID string
+		want       string
+	}{
+		{"i-abc123", "mgabc123"},
+		{"i-abc123def456789", "mgabc123def4567"}, // truncated to 15 chars
+		{"i-a", "mga"},
+		{"abc123", "mgabc123"}, // no i- prefix
+	}
+	for _, tt := range tests {
+		t.Run(tt.instanceID, func(t *testing.T) {
+			got := MgmtTapName(tt.instanceID)
+			if got != tt.want {
+				t.Errorf("MgmtTapName(%q) = %q, want %q", tt.instanceID, got, tt.want)
+			}
+			if len(got) > 15 {
+				t.Errorf("MgmtTapName(%q) = %q (len %d), exceeds IFNAMSIZ", tt.instanceID, got, len(got))
+			}
+		})
+	}
+}
+
+func TestOVSIfaceID(t *testing.T) {
+	tests := []struct {
+		eniID string
+		want  string
+	}{
+		{"eni-abc123", "port-eni-abc123"},
+		{"eni-", "port-eni-"},
+		{"", "port-"},
+	}
+	for _, tt := range tests {
+		got := OVSIfaceID(tt.eniID)
+		if got != tt.want {
+			t.Errorf("OVSIfaceID(%q) = %q, want %q", tt.eniID, got, tt.want)
+		}
+	}
+}
+
+func TestVPCTapSpec(t *testing.T) {
+	got := VPCTapSpec("eni-abc123", "02:00:00:aa:bb:cc")
+	want := TapSpec{
+		Name:   "tapabc123",
+		Bridge: "br-int",
+		ExternalIDs: map[string]string{
+			"iface-id":     "port-eni-abc123",
+			"attached-mac": "02:00:00:aa:bb:cc",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("VPCTapSpec = %+v, want %+v", got, want)
+	}
+}
+
 func TestSetupExtraENINICs_AppendsOnePerExtra(t *testing.T) {
 	plumber := &fakeNetworkPlumber{}
 	m := NewManagerWithDeps(Deps{NetworkPlumber: plumber})
