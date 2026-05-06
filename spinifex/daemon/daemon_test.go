@@ -107,13 +107,12 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	// Wire the minimum vm.Deps that handler tests rely on. Lifecycle (Run/Start/
 	// Stop/Terminate) tests still set up their own deps; this gives the
-	// post-2d AttachVolume / DetachVolume manager methods enough plumbing to
-	// drive ebs.mount/unmount over NATS using the test's connection.
-	volState := newVolumeStateUpdaterAdapter(daemon.volumeService)
+	// AttachVolume / DetachVolume manager methods enough plumbing to drive
+	// ebs.mount/unmount over NATS using the test's connection.
 	daemon.vmMgr.SetDeps(vm.Deps{
 		NodeID:             daemon.node,
-		VolumeMounter:      newVolumeMounterAdapter(daemon.natsConn, daemon.node, volState),
-		VolumeStateUpdater: volState,
+		VolumeMounter:      newVolumeMounterAdapter(daemon.natsConn, daemon.node, daemon.volumeService),
+		VolumeStateUpdater: daemon.volumeService,
 		DetachDelay:        daemon.detachDelay,
 	})
 
@@ -960,9 +959,10 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	err = daemon.jsManager.WriteState("node-1", vms)
 	require.NoError(t, err)
 
-	// Manually trigger the LoadState and allocation logic normally found in Start()
-	err = daemon.LoadState()
+	// Manually trigger the load and allocation logic normally found in Start()
+	loaded, err := daemon.jsManager.LoadState(daemon.node)
 	require.NoError(t, err)
+	daemon.vmMgr.Replace(loaded)
 
 	// Simulate the allocation loop in Start()
 	for _, instance := range daemon.vmMgr.Snapshot() {
@@ -2269,8 +2269,8 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	})
 
 	t.Run("QMPDeviceDelFails_NoForce", func(t *testing.T) {
-		// With nil QMPClient encoder/decoder, SendQMPCommand returns error.
-		// Without force=true, this should return ServerInternal.
+		// With nil QMPClient encoder/decoder, the QMP device_del returns
+		// error. Without force=true, this should return ServerInternal.
 		command := types.EC2InstanceCommand{
 			ID: instanceID,
 			Attributes: types.EC2CommandAttributes{
@@ -2998,18 +2998,11 @@ func TestInstanceTypeMemoryMiB_NilSafety(t *testing.T) {
 	}))
 }
 
-// --- Daemon.WriteState / Daemon.LoadState nil jsManager ---
+// --- Daemon.WriteState nil jsManager ---
 
 func TestDaemon_WriteState_NilJSManager(t *testing.T) {
 	d := &Daemon{jsManager: nil}
 	err := d.WriteState()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "JetStream manager not initialized")
-}
-
-func TestDaemon_LoadState_NilJSManager(t *testing.T) {
-	d := &Daemon{jsManager: nil}
-	err := d.LoadState()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "JetStream manager not initialized")
 }
@@ -3098,8 +3091,8 @@ func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
 
 // TestVolumeMounterAdapter_UnmountOne_Success verifies that the adapter's
 // UnmountOne sends an ebs.unmount NATS request and handles a successful
-// response. UnmountOne is the post-2d successor to Daemon.rollbackEBSMount;
-// it is the AttachVolume rollback path and DetachVolume Phase 3.
+// response. UnmountOne is shared by the AttachVolume rollback path and the
+// DetachVolume ebs.unmount step.
 func TestVolumeMounterAdapter_UnmountOne_Success(t *testing.T) {
 	natsURL := sharedNATSURL
 

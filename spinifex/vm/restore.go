@@ -245,11 +245,11 @@ func (m *Manager) finalizeTransitionalRestore(instance *VM) bool {
 	return true
 }
 
-// relaunchAll kicks the recovery launch loop. Per pre-2e behaviour, we
-// announce each instance via OnInstanceRecovering before launching so the
-// daemon can early-subscribe ec2.cmd.<id>; that lets a concurrent terminate
-// reach this node while the relaunch is still pending. The OnInstanceUp
-// hook fired after a successful launch reinstalls both per-instance subs
+// relaunchAll kicks the recovery launch loop. Each instance is announced
+// via OnInstanceRecovering before launching so the daemon can
+// early-subscribe ec2.cmd.<id>; that lets a concurrent terminate reach
+// this node while the relaunch is still pending. The OnInstanceUp hook
+// fired after a successful launch reinstalls both per-instance subs
 // idempotently.
 func (m *Manager) relaunchAll(toLaunch []*VM) {
 	if m.deps.Hooks.OnInstanceRecovering != nil {

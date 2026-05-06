@@ -233,16 +233,12 @@ func argExists(args []string, flag string) bool {
 func TestResetNodeLocalState(t *testing.T) {
 	v := &VM{
 		ID:                    "i-abc123",
-		PID:                   12345,
-		Running:               true,
 		MetadataServerAddress: "127.0.0.1:9999",
 		Status:                StateRunning,
 	}
 
 	v.ResetNodeLocalState()
 
-	assert.Equal(t, 0, v.PID)
-	assert.False(t, v.Running)
 	assert.Empty(t, v.MetadataServerAddress)
 	assert.NotNil(t, v.QMPClient)
 	// ID and Status should be unchanged

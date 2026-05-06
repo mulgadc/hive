@@ -129,7 +129,7 @@ func (m *Manager) Terminate(id string) error {
 // launch errors mid-way: callers (NATS RunInstances handler, recovery
 // worker, pending watchdog, system-instance launcher) get back control
 // immediately and do not block on volume unmount, ENI delete, or KV
-// writes. Mirrors the pre-2c `go d.finalizeTermination(instance)` pattern.
+// writes.
 //
 // Tolerates instances already in a cleanup state (no-op) and instances
 // that may or may not be present in the running-VM map.
@@ -350,9 +350,8 @@ func (m *Manager) transitionWithPrecheck(instance *VM, target InstanceState) err
 }
 
 // writeRunningState persists the current running-VM map via the StateStore.
-// The View callback holds the manager lock across the marshal+put — same
-// constraint as the daemon's pre-2c WriteState. Splitting marshal from put
-// is a 2f cleanup item.
+// The View callback holds the manager lock across the marshal+put so VM
+// fields can't change mid-encode; splitting marshal from put is deferred.
 func (m *Manager) writeRunningState() error {
 	if m.deps.StateStore == nil {
 		return nil

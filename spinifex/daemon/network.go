@@ -26,24 +26,11 @@ var sudoCommand = func(name string, args ...string) *exec.Cmd {
 	return exec.Command("sudo", append([]string{name}, args...)...)
 }
 
-// NetworkPlumber handles tap device and OVS bridge operations for VM networking.
-// The live implementation runs system commands (ip, ovs-vsctl); tests use a mock.
-type NetworkPlumber interface {
-	// SetupTapDevice creates a tap device and adds it to the OVS br-int bridge
-	// with the correct iface-id for OVN port binding.
-	SetupTapDevice(eniId, mac string) error
-
-	// CleanupTapDevice removes the tap device from br-int and deletes it.
-	CleanupTapDevice(eniId string) error
-}
-
-// OVSNetworkPlumber implements NetworkPlumber using system commands.
+// OVSNetworkPlumber implements vm.NetworkPlumber using system commands
+// (ip, ovs-vsctl); tests use a mock satisfying the same interface.
 type OVSNetworkPlumber struct{}
 
-var (
-	_ NetworkPlumber    = (*OVSNetworkPlumber)(nil)
-	_ vm.NetworkPlumber = (*OVSNetworkPlumber)(nil)
-)
+var _ vm.NetworkPlumber = (*OVSNetworkPlumber)(nil)
 
 func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	tapName := vm.TapDeviceName(eniId)

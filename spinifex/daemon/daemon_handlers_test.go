@@ -86,6 +86,7 @@ func createFullTestDaemonWithJetStream(t *testing.T, natsURL string) *Daemon {
 	require.NoError(t, err)
 	err = daemon.jsManager.InitTerminatedInstanceBucket()
 	require.NoError(t, err)
+	daemon.stateStore = newStateStoreAdapter(daemon.jsManager)
 
 	return daemon
 }
@@ -660,7 +661,7 @@ func TestHandleEC2Events_RebootRunningInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
-	// With nil QMPClient encoder/decoder, SendQMPCommand returns error,
+	// With nil QMPClient encoder/decoder, the QMP send returns error,
 	// so we expect an error response (ServerInternal).
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)

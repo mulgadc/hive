@@ -132,9 +132,7 @@ func TestMarkFailed_AlreadyTerminated_NoOp(t *testing.T) {
 
 // TestStop_DoesNotCallDeleteVolumes locks down the architectural
 // invariant that Stop must never delete volumes — a regression here
-// would silently destroy user data on every stop. Phase 2c removed
-// TestStopInstance_NoDelete_OnStop from daemon_test.go without a
-// vm-package replacement; this is that replacement.
+// would silently destroy user data on every stop.
 func TestStop_DoesNotCallDeleteVolumes(t *testing.T) {
 	m, _, _, cleaner, _ := shutdownTestManager(t)
 
