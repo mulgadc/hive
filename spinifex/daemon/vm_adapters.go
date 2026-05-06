@@ -361,6 +361,14 @@ func (d *Daemon) onInstanceUpHook() func(*vm.VM) error {
 			d.handleEC2GetConsoleOutput,
 		)
 		if err != nil {
+			// Roll back the first sub so the instance doesn't end up Running with
+			// one of two per-instance topics live — leaving GetConsoleOutput
+			// unreachable while Stop / Terminate continue to work.
+			if unsubErr := sub.Unsubscribe(); unsubErr != nil {
+				slog.Warn("OnInstanceUp: failed to unsubscribe command topic during rollback",
+					"instanceId", instance.ID, "err", unsubErr)
+			}
+			delete(d.natsSubscriptions, instance.ID)
 			slog.Error("OnInstanceUp: failed to subscribe to console output topic",
 				"instanceId", instance.ID, "err", err)
 			return fmt.Errorf("subscribe ec2.%s.GetConsoleOutput: %w", instance.ID, err)
