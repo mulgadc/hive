@@ -64,8 +64,13 @@ func TestRestartBackoff_Exponential(t *testing.T) {
 // and watchdog tests need: a recording resource controller, a static
 // instance-type resolver, a recording transition state, and a controllable
 // shutdown signal.
+//
+// Sets XDG_RUNTIME_DIR to a per-test tempdir so PID-file paths
+// (utils.WaitForPidFileRemoval, ReadPidFile) cannot collide between
+// tests sharing the host's real runtime dir.
 func crashTestManager(t *testing.T) (m *Manager, rc *fakeResourceController, rt *recordedTransitions, shuttingDown *atomic.Bool) {
 	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	rc = newFakeResourceController()
 	rt = &recordedTransitions{}
 	shuttingDown = &atomic.Bool{}
@@ -170,7 +175,6 @@ func TestHandleCrash_FirstCrashSetsTime(t *testing.T) {
 		v.Status = StateRunning
 	})
 
-	time.Sleep(time.Millisecond)
 	m.HandleCrash(instance, fmt.Errorf("crash 2"))
 
 	assert.Equal(t, firstTime, instance.Health.FirstCrashTime,
@@ -399,7 +403,6 @@ func TestRestartCrashedInstance_AllocateFailure(t *testing.T) {
 // regression that skipped the deallocate would leak one reservation
 // per crash-then-restart-fail cycle until the daemon restarts.
 func TestRestartCrashedInstance_RunFailureRollback(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	m, rc, rt, _ := crashTestManager(t)
 
 	// Wire a VolumeMounter that fails so m.Run returns an error after the

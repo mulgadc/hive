@@ -10,14 +10,26 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
+
+// markFailedDeadline is the upper bound on how long a MarkFailed cleanup
+// goroutine may take to reach Terminated in a test. Generous enough that
+// loaded CI runners do not flake; the chan-based signal makes the
+// happy-path return effectively instantaneous.
+const markFailedDeadline = 10 * time.Second
 
 // shutdownTestManager wires the dependencies needed to exercise Stop /
 // StopAll / Terminate / MarkFailed without standing up the daemon. The
 // returned cleaner records every method invocation so tests can assert
 // what cleanup ran (and what didn't).
+//
+// Sets XDG_RUNTIME_DIR to a per-test tempdir so PID-file paths
+// (utils.WaitForPidFileRemoval, ReadPidFile) cannot collide between
+// concurrent or sequential tests sharing the host's real runtime dir.
 func shutdownTestManager(t *testing.T) (m *Manager, store *fakeStateStore, mounter *fakeVolumeMounter, cleaner *recordingInstanceCleaner, rt *recordedTransitions) {
 	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	store = newFakeStateStore()
 	mounter = &fakeVolumeMounter{}
 	cleaner = &recordingInstanceCleaner{}
@@ -40,6 +52,7 @@ func shutdownTestManager(t *testing.T) (m *Manager, store *fakeStateStore, mount
 // ShuttingDown plus the StateReason mutation, and the goroutine driving
 // the instance through terminateCleanup → Terminated.
 func TestMarkFailed_TransitionsToTerminated(t *testing.T) {
+	defer goleak.VerifyNone(t)
 	m, _, _, _, rt := shutdownTestManager(t)
 
 	instance := &VM{
@@ -50,6 +63,7 @@ func TestMarkFailed_TransitionsToTerminated(t *testing.T) {
 	}
 	m.Insert(instance)
 
+	terminated := rt.waitFor(instance.ID, StateTerminated)
 	m.MarkFailed(instance, "volume_preparation_failed")
 
 	require.NotNil(t, instance.Instance.StateReason,
@@ -57,10 +71,14 @@ func TestMarkFailed_TransitionsToTerminated(t *testing.T) {
 	assert.Equal(t, "Server.InternalError", *instance.Instance.StateReason.Code)
 	assert.Equal(t, "volume_preparation_failed", *instance.Instance.StateReason.Message)
 
-	require.Eventually(t, func() bool {
-		return m.Status(instance) == StateTerminated
-	}, 2*time.Second, 5*time.Millisecond, "cleanup goroutine must reach Terminated")
+	select {
+	case <-terminated:
+	case <-time.After(markFailedDeadline):
+		t.Fatalf("MarkFailed cleanup goroutine did not reach Terminated within %s", markFailedDeadline)
+	}
 
+	assert.Equal(t, StateTerminated, m.Status(instance),
+		"Status must be Terminated once the Terminated transition has been recorded")
 	targets := rt.targets("i-mark-failed")
 	require.NotEmpty(t, targets)
 	assert.Equal(t, StateShuttingDown, targets[0],
@@ -72,7 +90,8 @@ func TestMarkFailed_TransitionsToTerminated(t *testing.T) {
 // TestMarkFailed_NilInstance verifies MarkFailed tolerates a VM with no
 // embedded ec2.Instance (Instance == nil) without panicking.
 func TestMarkFailed_NilInstance(t *testing.T) {
-	m, _, _, _, _ := shutdownTestManager(t)
+	defer goleak.VerifyNone(t)
+	m, _, _, _, rt := shutdownTestManager(t)
 
 	instance := &VM{
 		ID:        "i-mark-failed-nil",
@@ -82,13 +101,17 @@ func TestMarkFailed_NilInstance(t *testing.T) {
 	}
 	m.Insert(instance)
 
+	terminated := rt.waitFor(instance.ID, StateTerminated)
 	require.NotPanics(t, func() {
 		m.MarkFailed(instance, "test_failure")
 	})
 
-	require.Eventually(t, func() bool {
-		return m.Status(instance) == StateTerminated
-	}, 2*time.Second, 5*time.Millisecond, "cleanup goroutine must reach Terminated")
+	select {
+	case <-terminated:
+	case <-time.After(markFailedDeadline):
+		t.Fatalf("MarkFailed cleanup goroutine did not reach Terminated within %s", markFailedDeadline)
+	}
+	assert.Equal(t, StateTerminated, m.Status(instance))
 }
 
 // TestMarkFailed_AlreadyShuttingDown_NoOp verifies MarkFailed skips its
@@ -338,6 +361,7 @@ func TestStop_FiresOnInstanceDownExactlyOnce(t *testing.T) {
 // because a concurrent handler took the slot, OnInstanceDown must not
 // fire (firing it would tear down the new instance's NATS subs).
 func TestStop_DoesNotFireOnInstanceDown_OnSlotReclaim(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	var down atomic.Int64
 	store := &reclaimingStateStore{fakeStateStore: newFakeStateStore()}
 	m := NewManager()
@@ -389,6 +413,7 @@ func (r *reclaimingStateStore) WriteStoppedInstance(id string, v *VM) error {
 }
 
 func TestStopCleanup_InvokesReleaseGPU(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	cleaner := &recordingInstanceCleaner{}
 	m := NewManagerWithDeps(Deps{InstanceCleaner: cleaner})
 	instance := &VM{ID: "i-stop", GPUPCIAddress: "0000:01:00.0"}
@@ -405,6 +430,7 @@ func TestStopCleanup_InvokesReleaseGPU(t *testing.T) {
 }
 
 func TestTerminateCleanup_InvokesReleaseGPU(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	cleaner := &recordingInstanceCleaner{}
 	m := NewManagerWithDeps(Deps{InstanceCleaner: cleaner})
 	instance := &VM{ID: "i-term", GPUPCIAddress: "0000:01:00.0"}
@@ -420,6 +446,7 @@ func TestTerminateCleanup_InvokesReleaseGPU(t *testing.T) {
 }
 
 func TestCleanup_NoGPU_StillInvokesReleaseGPU(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	// The adapter no-ops for GPU-less instances; the manager must still
 	// invoke the method so the adapter owns that decision rather than the
 	// manager second-guessing it.
@@ -569,8 +596,13 @@ func (f *failingSaveRunningStore) SaveRunningState(string, map[string]*VM) error
 // terminateTestManager builds a Manager wired for Terminate end-to-end
 // tests with hooks counter, state store, transition recorder, and a
 // recording cleaner. Returns everything callers may need to assert on.
+//
+// Sets XDG_RUNTIME_DIR to a per-test tempdir so PID-file paths
+// (utils.WaitForPidFileRemoval, ReadPidFile invoked from
+// shutdownAndUnmount) cannot collide between tests.
 func terminateTestManager(t *testing.T, store StateStore) (m *Manager, cleaner *recordingInstanceCleaner, rt *recordedTransitions, downCount *atomic.Int64, downIDs *[]string) {
 	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	cleaner = &recordingInstanceCleaner{}
 	rt = &recordedTransitions{}
 	downCount = &atomic.Int64{}
