@@ -152,6 +152,17 @@ type Daemon struct {
 	// NATS connect retry options (nil uses defaults: 5min max, 500ms initial delay)
 	natsRetryOpts []utils.RetryOption
 
+	// requireNATSTimeout caps the first connectNATS attempt when the
+	// SPINIFEX_REQUIRE_NATS=1 strict-startup env var is set (§1d-strict).
+	// Default 30s; tests override to a shorter value to keep the strict-mode
+	// abort path fast.
+	requireNATSTimeout time.Duration
+
+	// exitFunc is invoked when SPINIFEX_REQUIRE_NATS=1 strict-startup is
+	// requested and the bounded first connect fails. Defaults to os.Exit;
+	// tests override to observe the abort without killing the test process.
+	exitFunc func(int)
+
 	// NetworkPlumber handles tap device lifecycle for VPC networking
 	networkPlumber NetworkPlumber
 
@@ -532,16 +543,18 @@ func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		node:              cfg.Node,
-		clusterConfig:     cfg,
-		config:            &config,
-		resourceMgr:       rm,
-		ctx:               ctx,
-		cancel:            cancel,
-		vmMgr:             vm.NewManager(),
-		natsSubscriptions: make(map[string]*nats.Subscription),
-		startTime:         time.Now(),
-		detachDelay:       1 * time.Second,
+		node:               cfg.Node,
+		clusterConfig:      cfg,
+		config:             &config,
+		resourceMgr:        rm,
+		ctx:                ctx,
+		cancel:             cancel,
+		vmMgr:              vm.NewManager(),
+		natsSubscriptions:  make(map[string]*nats.Subscription),
+		startTime:          time.Now(),
+		detachDelay:        1 * time.Second,
+		requireNATSTimeout: 30 * time.Second,
+		exitFunc:           os.Exit,
 	}
 	d.mode.Store(DaemonModeStandalone)
 	return d, nil
@@ -872,7 +885,17 @@ func (d *Daemon) assertNoClusterServicesInitialised() error {
 // startLocal. Adding a new cluster-scoped service belongs in this function;
 // hoisting one into startLocal trips assertNoClusterServicesInitialised.
 func (d *Daemon) startCluster() error {
-	if err := d.connectNATS(); err != nil {
+	if os.Getenv("SPINIFEX_REQUIRE_NATS") == "1" {
+		// §1d-strict opt-in: bounded first connect, abort on timeout. Restores
+		// the pre-DDIL fail-fast UX for dev/test/single-node deploys without
+		// flipping the prod default (which would re-introduce the SPOF that 1d
+		// removed).
+		if err := d.connectNATS(utils.WithMaxWait(d.requireNATSTimeout)); err != nil {
+			slog.Error("SPINIFEX_REQUIRE_NATS=1 set, NATS connect failed within 30s, aborting", "err", err, "timeout", d.requireNATSTimeout)
+			d.exitFunc(1)
+			return fmt.Errorf("connect NATS (strict): %w", err)
+		}
+	} else if err := d.connectNATS(); err != nil {
 		return fmt.Errorf("connect NATS: %w", err)
 	}
 
@@ -1125,8 +1148,10 @@ func (d *Daemon) startCluster() error {
 // connectNATS establishes a connection to the NATS server. Defaults to
 // infinite retry with exponential backoff (cap 60s) so the daemon stays up
 // in standalone mode through extended NATS outages instead of process-exiting
-// (DDIL Tier 1). Tests override d.natsRetryOpts to bound the wait.
-func (d *Daemon) connectNATS() error {
+// (DDIL Tier 1). Tests override d.natsRetryOpts to bound the wait. Callers
+// (e.g. §1d-strict) may pass extraOpts that are applied after d.natsRetryOpts
+// so they win on conflicting fields like WithMaxWait.
+func (d *Daemon) connectNATS(extraOpts ...utils.RetryOption) error {
 	opts := append([]utils.RetryOption{
 		utils.WithMaxWait(0), // infinite retry; cancelled via d.ctx
 		utils.WithMaxRetryDelay(60 * time.Second),
@@ -1137,6 +1162,7 @@ func (d *Daemon) connectNATS() error {
 			d.natsRetryCount.Add(1)
 		}),
 	}, d.natsRetryOpts...)
+	opts = append(opts, extraOpts...)
 	nc, err := utils.ConnectNATSWithRetry(admin.DialTarget(d.config.NATS.Host), d.config.NATS.ACL.Token, d.config.NATS.CACert, opts...)
 	if err != nil {
 		return err

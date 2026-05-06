@@ -298,6 +298,100 @@ func TestAssertNoClusterServicesInitialised_GuardsTier1Invariant(t *testing.T) {
 	assert.Contains(t, err.Error(), "jsManager")
 }
 
+// TestStartCluster_StrictRequireNATS_BoundedAndExits — §1d-strict:
+// SPINIFEX_REQUIRE_NATS=1 caps the first connect to requireNATSTimeout and
+// invokes exitFunc(1) when the bounded retry expires. Validates the dev/test
+// fail-fast path without flipping the prod default.
+func TestStartCluster_StrictRequireNATS_BoundedAndExits(t *testing.T) {
+	t.Setenv("SPINIFEX_REQUIRE_NATS", "1")
+
+	tmpDir := t.TempDir()
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				BaseDir: tmpDir,
+				DataDir: tmpDir,
+				NATS:    config.NATSConfig{Host: "nats://127.0.0.1:1"}, // unreachable
+			},
+		},
+	}
+
+	d, err := NewDaemon(cfg)
+	require.NoError(t, err)
+	d.requireNATSTimeout = 200 * time.Millisecond
+	d.natsRetryOpts = []utils.RetryOption{utils.WithRetryDelay(20 * time.Millisecond)}
+
+	exitCh := make(chan int, 1)
+	d.exitFunc = func(code int) { exitCh <- code }
+
+	done := make(chan error, 1)
+	go func() { done <- d.startCluster() }()
+
+	select {
+	case code := <-exitCh:
+		assert.Equal(t, 1, code, "strict-mode timeout must request exit(1)")
+	case <-time.After(3 * time.Second):
+		t.Fatal("strict-mode startCluster did not invoke exitFunc within deadline")
+	}
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "connect NATS (strict)")
+	case <-time.After(3 * time.Second):
+		t.Fatal("startCluster did not return after exitFunc was called")
+	}
+}
+
+// TestStartCluster_NoStrictEnv_UsesInfiniteRetry — §1d-strict:
+// without SPINIFEX_REQUIRE_NATS, startCluster keeps the Tier 1 infinite-retry
+// path. exitFunc must not fire, even when NATS is unreachable. Cancellation
+// via d.ctx is the only way out.
+func TestStartCluster_NoStrictEnv_UsesInfiniteRetry(t *testing.T) {
+	t.Setenv("SPINIFEX_REQUIRE_NATS", "")
+
+	tmpDir := t.TempDir()
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				BaseDir: tmpDir,
+				DataDir: tmpDir,
+				NATS:    config.NATSConfig{Host: "nats://127.0.0.1:1"}, // unreachable
+			},
+		},
+	}
+
+	d, err := NewDaemon(cfg)
+	require.NoError(t, err)
+	d.natsRetryOpts = []utils.RetryOption{utils.WithRetryDelay(20 * time.Millisecond)}
+
+	exitCalled := make(chan int, 1)
+	d.exitFunc = func(code int) { exitCalled <- code }
+
+	done := make(chan error, 1)
+	go func() { done <- d.startCluster() }()
+
+	// Give the loop time to attempt several retries; it must not exit.
+	select {
+	case code := <-exitCalled:
+		t.Fatalf("default mode must not invoke exitFunc; got code=%d", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	d.cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "connect NATS")
+		assert.NotContains(t, err.Error(), "strict")
+	case <-time.After(3 * time.Second):
+		t.Fatal("startCluster did not return after ctx cancellation")
+	}
+}
+
 // TestStartCluster_RetriesUntilContextCancelled — §1d: startCluster's NATS
 // connect loop honours d.ctx. Cancelling the daemon context unblocks an
 // otherwise-infinite retry.
