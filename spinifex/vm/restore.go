@@ -149,7 +149,9 @@ func (m *Manager) classifyRestoredInstances() []*VM {
 			} else {
 				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
 				if err := m.reconnectInstance(instance); err != nil {
-					slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
+					slog.Error("Failed to reconnect to running instance, marking failed to tear down orphaned QEMU",
+						"instanceId", instance.ID, "err", err)
+					m.MarkFailed(instance, "reconnect_failed")
 				}
 				continue
 			}
