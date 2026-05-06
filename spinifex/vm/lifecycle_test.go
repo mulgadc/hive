@@ -236,6 +236,16 @@ func TestStartReturnsErrorWhenInstanceUnknown(t *testing.T) {
 // far enough to exercise the early-exit paths and the VolumeMounter call
 // site. Returns the manager, the mounter (for assertions and onMount
 // hooks), and a counter of OnInstanceUp invocations.
+//
+// The success-path "OnInstanceUp fires exactly once" assertion is not
+// driven from a vm-package unit test — the launch happy path requires a
+// real QEMU process plus a working QMP socket (startQEMU + AttachQMP),
+// and the heartbeat goroutine spawned by AttachQMP blocks on a 30s sleep
+// with no cancellation seam, so a hermetic test would either leak the
+// heartbeat or stall for 30s. The "exactly once" contract is covered by
+// the daemon-side e2e tests that drive the full RunInstances pipeline.
+// The counter is retained so the negative direction (no fire on aborted
+// or failed launches) can be asserted alongside the existing tests.
 func launchTestManager(t *testing.T) (*Manager, *fakeVolumeMounter, *int) {
 	t.Helper()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())

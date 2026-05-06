@@ -121,6 +121,8 @@ func TestClassifyRestoredInstances_StoppedMigrates(t *testing.T) {
 
 	assert.Empty(t, toLaunch, "stopped must not be queued for relaunch")
 	assert.NotNil(t, store.stopped[v.ID], "stopped must be migrated to the shared bucket")
+	_, stillLocal := m.Get(v.ID)
+	assert.False(t, stillLocal, "stopped must be removed from the local map after migration")
 }
 
 func TestClassifyRestoredInstances_UnknownTypeMarkedUnschedulable(t *testing.T) {
@@ -175,8 +177,8 @@ func TestClassifyRestoredInstances_ShuttingDownFinalizesToTerminated(t *testing.
 // driven from a vm-package unit test — the SIGKILL path inside
 // killOrphanedQEMU and the long blocking PID-file polls in
 // MarkFailed's goroutine make process-spawn fakes too risky for a
-// hermetic test. The reconnect-failure regression is owned by Group 3
-// (mulga-js-53) which lands a daemon-side test against a real QEMU.
+// hermetic test. The reconnect-failure regression is covered
+// separately by a daemon-side test against a real QEMU.
 func TestClassifyRestoredInstances_RunningWithDeadPidQueuedForRelaunch(t *testing.T) {
 	m, _, rc := classifyTestManager(t)
 	v := &VM{
@@ -198,7 +200,7 @@ func TestClassifyRestoredInstances_RunningWithDeadPidQueuedForRelaunch(t *testin
 }
 
 func TestClassifyRestoredInstances_PendingQueuedForRelaunch(t *testing.T) {
-	m, _, _ := classifyTestManager(t)
+	m, _, rc := classifyTestManager(t)
 	v := &VM{
 		ID:           "i-pending",
 		Status:       StatePending,
@@ -211,6 +213,9 @@ func TestClassifyRestoredInstances_PendingQueuedForRelaunch(t *testing.T) {
 
 	require.Len(t, toLaunch, 1)
 	assert.Equal(t, StatePending, v.Status, "Pending must remain Pending — no transitional reset")
+	require.NotNil(t, v.Instance.LaunchTime, "LaunchTime must be reset for the pending watchdog")
+	assert.Equal(t, 1, rc.allocateCount("t3.micro"),
+		"resources must be re-allocated before queuing for relaunch")
 }
 
 func TestClassifyRestoredInstances_AllocateFailureMarksUnschedulable(t *testing.T) {
@@ -327,7 +332,9 @@ func TestRestore_HappyPath(t *testing.T) {
 	assert.Equal(t, int32(1), store.loadCalls.Load(), "Restore must call LoadRunningState exactly once")
 	assert.NotNil(t, store.terminated["i-term"])
 	assert.NotNil(t, store.stopped["i-stopped"])
-	assert.NotNil(t, store.saved["test-node"], "Restore must persist the running snapshot at the end")
+	saved, ok := store.saved["test-node"]
+	require.True(t, ok, "Restore must persist the running snapshot at the end")
+	assert.Empty(t, saved, "running snapshot must be empty after both instances migrated to shared buckets")
 }
 
 func TestRestore_NoStateStore_NoCrash(t *testing.T) {
