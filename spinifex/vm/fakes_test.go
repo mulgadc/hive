@@ -118,8 +118,19 @@ func (r *recordedTransitions) apply(v *VM, target InstanceState) error {
 		r.mu.Unlock()
 		return err
 	}
-	r.calls = append(r.calls, recordedTransition{ID: v.ID, Target: target})
 	m := r.m
+	r.mu.Unlock()
+
+	// Publish Status before recording the call so any waitFor caller that
+	// observes the recorded transition is guaranteed to see the new Status.
+	if m != nil {
+		m.Inspect(v, func(vv *VM) { vv.Status = target })
+	} else {
+		v.Status = target
+	}
+
+	r.mu.Lock()
+	r.calls = append(r.calls, recordedTransition{ID: v.ID, Target: target})
 	var matched []*pendingWait
 	remaining := r.waits[:0]
 	for _, pw := range r.waits {
@@ -131,11 +142,7 @@ func (r *recordedTransitions) apply(v *VM, target InstanceState) error {
 	}
 	r.waits = remaining
 	r.mu.Unlock()
-	if m != nil {
-		m.Inspect(v, func(vv *VM) { vv.Status = target })
-	} else {
-		v.Status = target
-	}
+
 	for _, pw := range matched {
 		close(pw.done)
 	}

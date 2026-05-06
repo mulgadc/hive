@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/gpu"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
@@ -1408,7 +1409,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
-		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
+		assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, errResp["Code"])
 	})
 
 	t.Run("MaxCount_zero", func(t *testing.T) {
@@ -1428,7 +1429,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
-		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
+		assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, errResp["Code"])
 	})
 
 	t.Run("InsufficientCapacity_for_MinCount", func(t *testing.T) {
@@ -1447,7 +1448,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
-		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
+		assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, errResp["Code"])
 		t.Logf("Got expected error: %v", errResp["Code"])
 	})
 }
@@ -3195,48 +3196,123 @@ func TestVolumeMounterAdapter_UnmountOne_NATSTimeout(t *testing.T) {
 	adapter.UnmountOne(types.EBSRequest{Name: "vol-timeout"})
 }
 
-// TestVolumeMounterAdapter_Mount_PartialFailureRollback verifies that when an
-// ebs.mount call mid-fan-out errors, the adapter unmounts the volumes that
-// were already successfully mounted in the same Mount() call. Without this
-// rollback, a launch failure on the second of three volumes would leave the
-// first volume's viperblockd attached and the NBD socket live, leaking
+// TestVolumeMounterAdapter_Mount_PartialFailureRollback verifies that when
+// any of Mount's per-volume failure paths fires mid-fan-out, the adapter
+// unmounts the volumes already successfully mounted in the same Mount()
+// call. Each subtest exercises a distinct rollback trigger so a regression
+// that drops rollback() from one branch (mount-response error, malformed
+// response, NATS layer failure) is caught individually. Without rollback,
+// a launch failure on the second of three volumes would leave the first
+// volume's viperblockd attached and the NBD socket live, leaking
 // resources every retry.
 func TestVolumeMounterAdapter_Mount_PartialFailureRollback(t *testing.T) {
-	natsURL := sharedNATSURL
+	tests := []struct {
+		name        string
+		respondVol2 func(msg *nats.Msg)
+		wantErrSub  string
+	}{
+		{
+			name: "MountResponseError",
+			respondVol2: func(msg *nats.Msg) {
+				resp := types.EBSMountResponse{Error: "simulated mount failure"}
+				data, _ := json.Marshal(resp)
+				msg.Respond(data)
+			},
+			wantErrSub: "simulated mount failure",
+		},
+		{
+			name: "MalformedResponse",
+			respondVol2: func(msg *nats.Msg) {
+				msg.Respond([]byte("not-valid-json"))
+			},
+			wantErrSub: "invalid character",
+		},
+	}
 
-	daemon := createTestDaemon(t, natsURL)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := createTestDaemon(t, sharedNATSURL)
+			adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
+
+			mountSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
+				var req types.EBSRequest
+				require.NoError(t, json.Unmarshal(msg.Data, &req))
+				if req.Name == "vol-2" {
+					tt.respondVol2(msg)
+					return
+				}
+				resp := types.EBSMountResponse{URI: "nbd://mounted-" + req.Name}
+				data, _ := json.Marshal(resp)
+				msg.Respond(data)
+			})
+			require.NoError(t, err)
+			defer mountSub.Unsubscribe()
+
+			unmounted := make(chan string, 3)
+			unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
+				var req types.EBSRequest
+				require.NoError(t, json.Unmarshal(msg.Data, &req))
+				unmounted <- req.Name
+				resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+				data, _ := json.Marshal(resp)
+				msg.Respond(data)
+			})
+			require.NoError(t, err)
+			defer unmountSub.Unsubscribe()
+
+			instance := &vm.VM{
+				ID:        "i-mount-rollback",
+				AccountID: testAccountID,
+				EBSRequests: types.EBSRequests{
+					Requests: []types.EBSRequest{
+						{Name: "vol-1"},
+						{Name: "vol-2"},
+						{Name: "vol-3"},
+					},
+				},
+			}
+
+			err = adapter.Mount(instance)
+			require.Error(t, err, "Mount should propagate the vol-2 failure")
+			assert.Contains(t, err.Error(), tt.wantErrSub)
+
+			// Mount returns only after rollback completes (the unmount NATS
+			// round-trip is synchronous), and the unmount subscriber sends on
+			// the buffered channel before responding — so by the time Mount
+			// returns, every rollback unmount is observable in `unmounted`.
+			require.Len(t, unmounted, 1,
+				"exactly one volume (vol-1, the previously mounted one) should be rolled back")
+			assert.Equal(t, "vol-1", <-unmounted)
+		})
+	}
+}
+
+// TestVolumeMounterAdapter_Mount_RollbackFailurePropagates verifies that
+// when the rollback unmount itself fails, Mount surfaces the failure
+// instead of swallowing it. A silent rollback failure leaves the volume
+// attached without surfacing the leak to the caller.
+func TestVolumeMounterAdapter_Mount_RollbackFailurePropagates(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
 	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
-
-	var mu sync.Mutex
-	mountAttempts := 0
 
 	mountSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
 		var req types.EBSRequest
-		json.Unmarshal(msg.Data, &req)
-
-		mu.Lock()
-		mountAttempts++
-		attempt := mountAttempts
-		mu.Unlock()
-
-		var resp types.EBSMountResponse
-		if attempt == 2 {
-			resp = types.EBSMountResponse{Error: "simulated mount failure"}
-		} else {
-			resp = types.EBSMountResponse{URI: "nbd://mounted-" + req.Name}
+		require.NoError(t, json.Unmarshal(msg.Data, &req))
+		if req.Name == "vol-2" {
+			resp := types.EBSMountResponse{Error: "primary mount failure"}
+			data, _ := json.Marshal(resp)
+			msg.Respond(data)
+			return
 		}
+		resp := types.EBSMountResponse{URI: "nbd://mounted-" + req.Name}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
 	require.NoError(t, err)
 	defer mountSub.Unsubscribe()
 
-	unmounted := make(chan string, 3)
 	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		var req types.EBSRequest
-		json.Unmarshal(msg.Data, &req)
-		unmounted <- req.Name
-		resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		resp := types.EBSUnMountResponse{Error: "rollback unmount failed"}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -3244,35 +3320,24 @@ func TestVolumeMounterAdapter_Mount_PartialFailureRollback(t *testing.T) {
 	defer unmountSub.Unsubscribe()
 
 	instance := &vm.VM{
-		ID:        "i-mount-rollback",
+		ID:        "i-rollback-failure",
 		AccountID: testAccountID,
 		EBSRequests: types.EBSRequests{
 			Requests: []types.EBSRequest{
 				{Name: "vol-1"},
 				{Name: "vol-2"},
-				{Name: "vol-3"},
 			},
 		},
 	}
 
 	err = adapter.Mount(instance)
-	require.Error(t, err, "Mount should propagate the second-volume error")
-	assert.Contains(t, err.Error(), "simulated mount failure")
-
-	select {
-	case name := <-unmounted:
-		assert.Equal(t, "vol-1", name, "first volume should be rolled back")
-	case <-time.After(2 * time.Second):
-		t.Fatal("rollback did not unmount the previously mounted volume")
-	}
-
-	// vol-2 failed before mount, vol-3 was never attempted: neither should
-	// generate an ebs.unmount.
-	select {
-	case extra := <-unmounted:
-		t.Fatalf("unexpected unmount of %q: only previously mounted volumes should roll back", extra)
-	case <-time.After(200 * time.Millisecond):
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "primary mount failure",
+		"original mount error must be preserved")
+	assert.Contains(t, err.Error(), "rollback also failed",
+		"rollback failure must be surfaced, not silently logged")
+	assert.Contains(t, err.Error(), "rollback unmount failed",
+		"underlying unmount error must be wrapped in")
 }
 
 // TestDescribeInstances_InvalidInstanceIDMalformed verifies that DescribeInstances

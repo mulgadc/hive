@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/vm"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTapDeviceName(t *testing.T) {
@@ -152,9 +153,9 @@ func TestEnsureDataRoute_NoKernelRoute(t *testing.T) {
 	// succeed against a non-existent route — a regression that drops the
 	// error would leave Geneve traffic egressing the wrong NIC.
 	err := EnsureDataRoute("127.0.0.1")
-	if err == nil {
-		t.Fatal("expected error for IP without a kernel subnet route, got nil")
-	}
+	require.Error(t, err, "expected error for IP without a kernel subnet route")
+	require.ErrorContains(t, err, "no kernel route found",
+		"error must identify the missing-route condition, not a generic interface lookup failure")
 }
 
 func TestSetupComputeNode_ValidatesArgs(t *testing.T) {
