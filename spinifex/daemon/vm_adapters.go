@@ -91,10 +91,18 @@ func (a *volumeMounterAdapter) Mount(instance *vm.VM) error {
 	instance.EBSRequests.Mu.Lock()
 	defer instance.EBSRequests.Mu.Unlock()
 
+	mounted := make([]int, 0, len(instance.EBSRequests.Requests))
+	rollback := func() {
+		for _, idx := range mounted {
+			a.UnmountOne(instance.EBSRequests.Requests[idx])
+		}
+	}
+
 	for k, v := range instance.EBSRequests.Requests {
 		ebsMountRequest, err := json.Marshal(v)
 		if err != nil {
 			slog.Error("Failed to marshal volume payload", "err", err)
+			rollback()
 			return err
 		}
 
@@ -104,22 +112,26 @@ func (a *volumeMounterAdapter) Mount(instance *vm.VM) error {
 
 		if err != nil {
 			slog.Error("Failed to request EBS mount", "err", err)
+			rollback()
 			return err
 		}
 
 		var ebsMountResponse types.EBSMountResponse
 		if err := json.Unmarshal(reply.Data, &ebsMountResponse); err != nil {
 			slog.Error("Failed to unmarshal volume response:", "err", err)
+			rollback()
 			return err
 		}
 
 		if ebsMountResponse.Error != "" {
 			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
+			rollback()
 			return fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
 		}
 
 		slog.Debug("Mounted volume successfully", "response", ebsMountResponse.URI)
 		instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
+		mounted = append(mounted, k)
 	}
 
 	return nil

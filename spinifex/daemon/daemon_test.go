@@ -1814,17 +1814,22 @@ func TestInstanceCleanerAdapter_DeleteVolumes_DeleteOnTermination(t *testing.T) 
 
 	var mu sync.Mutex
 	ebsDeletedVolumes := make(map[string]bool)
+	const expectedDeletes = 2 // EFI + cloud-init; vol-root has no S3 backend
+	allDeletes := make(chan struct{})
 
-	// Mock ebs.delete subscriber
 	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
 		var req types.EBSDeleteRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		ebsDeletedVolumes[req.Volume] = true
+		done := len(ebsDeletedVolumes) == expectedDeletes
 		mu.Unlock()
 		resp := types.EBSDeleteResponse{Volume: req.Volume, Success: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
+		if done {
+			close(allDeletes)
+		}
 	})
 	require.NoError(t, err)
 	defer deleteSub.Unsubscribe()
@@ -1844,8 +1849,11 @@ func TestInstanceCleanerAdapter_DeleteVolumes_DeleteOnTermination(t *testing.T) 
 	cleaner := newInstanceCleanerAdapter(daemon)
 	cleaner.DeleteVolumes(instance)
 
-	// Allow NATS messages to propagate
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-allDeletes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ebs.delete fan-out")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1865,16 +1873,22 @@ func TestInstanceCleanerAdapter_DeleteVolumes_DeleteOnTermination_False(t *testi
 
 	var mu sync.Mutex
 	ebsDeletedVolumes := make(map[string]bool)
+	const expectedDeletes = 2 // only the two internal volumes; vol-keep is skipped
+	allDeletes := make(chan struct{})
 
 	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
 		var req types.EBSDeleteRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		ebsDeletedVolumes[req.Volume] = true
+		done := len(ebsDeletedVolumes) == expectedDeletes
 		mu.Unlock()
 		resp := types.EBSDeleteResponse{Volume: req.Volume, Success: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
+		if done {
+			close(allDeletes)
+		}
 	})
 	require.NoError(t, err)
 	defer deleteSub.Unsubscribe()
@@ -1894,7 +1908,11 @@ func TestInstanceCleanerAdapter_DeleteVolumes_DeleteOnTermination_False(t *testi
 	cleaner := newInstanceCleanerAdapter(daemon)
 	cleaner.DeleteVolumes(instance)
 
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-allDeletes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ebs.delete fan-out")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -3175,6 +3193,86 @@ func TestVolumeMounterAdapter_UnmountOne_NATSTimeout(t *testing.T) {
 	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
 
 	adapter.UnmountOne(types.EBSRequest{Name: "vol-timeout"})
+}
+
+// TestVolumeMounterAdapter_Mount_PartialFailureRollback verifies that when an
+// ebs.mount call mid-fan-out errors, the adapter unmounts the volumes that
+// were already successfully mounted in the same Mount() call. Without this
+// rollback, a launch failure on the second of three volumes would leave the
+// first volume's viperblockd attached and the NBD socket live, leaking
+// resources every retry.
+func TestVolumeMounterAdapter_Mount_PartialFailureRollback(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+	adapter := newVolumeMounterAdapter(daemon.natsConn, daemon.node, nil)
+
+	var mu sync.Mutex
+	mountAttempts := 0
+
+	mountSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
+		var req types.EBSRequest
+		json.Unmarshal(msg.Data, &req)
+
+		mu.Lock()
+		mountAttempts++
+		attempt := mountAttempts
+		mu.Unlock()
+
+		var resp types.EBSMountResponse
+		if attempt == 2 {
+			resp = types.EBSMountResponse{Error: "simulated mount failure"}
+		} else {
+			resp = types.EBSMountResponse{URI: "nbd://mounted-" + req.Name}
+		}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer mountSub.Unsubscribe()
+
+	unmounted := make(chan string, 3)
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
+		var req types.EBSRequest
+		json.Unmarshal(msg.Data, &req)
+		unmounted <- req.Name
+		resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer unmountSub.Unsubscribe()
+
+	instance := &vm.VM{
+		ID:        "i-mount-rollback",
+		AccountID: testAccountID,
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
+				{Name: "vol-1"},
+				{Name: "vol-2"},
+				{Name: "vol-3"},
+			},
+		},
+	}
+
+	err = adapter.Mount(instance)
+	require.Error(t, err, "Mount should propagate the second-volume error")
+	assert.Contains(t, err.Error(), "simulated mount failure")
+
+	select {
+	case name := <-unmounted:
+		assert.Equal(t, "vol-1", name, "first volume should be rolled back")
+	case <-time.After(2 * time.Second):
+		t.Fatal("rollback did not unmount the previously mounted volume")
+	}
+
+	// vol-2 failed before mount, vol-3 was never attempted: neither should
+	// generate an ebs.unmount.
+	select {
+	case extra := <-unmounted:
+		t.Fatalf("unexpected unmount of %q: only previously mounted volumes should roll back", extra)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // TestDescribeInstances_InvalidInstanceIDMalformed verifies that DescribeInstances
