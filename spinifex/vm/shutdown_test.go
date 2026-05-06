@@ -434,3 +434,92 @@ func TestCleanup_NoGPU_StillInvokesReleaseGPU(t *testing.T) {
 		t.Fatalf("ReleaseGPU calls across stop+terminate: got %d, want 2", got)
 	}
 }
+
+// TestTransitionWithPrecheck_Raced_WrapsErrInvalidTransition covers the
+// raced branch in transitionWithPrecheck: the static precheck succeeded
+// (transition was valid at that moment) but Deps.TransitionState
+// returned an error AND the in-memory status is no longer at target,
+// meaning a concurrent goroutine flipped the instance away. The
+// returned error must wrap ErrInvalidTransition so the daemon's
+// handler can map it to AWS IncorrectInstanceState (and so
+// daemon_handlers_instance.go's slog level keying on errors.Is
+// classifies the error correctly).
+func TestTransitionWithPrecheck_Raced_WrapsErrInvalidTransition(t *testing.T) {
+	persistErr := errors.New("kv put failed")
+	m := NewManagerWithDeps(Deps{
+		TransitionState: func(_ *VM, _ InstanceState) error {
+			// Return error without mutating status so the in-memory
+			// state stays at the pre-transition value, matching the
+			// "concurrent terminate beat us to it" scenario.
+			return persistErr
+		},
+	})
+
+	instance := &VM{ID: "i-raced", Status: StatePending}
+	m.Insert(instance)
+
+	err := m.transitionWithPrecheck(instance, StateRunning)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInvalidTransition,
+		"raced post-precheck failure must wrap ErrInvalidTransition so callers map to IncorrectInstanceState")
+	assert.NotErrorIs(t, err, persistErr,
+		"the original persistence error is intentionally hidden — caller surface is ErrInvalidTransition")
+	assert.Equal(t, StatePending, m.Status(instance),
+		"raced branch implies status was not flipped to target")
+}
+
+// TestTransitionWithPrecheck_PersistenceFailure_PassesThroughError is
+// the contrast: TransitionState returned an error but the in-memory
+// status DID reach target (the memory mutation succeeded; only the
+// persistence side failed). The original error must propagate as-is
+// without an ErrInvalidTransition wrap, so callers can distinguish a
+// transient persistence retry from a real transition rejection.
+func TestTransitionWithPrecheck_PersistenceFailure_PassesThroughError(t *testing.T) {
+	persistErr := errors.New("kv put failed")
+	var m *Manager
+	m = NewManagerWithDeps(Deps{
+		TransitionState: func(v *VM, target InstanceState) error {
+			// Memory mutation succeeded; only persistence failed.
+			m.Inspect(v, func(vv *VM) { vv.Status = target })
+			return persistErr
+		},
+	})
+
+	instance := &VM{ID: "i-persist-fail", Status: StatePending}
+	m.Insert(instance)
+
+	err := m.transitionWithPrecheck(instance, StateRunning)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, persistErr,
+		"persistence-only failure must surface the original error so callers can retry/log it specifically")
+	assert.NotErrorIs(t, err, ErrInvalidTransition,
+		"persistence failure on a valid transition is not a transition error")
+	assert.Equal(t, StateRunning, m.Status(instance),
+		"persistence-failure branch implies status reached target before error returned")
+}
+
+// TestTransitionWithPrecheck_InvalidInitialTransition_WrapsErrInvalidTransition
+// covers the static precheck rejecting an illegal transition before
+// TransitionState is ever called. The error must wrap
+// ErrInvalidTransition. Pairs with the raced branch — both surfaces
+// look the same to the caller, which is the design.
+func TestTransitionWithPrecheck_InvalidInitialTransition_WrapsErrInvalidTransition(t *testing.T) {
+	called := false
+	m := NewManagerWithDeps(Deps{
+		TransitionState: func(*VM, InstanceState) error {
+			called = true
+			return nil
+		},
+	})
+
+	instance := &VM{ID: "i-bad-trans", Status: StateTerminated}
+	m.Insert(instance)
+
+	err := m.transitionWithPrecheck(instance, StateRunning)
+
+	require.ErrorIs(t, err, ErrInvalidTransition)
+	assert.False(t, called, "Deps.TransitionState must not run when precheck rejects")
+	assert.Equal(t, StateTerminated, m.Status(instance), "rejected precheck must not mutate status")
+}
